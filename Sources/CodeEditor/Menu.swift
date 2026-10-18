@@ -131,6 +131,7 @@ enum MainMenu {
             item("Push…", #selector(AppDelegate.pushChanges(_:)), "k", [.command, .shift], target: a),
             item("Update Project (Pull)", #selector(AppDelegate.updateProject(_:)), "t", target: a),
             item("Fetch", #selector(AppDelegate.fetchChanges(_:)), "", target: a),
+            item("Show History for File", #selector(AppDelegate.showFileHistory(_:)), "", target: a),
             sep,
             item("Show Git Panel", #selector(AppDelegate.toggleGit(_:)), "9", target: a),
         ]))

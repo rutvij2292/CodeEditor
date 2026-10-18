@@ -797,6 +797,13 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         if hiding { focusEditor() }
     }
 
+    /// Git › Show History for File: opens the Git panel's Log tab filtered by the current file (`git log --follow`).
+    func showFileHistory() {
+        guard let url = current?.url, root != nil else { return }
+        ensureGitPanel()
+        showToolPanel("git") { [weak self] in self?.git?.showHistory(for: url) }
+    }
+
     private func ensureGitPanel() {
         guard git == nil, root != nil else { return }
         let host = gitHost
@@ -814,6 +821,10 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         let panel = GitPanelController(root: repo) { [weak self] url in self?.open(url) }
         panel.onStatusChange = { [weak self] in self?.refreshGitStatus(); self?.tree.refresh() }
         git = panel
+        panel.onRequestClose = { [weak self] in self?.bottom.hide(); self?.focusEditor() }
+        panel.onSummaryChange = { [weak self] summary in
+            self?.setToolPanelBadge(summary.changes > 0 ? "\(summary.changes)" : nil, for: "git")
+        }
         panel.view.translatesAutoresizingMaskIntoConstraints = false
         host.addSubview(panel.view)
         NSLayoutConstraint.activate([
