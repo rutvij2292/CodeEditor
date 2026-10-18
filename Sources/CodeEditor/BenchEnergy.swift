@@ -48,7 +48,9 @@ enum BenchEnergy {
                     self.bench.drawScrollFrame(tab, strip: 40)
                 }
             case "terminal-idle", "terminal-stream":
+                TerminalPanelController.testHooks.allowHeadlessShell = true
                 w.showTerminalPanel(focus: false)
+                w.terminalPanel?.startIfNeeded()    // headless windows are hidden, so the shell start is otherwise deferred
                 bench.pump(3.0)
                 if state == "terminal-stream" {
                     if w.terminalPanel == nil { fputs("no terminal panel\n", stderr) }
