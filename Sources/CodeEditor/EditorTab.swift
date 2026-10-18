@@ -297,6 +297,10 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false     // macOS squiggles under identifiers; a code editor must not
+        textView.isGrammarCheckingEnabled = false
+        textView.isAutomaticLinkDetectionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
         textView.font = Self.currentFont()
         textView.textColor = Theme.foreground
         textView.backgroundColor = Theme.background
