@@ -41,7 +41,7 @@ enum SymbolExtractor {
         _ = parser(forKey: "js", ext: "js")
     }
 
-    static func symbols(in text: String, fileExtension: String) -> [CodeSymbol] {
+    static func symbols(in text: String, fileExtension: String, typesOnly: Bool = false) -> [CodeSymbol] {
         let isPHP: Bool
         switch fileExtension.lowercased() {
         case "php", "phtml": isPHP = true
@@ -51,6 +51,7 @@ enum SymbolExtractor {
         guard let parser = parser(forKey: isPHP ? "php" : "js", ext: isPHP ? "php" : "js"),
               let tree = parser.parse(text), let root = tree.rootNode else { return [] }
         var walker = Walker(text: text as NSString)
+        walker.typesOnly = typesOnly
         if isPHP { walker.php(root, container: nil, namespace: nil) } else { walker.js(root) }
         return walker.out
     }
@@ -58,6 +59,7 @@ enum SymbolExtractor {
     private struct Walker {
         let text: NSString
         var out: [CodeSymbol] = []
+        var typesOnly = false
 
         func str(_ n: Node) -> String {
             let r = n.range
@@ -119,7 +121,7 @@ enum SymbolExtractor {
         mutating func phpType(_ n: Node, _ kind: CodeSymbol.Kind, _ ns: String?) {
             guard let nameNode = n.child(byFieldName: "name") else { return }
             add(nameNode, kind, at: n, ns)
-            if let body = n.child(byFieldName: "body") { phpMembers(body, str(nameNode)) }
+            if !typesOnly, let body = n.child(byFieldName: "body") { phpMembers(body, str(nameNode)) }
         }
 
         mutating func phpConst(_ n: Node, _ container: String?) {

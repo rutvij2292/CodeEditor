@@ -56,13 +56,36 @@ enum GoToSymbol {
         return types + others
     }
 
+    /// Picker rows for vendor hits (kind icon, "vendor · package version · namespace" detail).
+    static func vendorItems(_ entries: [VendorEntry], vendor: VendorIndex, open: @escaping (URL, Int) -> Void) -> [PickerItem] {
+        entries.map { e in
+            let title = e.shortName
+            let key = e.member != nil ? "\(e.fqn)::\(title)" : e.fqn
+            return PickerItem(title: title, detail: e.detail, symbol: e.kind.iconName, key: key) {
+                open(URL(fileURLWithPath: e.path), vendor.declarationLine(of: e))
+            }
+        }
+    }
+
     static func present(over window: NSWindow, index: SymbolIndex, typesOnly: Bool,
                         open: @escaping (URL, Int) -> Void) {
+        let useVendor = VendorIndex.enabled || ProjectIndex.includeVendor
+        let vendor = useVendor ? VendorIndex.shared(for: index.root) : nil
+        vendor?.refreshIfNeeded()
+        let placeholder = typesOnly ? "Go to class" : "Go to symbol"
         let show = {
             let items = items(entries: index.entries, typesOnly: typesOnly) { e in
                 open(index.root.appendingPathComponent(e.relativePath), e.symbol.line)
             }
-            QuickPicker.present(over: window, placeholder: typesOnly ? "Go to class" : "Go to symbol", items: items)
+            guard let vendor else { QuickPicker.present(over: window, placeholder: placeholder, items: items); return }
+            // Project results first, vendor results (compact on-disk index, searched on demand) after them.
+            QuickPicker.present(over: window, placeholder: placeholder, items: [], provider: { text in
+                let q = Array(text.lowercased().filter { !$0.isWhitespace })
+                let project = q.isEmpty ? Array(items.prefix(200)) : QuickPicker.filter(items, query: q)
+                guard q.count >= 2 else { return project }
+                let hits = vendor.search(text, limit: 60, typesOnly: typesOnly)
+                return Array(project.prefix(140)) + vendorItems(hits, vendor: vendor, open: open)
+            })
         }
         if index.entries.isEmpty { index.rebuild(completion: show) } else { show(); index.rebuild() }
     }
