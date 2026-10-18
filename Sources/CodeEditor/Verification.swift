@@ -90,7 +90,7 @@ enum Verification {
         w.open(file)
         w.showToolPanel("http")
         let line = AppEnv.value("CE_HTTP_LINE").flatMap(Int.init) ?? 1
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { HttpSystem.panel(for: file)?.run(line: line) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { if let tab = w.current { HttpSystem.binding(for: tab)?.run(line: line) } }
     }
 
     /// CE_PICKER=bottom: the bottom panel with Git / Find / Problems tabs, a badge, and sample tool content.
