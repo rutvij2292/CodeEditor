@@ -17,6 +17,7 @@ extension ProjectWindow {
         registerToolPanel(id: "find", title: "Find", view: find.view) { close in find.onClose = close }
         installProblemsPanel(root: root)
         installTerminalPanel(root: root)
+        installChangeReview(root: root)
         installClaudeBridge()
         onFindInFiles = { [weak self] in self?.showFind(replace: false) }
         onReplaceInFiles = { [weak self] in self?.showFind(replace: true) }

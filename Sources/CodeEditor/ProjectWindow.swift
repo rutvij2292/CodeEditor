@@ -20,6 +20,9 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     var terminalPanel: TerminalPanelController?
     /// Claude Code CLI integration (ClaudeBridge.swift).
     var claudeBridge: ClaudeBridge?
+    var changeReview: ChangeReviewStore?
+    var changeReviewPanel: ChangeReviewPanel?
+    var changeReviewGutter: ChangeReviewGutter?
     /// Right/bottom dock state of the terminal (see TerminalDocking.swift).
     let termDock = TerminalDockState()
     var problemsObserver: NSObjectProtocol?
@@ -231,6 +234,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             if let root { LaravelNavigator.invalidate(root: root); FastTier.invalidate(root: root) }
             tree.refreshIfAffected(paths)
             index?.refresh(force: true) { [weak self] in self?.symbols?.rebuild() }
+            changeReview?.noteChanges(Array(paths))   // before the reload: clean buffers still hold the pre-agent text
             editors.values.forEach { $0.reloadIfChangedOnDisk() }
         }
         if content || gitMeta { refreshGitStatus() }

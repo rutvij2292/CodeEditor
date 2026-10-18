@@ -382,6 +382,7 @@ final class ClaudeBridge {
         case .accept(let text):
             do {
                 try Self.writeAccepted(text, to: d.url)
+                window?.changeReview?.recordBridgeEdit(url: d.url, original: d.original, new: text)
                 window?.editors[d.url.standardizedFileURL.path]?.reloadIfChangedOnDisk()
                 result = Self.textResult("FILE_SAVED", text)
             } catch {
