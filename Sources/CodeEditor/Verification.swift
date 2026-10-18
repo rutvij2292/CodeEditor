@@ -26,6 +26,7 @@ enum Verification {
             case "terminal": w.showTerminal()
             case _ where BranchVerification.isBranchPicker(picker): BranchVerification.start(picker!, w)
             case "commit": w.showCommitWindow()
+            case "pr-prompt", "pr-resolver", "pr-success": PRSnapshots.render(picker!, to: shot)
             case "problems": w.showToolPanel("problems")
             case "find":
                 w.showToolPanel("find") { w.findPanel?.show(seed: AppEnv.value("CE_FIND_QUERY") ?? "function", replaceMode: AppEnv.value("CE_FIND_REPLACE") != nil) }
