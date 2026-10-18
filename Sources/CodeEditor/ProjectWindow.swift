@@ -16,6 +16,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     private var navigating = false
     private var index: ProjectIndex?
     var findPanel: FindPanelController?
+    var problemsPanel: ProblemsPanelController?
+    var problemsObserver: NSObjectProtocol?
     var projectFiles: [String] { index?.files ?? [] }
     private var symbols: SymbolIndex?
     private var watcher: FSWatcher?
@@ -336,6 +338,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     }
 
     private func didSelect(_ id: String) {
+        problemsPanel?.reload()
         mru.removeAll { $0 == id }
         mru.insert(id, at: 0)
         if !navigating {

@@ -15,6 +15,7 @@ extension ProjectWindow {
         }
         findPanel = find
         registerToolPanel(id: "find", title: "Find", view: find.view) { close in find.onClose = close }
+        installProblemsPanel(root: root)
         onFindInFiles = { [weak self] in self?.showFind(replace: false) }
         onReplaceInFiles = { [weak self] in self?.showFind(replace: true) }
     }
@@ -28,5 +29,22 @@ extension ProjectWindow {
             if !text.contains("\n"), text.count <= 200 { seed = text }
         }
         showToolPanel("find") { find.show(seed: seed, replaceMode: replace) }
+    }
+
+    private func installProblemsPanel(root: URL) {
+        let problems = ProblemsPanelController(root: root) { [weak self] url, line, column in
+            self?.open(url, line: line)
+            self?.current?.textView.goToLine(line, column: column)
+        }
+        problems.currentFileProvider = { [weak self] in self?.current?.url }
+        problemsPanel = problems
+        registerToolPanel(id: "problems", title: "Problems", view: problems.view)
+        problemsObserver = NotificationCenter.default.addObserver(forName: LanguageServers.problemsDidChange, object: nil, queue: .main) { [weak self] _ in
+            guard let self, let root = self.root else { return }
+            self.problemsPanel?.reload()
+            let files = LanguageServers.problems(forRoot: root)
+            let errors = files.reduce(0) { $0 + $1.errorCount }, warnings = files.reduce(0) { $0 + $1.warningCount }
+            self.setToolPanelBadge(errors + warnings > 0 ? (errors > 0 ? "\(errors)" : "\(warnings)") : nil, for: "problems")
+        }
     }
 }

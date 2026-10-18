@@ -380,9 +380,9 @@ extension SelfTest {
         w.onFindInFiles = nil; w.onReplaceInFiles = nil
         AppDelegate.nextProblemHandler = nil; AppDelegate.previousProblemHandler = nil
         AppDelegate.findUsagesHandler = nil; AppDelegate.renameHandler = nil; AppDelegate.formatHandler = nil
-        app.findInFiles(nil); app.nextProblem(nil); app.showProblemsTool(nil)
-        check("handlers are no-ops until set; unregistered tool panels are ignored", hits.count == 7 && !w.bottom.isVisible)
-        w.registerToolPanel(id: "problems", title: "Problems", view: NSView())
+        app.findInFiles(nil); app.nextProblem(nil)
+        check("handlers are no-ops until set", hits.count == 7)
+        check("Problems panel is registered by the feature wiring", w.hasToolPanel("problems") && w.hasToolPanel("find"))
         app.showProblemsTool(nil)
         check("View > Problems shows the registered tool", w.bottom.isVisible && w.bottom.selectedID == "problems")
         w.bottom.hide()

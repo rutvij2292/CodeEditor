@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         LanguageServers.openLocation = { [weak self] url, line, _ in self?.active?.open(url, line: line) }
         BracketColorizer.start()
         GitGutter.start()
+        Self.installLanguageHandlers()
         NSApp.mainMenu = MainMenu.build(app: self)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
             self?.trackDoubleShift(event)
@@ -235,6 +236,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case "Appearance":
             for (item, mode) in zip(menu.items, [ThemeMode.system, .light, .dark]) { item.state = Theme.mode == mode ? .on : .off }
         default: break
+        }
+    }
+
+    /// Connects F2 / Shift-F2 / Alt-F7 / Shift-F6 / Format Document to the language-server features.
+    private static func installLanguageHandlers() {
+        func unavailable(_ window: ProjectWindow, _ title: String, _ detail: String) {
+            guard !AppEnv.headless else { return }
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = detail
+            alert.beginSheetModal(for: window.window)
+        }
+        nextProblemHandler = { w in if let tab = w.current, !LanguageServers.nextProblem(in: tab, forward: true) { NSSound.beep() } }
+        previousProblemHandler = { w in if let tab = w.current, !LanguageServers.nextProblem(in: tab, forward: false) { NSSound.beep() } }
+        findUsagesHandler = { w in
+            guard let tab = w.current else { return }
+            if !LanguageServers.findUsages(in: tab) { unavailable(w, "Find Usages isn’t available", "No language server is running for this file type yet.") }
+        }
+        renameHandler = { w in
+            guard let tab = w.current else { return }
+            if !LanguageServers.rename(in: tab, over: w.window) {
+                unavailable(w, "Rename isn’t available", "The language server for this file doesn’t offer rename. Intelephense’s rename needs a premium licence.")
+            }
+        }
+        formatHandler = { w in
+            guard let tab = w.current else { return }
+            if !LanguageServers.formatDocument(in: tab, completion: nil) {
+                unavailable(w, "Format Document isn’t available", "No formatter is available for this file. Use Reformat Code (⌥⌘L) to re-indent safely.")
+            }
         }
     }
 }
