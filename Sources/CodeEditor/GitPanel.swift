@@ -99,7 +99,6 @@ private final class GitRowCell: NSTableCellView {
         super.init(frame: frame)
         check.target = self
         check.action = #selector(toggled)
-        check.allowsMixedState = true
         badge.font = .monospacedSystemFont(ofSize: 11, weight: .bold)
         badge.alignment = .center
         name.font = .systemFont(ofSize: 12)
@@ -141,15 +140,25 @@ private final class GitRowCell: NSTableCellView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    private var shown: NSControl.StateValue = .off
+
+    private func setState(_ s: NSControl.StateValue) {
+        shown = s
+        check.allowsMixedState = true
+        check.state = s
+    }
+
+    // mixed -> on, so a partially checked file or group becomes fully checked on click
     @objc private func toggled() {
-        if check.state == .mixed { check.state = .on }
-        onToggle?(check.state == .on)
+        let on = shown != .on
+        setState(on ? .on : .off)
+        onToggle?(on)
     }
     @objc private func accept(_ s: NSButton) { onAccept?(s.tag) }
 
     func configureGroup(_ group: GitGroup, state: NSControl.StateValue) {
         check.isHidden = group.kind == .conflicts
-        check.state = state
+        setState(state)
         badge.stringValue = ""
         name.stringValue = "\(group.kind.title)"
         name.font = .systemFont(ofSize: 12, weight: .semibold)
@@ -159,10 +168,10 @@ private final class GitRowCell: NSTableCellView {
         buttons.isHidden = true
     }
 
-    func configureRow(_ row: GitRow, checked: Bool) {
+    func configureRow(_ row: GitRow, state: NSControl.StateValue) {
         let color = GitColors.color(for: row)
         check.isHidden = row.kind == .conflicts
-        check.state = checked ? .on : .off
+        setState(state)
         badge.stringValue = row.letter
         badge.textColor = color
         let path = row.change.path as NSString
@@ -239,6 +248,22 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private var reloadGen = 0
     private var diffToken = 0
     private var shownDiffKey: String?
+
+    private struct PartialSel { var checked: Int; var total: Int; var content: String; var mtime: TimeInterval }
+    private struct ActiveDiff { let rowKey: String; let path: String; let kind: GitGroupKind; let view: SideBySideDiffView }
+    private var partial: [String: PartialSel] = [:]
+    private var stageViews: [String: (view: SideBySideDiffView, sig: String)] = [:]
+    private var active: ActiveDiff?
+    private var changes: [GitChange] = []
+    private var editMode = true
+    private var pendingWrite: (path: String, text: String)?
+    private var writeTimer: Timer?
+    private let diffBar = NSStackView()
+    private let prevButton = NSButton()
+    private let nextButton = NSButton()
+    private let stageSelectedButton = NSButton(title: "Stage Selected", target: nil, action: nil)
+    private let editCheck = NSButton(checkboxWithTitle: "Revert arrows", target: nil, action: nil)
+    private let diffInfo = NSTextField(labelWithString: "")
     private var mergingPath: String?
 
     init(root: URL, openFile: @escaping (URL) -> Void) {
@@ -348,11 +373,49 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         mergeBar.spacing = 10
         mergeBar.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 4, right: 8)
         mergeBar.isHidden = true
-        for v in [diffView, diffMessage, mergeBar] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; diffHost.addSubview(v) }
+        for (b, symbol, tip) in [(prevButton, "chevron.up", "Previous Change (⇧F7)"), (nextButton, "chevron.down", "Next Change (F7)")] {
+            b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)
+            b.toolTip = tip
+            b.isBordered = false
+            b.target = self
+            b.widthAnchor.constraint(equalToConstant: 22).isActive = true
+        }
+        prevButton.action = #selector(prevChange)
+        nextButton.action = #selector(nextChange)
+        let f7 = String(Character(UnicodeScalar(UInt32(NSF7FunctionKey))!))
+        nextButton.keyEquivalent = f7
+        nextButton.keyEquivalentModifierMask = []
+        prevButton.keyEquivalent = f7
+        prevButton.keyEquivalentModifierMask = [.shift]
+        stageSelectedButton.bezelStyle = .texturedRounded
+        stageSelectedButton.controlSize = .small
+        stageSelectedButton.font = .systemFont(ofSize: 11)
+        stageSelectedButton.target = self
+        stageSelectedButton.action = #selector(stageSelectedTapped)
+        editCheck.controlSize = .small
+        editCheck.font = .systemFont(ofSize: 11)
+        editCheck.state = .on
+        editCheck.target = self
+        editCheck.action = #selector(editToggled)
+        editCheck.toolTip = "Edit the right pane and revert hunks with the » arrows"
+        diffInfo.font = .systemFont(ofSize: 11)
+        let barSpacer = NSView()
+        barSpacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        for v in [prevButton, nextButton, stageSelectedButton, editCheck, barSpacer, diffInfo] { diffBar.addArrangedSubview(v) }
+        diffBar.orientation = .horizontal
+        diffBar.spacing = 8
+        diffBar.alignment = .centerY
+        diffBar.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
+        diffBar.isHidden = true
+        for v in [diffView, diffMessage, mergeBar, diffBar] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; diffHost.addSubview(v) }
         NSLayoutConstraint.activate([
+            diffBar.topAnchor.constraint(equalTo: diffHost.topAnchor),
+            diffBar.leadingAnchor.constraint(equalTo: diffHost.leadingAnchor),
+            diffBar.trailingAnchor.constraint(equalTo: diffHost.trailingAnchor),
+            diffBar.heightAnchor.constraint(equalToConstant: 28),
             mergeBar.topAnchor.constraint(equalTo: diffHost.topAnchor),
             mergeBar.leadingAnchor.constraint(equalTo: diffHost.leadingAnchor),
-            diffView.topAnchor.constraint(equalTo: diffHost.topAnchor),
+            diffView.topAnchor.constraint(equalTo: diffBar.bottomAnchor),
             diffView.bottomAnchor.constraint(equalTo: diffHost.bottomAnchor),
             diffView.leadingAnchor.constraint(equalTo: diffHost.leadingAnchor),
             diffView.trailingAnchor.constraint(equalTo: diffHost.trailingAnchor),
@@ -465,6 +528,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         messageView.textColor = Theme.foreground
         messageView.insertionPointColor = Theme.foreground
         diffMessage.textColor = Theme.gutter
+        diffInfo.textColor = Theme.gutter
         mergeTitle.textColor = Theme.foreground
         countLabel.textColor = Theme.gutter
         outline.reloadData()
@@ -527,6 +591,9 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         }
         known.formIntersection(paths)
         checked.formIntersection(paths)
+        self.changes = changes
+        partial = partial.filter { paths.contains($0.key) }
+        for (k, v) in stageViews where !paths.contains(String(k.dropFirst(2))) { v.view.removeFromSuperview(); stageViews[k] = nil }
 
         outline.reloadData()
         expandAll()
@@ -580,19 +647,20 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             return c
         }()
         if let g = item as? GitGroup {
-            let on = g.rows.filter { checked.contains($0.change.path) }.count
-            cell.configureGroup(g, state: on == 0 ? .off : on == g.rows.count ? .on : .mixed)
+            let states = g.rows.map { rowState($0.change.path) }
+            let on = states.filter { $0 == .on }.count
+            cell.configureGroup(g, state: on == states.count ? .on : (on == 0 && !states.contains(.mixed)) ? .off : .mixed)
             cell.onToggle = { [weak self] on in
                 guard let self else { return }
-                for r in g.rows { if on { self.checked.insert(r.change.path) } else { self.checked.remove(r.change.path) } }
+                for r in g.rows { self.setFileChecked(r.change.path, on) }
                 self.checksChanged()
             }
             cell.onAccept = nil
         } else if let row = item as? GitRow {
-            cell.configureRow(row, checked: checked.contains(row.change.path))
+            cell.configureRow(row, state: rowState(row.change.path))
             cell.onToggle = { [weak self] on in
                 guard let self else { return }
-                if on { self.checked.insert(row.change.path) } else { self.checked.remove(row.change.path) }
+                self.setFileChecked(row.change.path, on)
                 self.checksChanged()
             }
             cell.onAccept = { [weak self] i in
@@ -614,11 +682,29 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     func outlineViewItemDidExpand(_ n: Notification) { if let g = n.userInfo?["NSObject"] as? GitGroup { collapsed.remove(g.kind) } }
 
     private func checksChanged() {
-        for g in groups {
-            let row = outline.row(forItem: g)
-            if row >= 0 { outline.reloadData(forRowIndexes: [row], columnIndexes: [0]) }
-        }
+        outline.reloadData(forRowIndexes: IndexSet(0..<outline.numberOfRows), columnIndexes: [0])
         updateButtons()
+    }
+
+    private func rowState(_ path: String) -> NSControl.StateValue {
+        guard checked.contains(path) else { return .off }
+        if let p = partial[path], p.checked > 0, p.checked < p.total { return .mixed }
+        return .on
+    }
+
+    /// Per-file checkbox: also drives the line checkboxes of that file's diff so both stay in sync.
+    private func setFileChecked(_ path: String, _ on: Bool) {
+        if on { checked.insert(path) } else { checked.remove(path) }
+        var hadView = false
+        for k in ["\(GitGroupKind.changes.rawValue)|\(path)", "\(GitGroupKind.untracked.rawValue)|\(path)"] {
+            if let v = stageViews[k]?.view { hadView = true; v.setAllChecked(on) }
+        }
+        if !hadView { partial[path] = nil }
+    }
+
+    private func isCommitPartialEligible(_ c: GitChange) -> Bool {
+        guard !merging, !c.isConflict else { return false }
+        return c.isUntracked || (c.index == "." && c.work != "." && c.work != "D")
     }
 
     private func toggleSelection() {
@@ -626,10 +712,9 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             (item as? GitGroup)?.rows ?? (item as? GitRow).map { [$0] } ?? []
         }.filter { $0.kind != .conflicts }
         guard !rows.isEmpty else { return }
-        let allOn = rows.allSatisfy { checked.contains($0.change.path) }
-        for r in rows { if allOn { checked.remove(r.change.path) } else { checked.insert(r.change.path) } }
-        outline.reloadData(forRowIndexes: IndexSet(0..<outline.numberOfRows), columnIndexes: [0])
-        updateButtons()
+        let allOn = rows.allSatisfy { rowState($0.change.path) == .on }
+        for r in rows { setFileChecked(r.change.path, !allOn) }
+        checksChanged()
     }
 
     private func openSelection() {
@@ -676,11 +761,11 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     @objc private func menuOpen() { menuRows().first.map { open($0.change) } }
     @objc private func menuStage() {
         let paths = menuRows().filter { $0.kind == .changes || $0.kind == .untracked }.map(\.change.path)
-        perform { try $0.stage(paths) }
+        perform({ try $0.stage(paths) }, resets: true)
     }
     @objc private func menuUnstage() {
         let paths = menuRows().filter { $0.kind == .staged }.flatMap { [$0.change.path] + ($0.change.origPath.map { [$0] } ?? []) }
-        perform { try $0.unstage(paths) }
+        perform({ try $0.unstage(paths) }, resets: true)
     }
     @objc private func menuDiscard() {
         let paths = menuRows().filter { $0.kind != .conflicts }.map(\.change.path)
@@ -692,31 +777,166 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         alert.addButton(withTitle: "Cancel")
         alert.buttons[0].hasDestructiveAction = true
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        perform { try $0.discard(paths) }
+        perform({ try $0.discard(paths) }, resets: true)
     }
 
     // MARK: diff
 
+    private func hideDiffs() {
+        diffHost.subviews.compactMap { $0 as? SideBySideDiffView }.forEach { $0.isHidden = true }
+        diffBar.isHidden = true
+        active = nil
+    }
+
     private func showDiffMessage(_ text: String) {
+        hideDiffs()
         diffMessage.stringValue = text
         diffMessage.isHidden = false
-        diffView.isHidden = true
+    }
+
+    private func mtime(of path: String) -> TimeInterval {
+        let url = repo.root.appendingPathComponent(path)
+        return ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+    }
+
+    private func diffKey(_ c: GitChange, _ kind: GitGroupKind) -> String {
+        "\(kind.rawValue)|\(c.path)|\(c.index)\(c.work)|\(mtime(of: c.path))"
+    }
+
+    /// Views of files without a partial selection are dropped; the rest keep their line checkboxes while another file is shown.
+    private func pruneStageViews(keeping rowKey: String) {
+        for (k, v) in stageViews where k != rowKey && v.view.checkedLineCount == v.view.changedLineCount {
+            v.view.removeFromSuperview()
+            stageViews[k] = nil
+        }
+    }
+
+    private func resetSelections() {
+        partial.removeAll()
+        for (_, v) in stageViews { v.view.removeFromSuperview() }
+        stageViews.removeAll()
+        shownDiffKey = nil
+        hideDiffs()
+    }
+
+    private func makeStageView() -> SideBySideDiffView {
+        let v = SideBySideDiffView()
+        v.translatesAutoresizingMaskIntoConstraints = false
+        diffHost.addSubview(v)
+        NSLayoutConstraint.activate([
+            v.topAnchor.constraint(equalTo: diffBar.bottomAnchor),
+            v.bottomAnchor.constraint(equalTo: diffHost.bottomAnchor),
+            v.leadingAnchor.constraint(equalTo: diffHost.leadingAnchor),
+            v.trailingAnchor.constraint(equalTo: diffHost.trailingAnchor),
+        ])
+        return v
+    }
+
+    private func present(_ v: SideBySideDiffView, rowKey: String, path: String, kind: GitGroupKind) {
+        diffMessage.isHidden = true
+        for sv in diffHost.subviews.compactMap({ $0 as? SideBySideDiffView }) { sv.isHidden = sv !== v }
+        active = ActiveDiff(rowKey: rowKey, path: path, kind: kind, view: v)
+        diffBar.isHidden = false
+        updateDiffBar()
+    }
+
+    private func updateDiffBar() {
+        guard let a = active else { return }
+        let v = a.view
+        let n = v.checkedLineCount, t = v.changedLineCount
+        let picking = v.pickMode != .none
+        let working = a.kind == .changes || a.kind == .untracked
+        stageSelectedButton.isHidden = !picking
+        stageSelectedButton.title = a.kind == .staged ? "Unstage Unchecked" : "Stage Selected"
+        stageSelectedButton.isEnabled = a.kind == .staged ? (t > 0 && n < t) : n > 0
+        editCheck.isHidden = !(working && picking)
+        editCheck.state = editMode ? .on : .off
+        diffInfo.stringValue = picking ? "\(n) of \(t) changed lines selected" : ""
+        prevButton.isEnabled = v.changeCount > 0
+        nextButton.isEnabled = v.changeCount > 0
+    }
+
+    @objc private func prevChange() { active?.view.previousChange() }
+    @objc private func nextChange() { active?.view.nextChange() }
+
+    @objc private func editToggled() {
+        editMode = editCheck.state == .on
+        for (k, v) in stageViews where k.hasPrefix("\(GitGroupKind.changes.rawValue)|") || k.hasPrefix("\(GitGroupKind.untracked.rawValue)|") {
+            v.view.isNewSideEditable = editMode
+        }
+    }
+
+    @objc private func stageSelectedTapped() {
+        flushPendingWrite()
+        guard let a = active else { return }
+        let content = a.view.contentApplyingChecked()
+        let path = a.path
+        if a.kind == .staged { perform({ try $0.unstagePartial(path: path, content: content) }, resets: true) }
+        else { perform({ try $0.stagePartial(path: path, content: content) }, resets: true) }
+    }
+
+    private func lineChecksChanged(path: String, kind: GitGroupKind, view v: SideBySideDiffView) {
+        if kind == .changes || kind == .untracked, let c = changes.first(where: { $0.path == path }), isCommitPartialEligible(c) {
+            let n = v.checkedLineCount, t = v.changedLineCount
+            partial[path] = PartialSel(checked: n, total: t, content: (n > 0 && n < t) ? v.contentApplyingChecked() : "", mtime: mtime(of: path))
+            if t > 0 { if n == 0 { checked.remove(path) } else { checked.insert(path) } }
+            checksChanged()
+        }
+        if active?.view === v { updateDiffBar() }
+    }
+
+    private func scheduleWrite(_ path: String, _ text: String) {
+        pendingWrite = (path, text)
+        writeTimer?.invalidate()
+        writeTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in self?.flushPendingWrite() }
+    }
+
+    /// Writes edits made in the diff's right pane to disk (atomic, keeps permissions, only when changed).
+    private func flushPendingWrite() {
+        writeTimer?.invalidate()
+        writeTimer = nil
+        guard let w = pendingWrite else { return }
+        pendingWrite = nil
+        let url = repo.root.appendingPathComponent(w.path)
+        if (try? String(contentsOf: url, encoding: .utf8)) == w.text { return }
+        let perms = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.posixPermissions]
+        do {
+            try w.text.write(to: url, atomically: true, encoding: .utf8)
+            if let perms { try? FileManager.default.setAttributes([.posixPermissions: perms], ofItemAtPath: url.path) }
+        } catch {
+            showError(GitError(message: "Cannot write \(w.path): \(error.localizedDescription)"))
+            return
+        }
+        // keep the shown diff's signature current so the refresh below does not rebuild it and lose line checks
+        if let a = active, a.path == w.path, let c = changes.first(where: { $0.path == w.path }) {
+            let key = diffKey(c, a.kind)
+            shownDiffKey = key
+            stageViews[a.rowKey]?.sig = key
+        }
+        if partial[w.path] != nil { partial[w.path]?.mtime = mtime(of: w.path) }
+        onStatusChange?()
+        reload()
     }
 
     private func showDiffForSelection(force: Bool) {
+        if force { flushPendingWrite() }
         guard let row = selectedRow() else {
             shownDiffKey = nil
             showDiffMessage(groups.isEmpty ? "No changes" : "Select a file to see its changes")
             return
         }
         let c = row.change
-        let mtime = (try? FileManager.default.attributesOfItem(atPath: repo.root.appendingPathComponent(c.path).path)[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-        let key = "\(row.key)|\(c.index)\(c.work)|\(mtime)"
-        if !force, key == shownDiffKey, !diffView.isHidden { return }
+        let kind = row.kind
+        let key = diffKey(c, kind)
+        if !force, key == shownDiffKey, let a = active, !a.view.isHidden { return }
+        pruneStageViews(keeping: row.key)
         shownDiffKey = key
         diffToken += 1
         let token = diffToken
-        let kind = row.kind
+        if let stored = stageViews[row.key], stored.sig == key {
+            present(stored.view, rowKey: row.key, path: c.path, kind: kind)
+            return
+        }
         reader.async { [repo] in
             enum Out { case diff(String, String, String, String); case message(String) }
             let out: Out
@@ -740,9 +960,25 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
                 guard let self, token == self.diffToken, self.mergingPath == nil else { return }
                 switch out {
                 case .diff(let old, let new, let oldT, let newT):
-                    self.diffMessage.isHidden = true
-                    self.diffView.isHidden = false
-                    self.diffView.show(old: old, new: new, oldTitle: oldT, newTitle: newT, fileExtension: (c.path as NSString).pathExtension)
+                    let pickable = kind != .conflicts && !(kind == .changes && c.work == "D") && !(kind == .staged && c.index == "D")
+                    let v: SideBySideDiffView
+                    if pickable {
+                        self.stageViews[row.key]?.view.removeFromSuperview()
+                        v = self.makeStageView()
+                        self.stageViews[row.key] = (v, key)
+                    } else { v = self.diffView }
+                    let working = kind == .changes || kind == .untracked
+                    v.pickMode = pickable ? .stage : .none
+                    v.isNewSideEditable = pickable && working && self.editMode
+                    v.isOldSideEditable = false
+                    v.onNewSideEdited = pickable && working ? { [weak self] text in self?.scheduleWrite(c.path, text) } : nil
+                    v.onCheckedChanged = pickable ? { [weak self, weak v] in
+                        guard let self, let v else { return }
+                        self.lineChecksChanged(path: c.path, kind: kind, view: v)
+                    } : nil
+                    v.show(old: old, new: new, oldTitle: oldT, newTitle: newT, fileExtension: (c.path as NSString).pathExtension)
+                    self.present(v, rowKey: row.key, path: c.path, kind: kind)
+                    if pickable { v.setAllChecked(kind == .staged || self.checked.contains(c.path)) }
                 case .message(let m): self.showDiffMessage(m)
                 }
             }
@@ -772,7 +1008,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
                     self.diffToken += 1
                     self.mergeTitle.stringValue = "Merging \(c.path)"
                     self.mergeBar.isHidden = false
-                    self.diffView.isHidden = true
+                    self.hideDiffs()
                     self.diffMessage.isHidden = true
                     mv.isHidden = false
                     mv.show(base: v.base, ours: v.ours ?? "", theirs: v.theirs ?? "", oursTitle: "Yours", theirsTitle: "Theirs",
@@ -825,7 +1061,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     }
 
     /// Runs `work` serially off the main thread, then refreshes. Errors land in the banner.
-    private func perform(_ work: @escaping (GitRepo) throws -> Void, done: (() -> Void)? = nil) {
+    private func perform(_ work: @escaping (GitRepo) throws -> Void, done: (() -> Void)? = nil, resets: Bool = false) {
         setBusy(true)
         banner.isHidden = true
         ops.async { [repo] in
@@ -836,6 +1072,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
                 self.setBusy(false)
                 if let error { self.showError(error) }
                 done?()
+                if resets { self.resetSelections() }
                 self.reload()
                 self.onStatusChange?()
             }
@@ -853,12 +1090,13 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         let n = checkedPaths().isEmpty ? 0 : groups.flatMap(\.rows).filter { $0.kind != .conflicts && checked.contains($0.change.path) }
             .reduce(into: Set<String>()) { $0.insert($1.change.path) }.count
         countLabel.stringValue = hasConflicts ? "Resolve conflicts first" : "\(n) file\(n == 1 ? "" : "s") selected"
-        let can = idle && !hasConflicts
+        let can = idle && !hasConflicts && (n > 0 || amendCheck.state == .on || merging)
         commitButton.isEnabled = can
         commitPushButton.isEnabled = can
     }
 
     @objc private func amendToggled() {
+        updateButtons()
         guard amendCheck.state == .on, messageView.string.isEmpty else { return }
         reader.async { [repo] in
             let msg = (try? repo.lastCommitMessage()) ?? ""
@@ -875,7 +1113,23 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     private func commit(push: Bool) {
         guard busy == 0, !groups.contains(where: { $0.kind == .conflicts }) else { return }
+        flushPendingWrite()
         let paths = checkedPaths()
+        var entries: [GitRepo.CommitEntry] = []
+        var usesPartial = false
+        for c in changes where checked.contains(c.path) && !c.isConflict {
+            if let p = partial[c.path], p.checked > 0, p.checked < p.total, isCommitPartialEligible(c) {
+                guard p.mtime == mtime(of: c.path) else {
+                    showError(GitError(message: "\(c.path) changed on disk; review its selected lines again"))
+                    return
+                }
+                entries.append(.init(path: c.path, content: p.content))
+                usesPartial = true
+            } else {
+                entries.append(.init(path: c.path, content: nil))
+                if let o = c.origPath { entries.append(.init(path: o, content: nil)) }
+            }
+        }
         let amend = amendCheck.state == .on
         let message = messageView.string
         if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !amend {
@@ -888,14 +1142,15 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             return
         }
         perform({ repo in
-            try repo.commit(message: message, paths: paths.isEmpty ? nil : paths, amend: amend)
+            if usesPartial { try repo.commitPartial(message: message, entries: entries, amend: amend) }
+            else { try repo.commit(message: message, paths: paths.isEmpty ? nil : paths, amend: amend) }
             if push { try repo.push() }
         }, done: { [weak self] in
             guard let self, self.banner.isHidden else { return }
             self.messageView.string = ""
             self.messageView.needsDisplay = true
             self.amendCheck.state = .off
-        })
+        }, resets: true)
     }
 
     // MARK: branches
