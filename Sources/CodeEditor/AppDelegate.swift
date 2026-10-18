@@ -63,6 +63,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         BracketColorizer.start()
         GitGutter.start()
         Formatter.start()
+        LanguageServers.openProjectRoot = { [weak self] url in
+            let path = url.standardizedFileURL.path
+            return self?.windows.compactMap(\.root)
+                .filter { path.hasPrefix($0.path + "/") }
+                .max { $0.path.count < $1.path.count }
+        }
         // Breadcrumb callbacks resolve their project window lazily (the tab isn't registered with a window yet when it opens).
         EditorEvents.onOpen { [weak self] tab in
             func owner() -> ProjectWindow? { self?.windows.first { $0.editors.values.contains { $0 === tab } } }

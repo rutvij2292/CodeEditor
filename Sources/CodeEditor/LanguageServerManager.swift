@@ -873,6 +873,7 @@ final class LanguageServerManager {
 
     func projectRoot(for file: URL, config: LanguageServerConfig) -> URL? {
         if let resolver = config.rootResolver { return resolver(file) }
+        if !config.requireRootMarker, let root = LanguageServers.openProjectRoot?(file) { return root }
         let markers = config.rootMarkers
         let fm = FileManager.default
         let home = NSHomeDirectory()
