@@ -1,13 +1,13 @@
 import AppKit
 
 /// One open file: scroll view + text view + highlighter.
-final class EditorTab: NSObject, NSTextViewDelegate {
+final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
     let url: URL
     let scrollView = NSScrollView()
     private(set) var view: NSView!
     let textView: CodeTextView
     private var highlighter: Highlighter?
-    private var reparseWork: DispatchWorkItem?
+    private let storage: NSTextStorage
     private(set) var isDirty = false
     var onDirtyChange: (() -> Void)?
     var onSave: (() -> Void)?
@@ -23,6 +23,7 @@ final class EditorTab: NSObject, NSTextViewDelegate {
         let container = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude,
                                                      height: CGFloat.greatestFiniteMagnitude))
         storage.addLayoutManager(layout)
+        self.storage = storage
         layout.addTextContainer(container)
         textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
         super.init()
@@ -61,16 +62,20 @@ final class EditorTab: NSObject, NSTextViewDelegate {
         scrollView.backgroundColor = Theme.background
         view = EditorContainer(scrollView: scrollView, gutter: GutterView(textView: textView, scrollView: scrollView))
 
-        highlighter = Highlighter(textView: textView, extension: url.pathExtension)
+        storage.delegate = self
+        highlighter = Highlighter(textView: textView, fileName: url.lastPathComponent)
         EditorEvents.notifyOpened(self)
     }
 
     func textDidChange(_ notification: Notification) {
         if !isDirty { isDirty = true; onDirtyChange?() }
-        reparseWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.highlighter?.reparse() }
-        reparseWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    /// Feeds each edit to the incremental parser; it repaints at the end of the run loop.
+    func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
+                     range editedRange: NSRange, changeInLength delta: Int) {
+        guard editedMask.contains(.editedCharacters) else { return }
+        highlighter?.textDidEdit(range: editedRange, changeInLength: delta)
     }
 
     private static func modificationDate(_ url: URL) -> Date? {
