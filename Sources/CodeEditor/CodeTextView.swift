@@ -28,6 +28,7 @@ final class CodeTextView: NSTextView {
     /// Fired before every single-range edit (range, replacement length in UTF-16) so tab-stop trackers can follow the text.
     var onWillChange: ((NSRange, Int) -> Void)?
     override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        folds.unfold(intersecting: affectedCharRange)      // any edit touching folded text unfolds it first
         let ok = super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
         if ok { onWillChange?(affectedCharRange, (replacementString as NSString?)?.length ?? 0) }
         return ok
@@ -48,6 +49,14 @@ final class CodeTextView: NSTextView {
     private var extendTarget: NSRange?
     private var occurrenceStack: [NSRange] = []
 
+    // Keyboard selection state (our own anchor: NSTextView's hidden anchor can go stale after programmatic selections).
+    var navAnchor = 0, navHead = 0
+    var navRange: NSRange?
+    // Occurrence highlighting.
+    struct Occurrence { var range: NSRange; var isWrite: Bool }
+    var occurrences: [Occurrence] = []
+    var occurrenceWork: DispatchWorkItem?
+
     /// The file's line terminator ("\r\n" when the loaded text contains one). Detected whenever `string` is assigned.
     var lineEnding = "\n"
     override var string: String { didSet { detectLineEnding() } }
@@ -62,6 +71,16 @@ final class CodeTextView: NSTextView {
     private var appliedSoftWrap: Bool?
     private var lastCaretLineRect: NSRect = .zero
 
+    /// Code folding engine (TextKit 1 glyph hiding); see FoldController.
+    private(set) var folds: FoldController!
+    /// True while a keyboard command / mouse gesture moves the selection (snap to fold edges instead of unfolding).
+    var userNavigating = false
+    /// Overrides the file name used to pick the folding language (defaults to the owning tab's file name).
+    var foldFileName: String?
+    /// Fired after the folded set or the detected regions changed (session persistence, gutter redraw).
+    var onFoldsChange: (() -> Void)?
+    static let foldsDidChangeNotification = Notification.Name("CodeEditor.foldsDidChange")
+
     override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
         super.init(frame: frameRect, textContainer: container)
         setup()
@@ -70,6 +89,8 @@ final class CodeTextView: NSTextView {
     required init?(coder: NSCoder) { super.init(coder: coder); setup() }
 
     private func setup() {
+        folds = FoldController(textView: self)
+        folds.onFirstCompute = { [weak self] in self?.applyOpenFolds() }
         GitGutter.start()   // idempotent; registers before the owning tab fires its open hook
         applyThemeColors()
         let nc = NotificationCenter.default
@@ -95,6 +116,7 @@ final class CodeTextView: NSTextView {
 
     override func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = Self.softWrapEnabled ? .on : .off; return true }
+        if let a = item.action, Self.foldActions.contains(a) { return Prefs.foldingEnabled && !folds.regions.isEmpty }
         return super.validateMenuItem(item)
     }
 
@@ -166,7 +188,20 @@ final class CodeTextView: NSTextView {
         return rect
     }
 
+    override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
+        var r = charRange
+        if folds.hasHidden, let n = folds.normalized([NSValue(range: charRange)], navigating: userNavigating, previous: selectedRanges.first?.rangeValue).first {
+            r = n.rangeValue
+        }
+        super.setSelectedRange(r, affinity: affinity, stillSelecting: stillSelectingFlag)
+    }
+
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        var ranges = ranges
+        defer { scheduleOccurrences() }
+        if folds.hasHidden {
+            ranges = folds.normalized(ranges, navigating: userNavigating, previous: selectedRanges.first?.rangeValue)
+        }
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
         if !lastCaretLineRect.isEmpty { setNeedsDisplay(lastCaretLineRect) }
         lastCaretLineRect = caretLineRect() ?? .zero
@@ -181,6 +216,12 @@ final class CodeTextView: NSTextView {
             lastCaretLineRect = band
         }
         drawIndentGuides(in: rect)
+        drawOccurrences(in: rect)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        drawFoldChips(in: dirtyRect)     // after the text: syntax backgrounds (comments) must not paint over the chips
     }
 
     private var charWidth: CGFloat { ("0" as NSString).size(withAttributes: [.font: font ?? Theme.font]).width }
@@ -221,6 +262,11 @@ final class CodeTextView: NSTextView {
             if g.length > 1 { y1 = lm.lineFragmentRect(forGlyphAt: NSMaxRange(g) - 1, effectiveRange: nil).maxY }
             lines.append(L(y0: f0.minY, y1: y1, cols: indentColumns(s, st, ce), st: st, en: en))
             glyph = max(NSMaxRange(g), glyph + 1)
+            if folds.hasHidden, let h = folds.hiddenRange(startingAt: ce), h.end > ce {
+                // The row continues past folded lines: skip them (and the closer's remainder) in one step.
+                let next = folds.nextRowStart(from: st, in: s)
+                glyph = max(glyph, next >= s.length ? lm.numberOfGlyphs : lm.glyphIndexForCharacter(at: next))
+            }
         }
         guard !lines.isEmpty else { return }
 
@@ -308,13 +354,7 @@ final class CodeTextView: NSTextView {
 
     private func isBlank(_ c: unichar) -> Bool { c == 32 || c == 9 }
 
-    private func wordRange(at loc: Int) -> NSRange? {
-        let s = ns
-        var a = loc, b = loc
-        while a > 0, isWordUnit(s.character(at: a - 1)) { a -= 1 }
-        while b < s.length, isWordUnit(s.character(at: b)) { b += 1 }
-        return b > a ? NSRange(location: a, length: b - a) : nil
-    }
+    private func wordRange(at loc: Int) -> NSRange? { languageWordRange(at: loc) }
 
     /// Whole lines touched by a range; a selection ending exactly at a line start does not touch that line.
     private func touchedLines(_ r: NSRange) -> NSRange {
@@ -1075,9 +1115,193 @@ final class CodeTextView: NSTextView {
 
     private func isCloserOnly(_ c: unichar) -> Bool { c == 41 || c == 93 || c == 125 }
 
+    // MARK: - Folding hooks
+
+    override func shouldChangeText(inRanges affectedRanges: [NSValue], replacementStrings: [String]?) -> Bool {
+        if folds.hasHidden { for v in affectedRanges { folds.unfold(intersecting: v.rangeValue) } }
+        return super.shouldChangeText(inRanges: affectedRanges, replacementStrings: replacementStrings)
+    }
+
+    override func doCommand(by selector: Selector) {
+        let was = userNavigating
+        userNavigating = true
+        defer { userNavigating = was }
+        let before = selectedRanges.first?.rangeValue
+        super.doCommand(by: selector)
+        snapAfterNavigation(previous: before)
+    }
+
+    /// AppKit moves the caret for some commands through paths we cannot override; re-snap afterwards.
+    private func snapAfterNavigation(previous: NSRange?) {
+        guard folds.hasHidden else { return }
+        let now = selectedRanges
+        let fixed = folds.normalized(now, navigating: true, previous: previous)
+        if fixed != now {
+            super.setSelectedRanges(fixed, affinity: selectionAffinity, stillSelecting: false)
+            super.scrollRangeToVisible(selectedRange())
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if folds.hasHidden, let r = folds.hiddenRange(atChipPoint: convert(event.locationInWindow, from: nil)) {
+            folds.expand(r, recursive: event.modifierFlags.contains(.option))
+            return
+        }
+        let was = userNavigating
+        userNavigating = true
+        defer { userNavigating = was }
+        let before = selectedRanges.first?.rangeValue
+        super.mouseDown(with: event)
+        snapAfterNavigation(previous: before)
+    }
+
+    override func scrollRangeToVisible(_ range: NSRange) {
+        if folds.hasHidden, !userNavigating { folds.unfold(intersecting: range) }
+        super.scrollRangeToVisible(range)
+    }
+
+    override func showFindIndicator(for charRange: NSRange) {
+        if folds.hasHidden { folds.unfold(intersecting: charRange) }
+        super.showFindIndicator(for: charRange)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard folds.hasHidden, let lm = layoutManager, let tc = textContainer else { return }
+        let glyphs = lm.glyphRange(forBoundingRect: visibleRect, in: tc)
+        let chars = lm.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        for h in folds.hiddenRanges(overlapping: chars) {
+            if let r = folds.chipRect(for: h) { addCursorRect(r, cursor: .pointingHand) }
+        }
+    }
+
+    /// Draws the placeholder chip of every visible folded range.
+    private func drawFoldChips(in rect: NSRect) {
+        guard folds.hasHidden, let lm = layoutManager, let tc = textContainer else { return }
+        let origin = textContainerOrigin
+        let local = NSRect(x: rect.minX - origin.x, y: rect.minY - origin.y, width: rect.width, height: rect.height)
+        let glyphs = lm.glyphRange(forBoundingRect: local, in: tc)
+        let chars = lm.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        let dark = Theme.isDark
+        for h in folds.hiddenRanges(overlapping: chars) {
+            guard let r = folds.chipRect(for: h), r.intersects(rect) else { continue }
+            let fill = Theme.foreground.withAlphaComponent(dark ? 0.14 : 0.09)
+            let stroke = Theme.foreground.withAlphaComponent(dark ? 0.22 : 0.16)
+            let path = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 3, yRadius: 3)
+            fill.setFill(); path.fill()
+            stroke.setStroke(); path.lineWidth = 1; path.stroke()
+            let font = folds.chipFont(at: h.start)
+            let label = h.placeholder as NSString
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.foreground.withAlphaComponent(dark ? 0.75 : 0.6)]
+            let size = label.size(withAttributes: attrs)
+            label.draw(at: NSPoint(x: r.minX + (r.width - size.width) / 2, y: r.minY + (r.height - size.height) / 2), withAttributes: attrs)
+        }
+    }
+
+    /// Called by the fold engine after folds or regions changed.
+    func foldsDidChange() {
+        onFoldsChange?()
+        NotificationCenter.default.post(name: Self.foldsDidChangeNotification, object: self)
+    }
+
+    // MARK: - Line / word navigation (PhpStorm semantics, own anchor tracking)
+
+    private var singleSelection: Bool { selectedRanges.count == 1 && !hasMarkedText() }
+
+    override func moveToBeginningOfLine(_ sender: Any?) { if singleSelection { navigate(extend: false) { smartHome(from: $0) } } else { super.moveToBeginningOfLine(sender) } }
+    override func moveToLeftEndOfLine(_ sender: Any?) { if singleSelection { navigate(extend: false) { smartHome(from: $0) } } else { super.moveToLeftEndOfLine(sender) } }
+    override func moveToBeginningOfLineAndModifySelection(_ sender: Any?) { if singleSelection { navigate(extend: true) { smartHome(from: $0) } } else { super.moveToBeginningOfLineAndModifySelection(sender) } }
+    override func moveToLeftEndOfLineAndModifySelection(_ sender: Any?) { if singleSelection { navigate(extend: true) { smartHome(from: $0) } } else { super.moveToLeftEndOfLineAndModifySelection(sender) } }
+    override func moveToEndOfLine(_ sender: Any?) { if singleSelection { navigate(extend: false) { rowBounds(containing: $0).end } } else { super.moveToEndOfLine(sender) } }
+    override func moveToRightEndOfLine(_ sender: Any?) { if singleSelection { navigate(extend: false) { rowBounds(containing: $0).end } } else { super.moveToRightEndOfLine(sender) } }
+    override func moveToEndOfLineAndModifySelection(_ sender: Any?) { if singleSelection { navigate(extend: true) { rowBounds(containing: $0).end } } else { super.moveToEndOfLineAndModifySelection(sender) } }
+    override func moveToRightEndOfLineAndModifySelection(_ sender: Any?) { if singleSelection { navigate(extend: true) { rowBounds(containing: $0).end } } else { super.moveToRightEndOfLineAndModifySelection(sender) } }
+
+    override func moveWordLeft(_ sender: Any?) { if singleSelection { navigate(extend: false) { wordStop(from: $0, forward: false) } } else { super.moveWordLeft(sender) } }
+    override func moveWordBackward(_ sender: Any?) { if singleSelection { navigate(extend: false) { wordStop(from: $0, forward: false) } } else { super.moveWordBackward(sender) } }
+    override func moveWordRight(_ sender: Any?) { if singleSelection { navigate(extend: false) { wordStop(from: $0, forward: true) } } else { super.moveWordRight(sender) } }
+    override func moveWordForward(_ sender: Any?) { if singleSelection { navigate(extend: false) { wordStop(from: $0, forward: true) } } else { super.moveWordForward(sender) } }
+    override func moveWordLeftAndModifySelection(_ sender: Any?) { if singleSelection { navigate(extend: true) { wordStop(from: $0, forward: false) } } else { super.moveWordLeftAndModifySelection(sender) } }
+    override func moveWordBackwardAndModifySelection(_ sender: Any?) { if singleSelection { navigate(extend: true) { wordStop(from: $0, forward: false) } } else { super.moveWordBackwardAndModifySelection(sender) } }
+    override func moveWordRightAndModifySelection(_ sender: Any?) { if singleSelection { navigate(extend: true) { wordStop(from: $0, forward: true) } } else { super.moveWordRightAndModifySelection(sender) } }
+    override func moveWordForwardAndModifySelection(_ sender: Any?) { if singleSelection { navigate(extend: true) { wordStop(from: $0, forward: true) } } else { super.moveWordForwardAndModifySelection(sender) } }
+
+    override func moveToBeginningOfDocument(_ sender: Any?) { if singleSelection { navigate(extend: false) { _ in 0 } } else { super.moveToBeginningOfDocument(sender) } }
+    override func moveToEndOfDocument(_ sender: Any?) { if singleSelection { navigate(extend: false) { _ in ns.length } } else { super.moveToEndOfDocument(sender) } }
+    override func moveToBeginningOfDocumentAndModifySelection(_ sender: Any?) { if singleSelection { navigate(extend: true) { _ in 0 } } else { super.moveToBeginningOfDocumentAndModifySelection(sender) } }
+    override func moveToEndOfDocumentAndModifySelection(_ sender: Any?) { if singleSelection { navigate(extend: true) { _ in ns.length } } else { super.moveToEndOfDocumentAndModifySelection(sender) } }
+
+    /// Home / End keys move the caret like PhpStorm (they only scroll in a stock NSTextView).
+    override func scrollToBeginningOfDocument(_ sender: Any?) { if singleSelection { navigate(extend: false) { smartHome(from: $0) } } else { super.scrollToBeginningOfDocument(sender) } }
+    override func scrollToEndOfDocument(_ sender: Any?) { if singleSelection { navigate(extend: false) { rowBounds(containing: $0).end } } else { super.scrollToEndOfDocument(sender) } }
+
+    /// Option-Backspace: delete back to the previous word stop.
+    override func deleteWordBackward(_ sender: Any?) {
+        let sel = selectedRange()
+        guard singleSelection, sel.length == 0, sel.location > 0 else { super.deleteWordBackward(sender); return }
+        let target = wordStop(from: sel.location, forward: false)
+        let r = NSRange(location: target, length: sel.location - target)
+        guard r.length > 0 else { return }
+        grouped { if replace(r, with: "") { setSelectedRange(NSRange(location: r.location, length: 0)) } }
+    }
+
+    // MARK: Word selection
+
+    override func selectionRange(forProposedRange proposed: NSRange, granularity: NSSelectionGranularity) -> NSRange {
+        let base = super.selectionRange(forProposedRange: proposed, granularity: granularity)
+        guard granularity == .selectByWord, ns.length > 0, proposed.location <= ns.length else { return base }
+        let lo = min(proposed.location, ns.length - 1)
+        let first = languageWordRange(at: lo, preferAfter: true)
+        if proposed.length == 0 { return first ?? base }
+        let last = languageWordRange(at: max(lo, min(proposed.upperBound, ns.length) - 1), preferAfter: false)
+        let a = first?.location ?? base.location
+        let b = last.map { NSMaxRange($0) } ?? NSMaxRange(base)
+        return NSRange(location: a, length: max(0, b - a))
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        navRange = nil
+        clearOccurrences()
+        scheduleOccurrences()
+    }
+
+    override func deleteForward(_ sender: Any?) {
+        let sel = selectedRange()
+        if selectedRanges.count == 1, sel.length == 0, let h = folds.hiddenRange(startingAt: sel.location) {
+            folds.unfold(intersecting: NSRange(location: h.start + 1, length: 0)); return     // Delete at a fold's edge expands it
+        }
+        super.deleteForward(sender)
+    }
+
     override func deleteBackward(_ sender: Any?) {
         let sel = selectedRange()
         let s = ns
+        if selectedRanges.count == 1, sel.length == 0, let h = folds.hidden.first(where: { $0.end == sel.location }) {
+            folds.unfold(intersecting: NSRange(location: h.start + 1, length: 0)); return
+        }
+        // Smart Backspace: inside a line's leading whitespace, remove one indent level instead of one space.
+        if !hasMarkedText(), currentRanges.allSatisfy({ $0.length == 0 }) {
+            let carets = currentRanges.sorted { $0.location < $1.location }
+            let smart = carets.map { smartIndentDeletion(at: $0.location) }
+            if smart.contains(where: { $0 != nil }) {
+                if carets.count == 1, let r = smart[0] {
+                    grouped { if replace(r, with: "") { setSelectedRange(NSRange(location: r.location, length: 0)) } }
+                    return
+                }
+                var items: [(range: NSRange, text: String, caret: Int)] = []
+                var lastEnd = 0
+                for (c, sm) in zip(carets, smart) {
+                    var r = sm ?? singleCharBefore(c.location)
+                    guard r.length > 0 else { continue }
+                    if r.location < lastEnd { let e = r.upperBound; r = NSRange(location: lastEnd, length: max(0, e - lastEnd)) }
+                    guard r.length > 0 else { continue }
+                    items.append((r, "", 0)); lastEnd = r.upperBound
+                }
+                replaceRanges(items)
+                return
+            }
+        }
         if selectedRanges.count == 1, sel.length == 0, sel.location > 0, sel.location < s.length, !hasMarkedText(),
            let close = Self.pairs[s.character(at: sel.location - 1)], s.character(at: sel.location) == close {
             let r = NSRange(location: sel.location - 1, length: 2)
@@ -1085,5 +1309,301 @@ final class CodeTextView: NSTextView {
             return
         }
         super.deleteBackward(sender)
+    }
+}
+
+
+// MARK: - Navigation helpers, smart backspace, language-aware words, occurrence highlighting
+
+extension CodeTextView {
+    enum WordFlavor { case code, css, markup, blade }
+
+    var wordFlavor: WordFlavor {
+        let name = (foldFileName ?? (delegate as? EditorTab)?.url.lastPathComponent ?? "").lowercased()
+        if name.hasSuffix(".blade.php") { return .blade }
+        switch (name as NSString).pathExtension {
+        case "css", "scss", "sass", "less": return .css
+        case "html", "htm", "vue", "xml", "svg", "xhtml", "twig": return .markup
+        default: return .code
+        }
+    }
+
+    private func isAlnum(_ c: unichar) -> Bool {
+        c == 95 || (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+            || (c > 127 && (Unicode.Scalar(UInt32(c)).map { CharacterSet.alphanumerics.contains($0) } ?? false))
+    }
+
+    func isIdentChar(_ c: unichar, _ f: WordFlavor) -> Bool {
+        if isAlnum(c) { return true }
+        switch f {
+        case .code: return c == 36
+        case .css: return c == 45
+        case .markup: return c == 45 || c == 36
+        case .blade: return c == 36
+        }
+    }
+
+    /// The token around `loc` using the file type's word characters (`$var`, `.class`, `--custom-prop`, `v-model`, `@click`).
+    func languageWordRange(at loc: Int, preferAfter: Bool = false) -> NSRange? {
+        let s = string as NSString
+        guard s.length > 0 else { return nil }
+        let f = wordFlavor
+        let loc = min(max(0, loc), s.length)
+        var seed = loc
+        let onNext = loc < s.length && isIdentChar(s.character(at: loc), f)
+        let onPrev = loc > 0 && isIdentChar(s.character(at: loc - 1), f)
+        if preferAfter { if !onNext { if onPrev { seed = loc - 1 } else { return nil } } }
+        else if !onPrev { if onNext { seed = loc } else { return nil } }
+        else { seed = loc - 1 }
+        var a = seed, b = seed + 1
+        while a > 0, isIdentChar(s.character(at: a - 1), f) { a -= 1 }
+        while b < s.length, isIdentChar(s.character(at: b), f) { b += 1 }
+        // A run made only of hyphens / dollars is punctuation, not a word.
+        var hasAlnum = false
+        for i in a..<b where isAlnum(s.character(at: i)) { hasAlnum = true; break }
+        guard hasAlnum else { return nil }
+        // Language prefixes: CSS `.` / `#`, markup directives `@` `:` `#`, Blade `@`.
+        if a > 0 {
+            let p = s.character(at: a - 1)
+            switch f {
+            case .css: if p == 46 || p == 35 { a -= 1 }
+            case .blade: if p == 64 { a -= 1 }
+            case .markup:
+                if p == 64 || p == 58 || p == 35, a == 1 || [32, 9, 10, 13].contains(s.character(at: a - 2)) { a -= 1 }
+            case .code: break
+            }
+        }
+        return NSRange(location: a, length: b - a)
+    }
+
+    // MARK: Rows, home / end, word stops
+
+    /// Start and content end of the visual row (a logical line plus the lines folded into it) containing `loc`.
+    func rowBounds(containing loc: Int) -> (start: Int, end: Int) {
+        let s = string as NSString
+        func bounds(_ p: Int) -> (st: Int, ce: Int) {
+            var st = 0, en = 0, ce = 0
+            s.getLineStart(&st, end: &en, contentsEnd: &ce, for: NSRange(location: min(max(0, p), s.length), length: 0))
+            return (st, ce)
+        }
+        var (start, end) = bounds(loc)
+        guard folds.hasHidden else { return (start, end) }
+        while let h = folds.hidden.first(where: { $0.end >= start && $0.end <= end && $0.start < start }) { start = bounds(h.start).st }
+        while let h = folds.hiddenRange(startingAt: end), h.end > end { end = bounds(h.end).ce }
+        return (start, end)
+    }
+
+    /// First press -> first non-blank character, next press -> column 0 (from inside the indent: column 0).
+    func smartHome(from head: Int) -> Int {
+        let s = string as NSString
+        let (start, _) = rowBounds(containing: head)
+        var st = 0, en = 0, ce = 0
+        s.getLineStart(&st, end: &en, contentsEnd: &ce, for: NSRange(location: min(start, s.length), length: 0))
+        var fnw = st
+        while fnw < ce, s.character(at: fnw) == 32 || s.character(at: fnw) == 9 { fnw += 1 }
+        if fnw >= ce { return start }                                  // blank line: column 0
+        if head > start && head <= fnw { return start }                // inside the indent (or at its end): column 0
+        return fnw
+    }
+
+    private enum CharClass { case space, ident, punct, newline }
+
+    private func charClass(_ c: unichar, _ f: WordFlavor) -> CharClass {
+        if c == 10 || c == 13 { return .newline }
+        if c == 32 || c == 9 { return .space }
+        return isIdentChar(c, f) ? .ident : .punct
+    }
+
+    /// Mac-style word stops: identifier runs (with `$`, `_`), punctuation runs and line breaks are separate stops.
+    func wordStop(from p: Int, forward: Bool) -> Int {
+        let s = string as NSString
+        let f = wordFlavor
+        var i = p
+        if forward {
+            guard i < s.length else { return i }
+            if charClass(s.character(at: i), f) == .newline {
+                if s.character(at: i) == 13, i + 1 < s.length, s.character(at: i + 1) == 10 { return i + 2 }
+                return i + 1
+            }
+            while i < s.length, charClass(s.character(at: i), f) == .space { i += 1 }
+            if i >= s.length || charClass(s.character(at: i), f) == .newline { return i }
+            let cls = charClass(s.character(at: i), f)
+            while i < s.length, charClass(s.character(at: i), f) == cls { i += 1 }
+            return i
+        }
+        guard i > 0 else { return 0 }
+        if charClass(s.character(at: i - 1), f) == .newline {
+            i -= 1
+            if s.character(at: i) == 10, i > 0, s.character(at: i - 1) == 13 { i -= 1 }
+            return i
+        }
+        while i > 0, charClass(s.character(at: i - 1), f) == .space { i -= 1 }
+        if i == 0 || charClass(s.character(at: i - 1), f) == .newline { return i }
+        let cls = charClass(s.character(at: i - 1), f)
+        while i > 0, charClass(s.character(at: i - 1), f) == cls { i -= 1 }
+        return i
+    }
+
+    /// Moves / extends the selection from our own anchor so stale AppKit selection state cannot skew it.
+    func navigate(extend: Bool, _ target: (Int) -> Int) {
+        let r = selectedRange()
+        var anchor = r.location, head = r.location
+        if r.length > 0 {
+            if let nr = navRange, nr == r { anchor = navAnchor; head = navHead } else { anchor = r.location; head = r.upperBound }
+        }
+        let t = min(max(0, target(head)), (string as NSString).length)
+        let newAnchor = extend ? anchor : t
+        let range = NSRange(location: min(newAnchor, t), length: abs(newAnchor - t))
+        let was = userNavigating
+        userNavigating = true
+        setSelectedRange(range)
+        scrollRangeToVisible(NSRange(location: t, length: 0))
+        userNavigating = was
+        navAnchor = newAnchor
+        navHead = t
+        navRange = selectedRange()
+    }
+
+    // MARK: Smart Backspace
+
+    func smartIndentDeletion(at loc: Int) -> NSRange? {
+        let s = string as NSString
+        guard loc > 0, loc <= s.length else { return nil }
+        let ls = s.lineRange(for: NSRange(location: loc, length: 0)).location
+        guard ls < loc else { return nil }
+        var i = ls
+        while i < loc { let c = s.character(at: i); if c != 32 && c != 9 { return nil }; i += 1 }
+        if s.character(at: loc - 1) == 9 { return NSRange(location: loc - 1, length: 1) }
+        let n = max(1, tabColumns)
+        var col = 0
+        for j in ls..<loc { col += s.character(at: j) == 9 ? n - col % n : 1 }
+        let target = ((col - 1) / n) * n
+        var k = 0
+        while k < col - target, loc - k - 1 >= ls, s.character(at: loc - k - 1) == 32 { k += 1 }
+        return NSRange(location: loc - k, length: k)
+    }
+
+    func singleCharBefore(_ loc: Int) -> NSRange {
+        let s = string as NSString
+        guard loc > 0, loc <= s.length else { return NSRange(location: loc, length: 0) }
+        if s.character(at: loc - 1) == 10, loc >= 2, s.character(at: loc - 2) == 13 { return NSRange(location: loc - 2, length: 2) }
+        return s.rangeOfComposedCharacterSequence(at: loc - 1)
+    }
+
+    // MARK: Occurrence highlighting
+
+    func clearOccurrences() {
+        if !occurrences.isEmpty { occurrences = []; needsDisplay = true }
+    }
+
+    func scheduleOccurrences() {
+        occurrenceWork?.cancel()
+        guard Prefs.highlightOccurrences else { clearOccurrences(); return }
+        let work = DispatchWorkItem { [weak self] in self?.computeOccurrences() }
+        occurrenceWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    private func occurrenceColors() -> (read: NSColor, write: NSColor) {
+        Theme.isDark
+            ? (NSColor(srgbRed: 0.70, green: 0.55, blue: 1.00, alpha: 0.24), NSColor(srgbRed: 1.00, green: 0.45, blue: 0.52, alpha: 0.26))
+            : (NSColor(srgbRed: 0.58, green: 0.42, blue: 0.90, alpha: 0.20), NSColor(srgbRed: 0.92, green: 0.30, blue: 0.38, alpha: 0.22))
+    }
+
+    /// 0 = code, 1 = comment, 2 = string, judged by the highlighter's colours (cheap, no re-lexing).
+    private func lexicalKind(at i: Int) -> Int {
+        guard let lm = layoutManager, i < (string as NSString).length else { return 0 }
+        if let c = lm.temporaryAttribute(.foregroundColor, atCharacterIndex: i, effectiveRange: nil) as? NSColor {
+            func same(_ a: NSColor?, _ b: NSColor) -> Bool { a?.usingColorSpace(.sRGB) == b.usingColorSpace(.sRGB) }
+            for key in ["comment", "comment.doc", "comment.line"] where same(Theme.color(for: key), c) { return 1 }
+            for key in ["string", "string.special"] where same(Theme.color(for: key), c) { return 2 }
+        }
+        return lineLexicalKind(at: i)
+    }
+
+    /// The light theme leaves strings uncoloured, so also scan the line: quotes before `i` (and `//` / `#`) decide.
+    private func lineLexicalKind(at i: Int) -> Int {
+        let s = string as NSString
+        let ls = s.lineRange(for: NSRange(location: i, length: 0)).location
+        var quote: unichar = 0
+        var j = ls
+        while j < i {
+            let c = s.character(at: j)
+            if quote != 0 {
+                if c == 92 { j += 2; continue }
+                if c == quote { quote = 0 }
+            } else if c == 39 || c == 34 || c == 96 { quote = c }
+            else if c == 35 || (c == 47 && j + 1 < s.length && s.character(at: j + 1) == 47) { return 1 }
+            j += 1
+        }
+        return quote != 0 ? 2 : 0
+    }
+
+    func computeOccurrences() {
+        let s = string as NSString
+        guard Prefs.highlightOccurrences, s.length > 0, s.length <= 2_000_000, selectedRanges.count == 1 else { clearOccurrences(); return }
+        let sel = selectedRange()
+        let f = wordFlavor
+        var token: NSRange?
+        if sel.length == 0 {
+            if let w = languageWordRange(at: sel.location) { token = w }
+        } else if sel.length <= 200, let w = languageWordRange(at: sel.location, preferAfter: true), w == sel { token = w }
+        guard let tok = token else { clearOccurrences(); return }
+        let word = s.substring(with: tok)
+        let kind = lexicalKind(at: tok.location)
+        var found: [Occurrence] = []
+        var from = 0
+        while from < s.length, found.count < 5000 {
+            let r = s.range(of: word, options: [.literal], range: NSRange(location: from, length: s.length - from))
+            if r.location == NSNotFound { break }
+            from = r.upperBound
+            let beforeOK = r.location == 0 || !isIdentChar(s.character(at: r.location - 1), f)
+            let afterOK = r.upperBound >= s.length || !isIdentChar(s.character(at: r.upperBound), f)
+            guard beforeOK, afterOK, r != tok else { continue }
+            if lexicalKind(at: r.location) != kind { continue }
+            found.append(Occurrence(range: r, isWrite: isWriteUsage(s, r)))
+        }
+        occurrences = found
+        needsDisplay = true
+    }
+
+    private func isWriteUsage(_ s: NSString, _ r: NSRange) -> Bool {
+        var i = r.upperBound
+        while i < s.length, s.character(at: i) == 32 || s.character(at: i) == 9 { i += 1 }
+        func ch(_ k: Int) -> unichar { k < s.length ? s.character(at: k) : 0 }
+        let c0 = ch(i), c1 = ch(i + 1), c2 = ch(i + 2)
+        if c0 == 61 { return c1 != 61 && c1 != 62 }                                        // `=` but not `==` / `=>`
+        if "+-*/.%|&^".utf16.contains(c0), c1 == 61 { return true }                        // `+=` `.=` ...
+        if (c0 == 43 && c1 == 43) || (c0 == 45 && c1 == 45) { return true }                // `++` `--`
+        if c0 == 63, c1 == 63, c2 == 61 { return true }                                    // `??=`
+        if (c0 == 60 && c1 == 60 || c0 == 62 && c1 == 62), c2 == 61 { return true }        // `<<=` `>>=`
+        var j = r.location - 1
+        while j >= 0, s.character(at: j) == 32 || s.character(at: j) == 9 { j -= 1 }
+        if j >= 1, (s.character(at: j) == 43 && s.character(at: j - 1) == 43) || (s.character(at: j) == 45 && s.character(at: j - 1) == 45) { return true }
+        return false
+    }
+
+    func drawOccurrences(in rect: NSRect) {
+        guard !occurrences.isEmpty, Prefs.highlightOccurrences, let lm = layoutManager, let tc = textContainer else { return }
+        let origin = textContainerOrigin
+        let local = NSRect(x: rect.minX - origin.x, y: rect.minY - origin.y, width: rect.width, height: rect.height)
+        let glyphs = lm.glyphRange(forBoundingRect: local, in: tc)
+        guard glyphs.length > 0 else { return }
+        let chars = lm.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        var lo = 0, hi = occurrences.count
+        while lo < hi { let mid = (lo + hi) / 2; if NSMaxRange(occurrences[mid].range) < chars.location { lo = mid + 1 } else { hi = mid } }
+        let (read, write) = occurrenceColors()
+        var i = lo
+        while i < occurrences.count, occurrences[i].range.location <= NSMaxRange(chars) {
+            let occ = occurrences[i]
+            i += 1
+            if folds.hasHidden, folds.hiddenRange(containing: occ.range.location) != nil { continue }
+            let g = lm.glyphRange(forCharacterRange: occ.range, actualCharacterRange: nil)
+            (occ.isWrite ? write : read).setFill()
+            lm.enumerateEnclosingRects(forGlyphRange: g, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: tc) { r, _ in
+                let box = NSRect(x: r.minX + origin.x, y: r.minY + origin.y, width: r.width, height: r.height).insetBy(dx: -1, dy: 1)
+                NSBezierPath(roundedRect: box, xRadius: 3, yRadius: 3).fill()
+            }
+        }
     }
 }
