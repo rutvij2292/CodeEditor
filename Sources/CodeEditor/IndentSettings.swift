@@ -1,18 +1,21 @@
 import Foundation
 
-/// How a file is indented: `.editorconfig` first, then detected from the file's own content, else 4 spaces.
+/// How a file is indented: `.editorconfig` first, then detected from the file's own content, else the preferred default (4 spaces unless changed in Settings).
 struct IndentSettings: Equatable {
     var useTabs: Bool
     var size: Int                       // columns per indent level and per tab stop
 
     static let standard = IndentSettings(useTabs: false, size: 4)
+    /// The Settings default (`Prefs.defaultIndentSize` / `defaultIndentUsesTabs`): used when neither .editorconfig nor the content decides.
+    static var preferred: IndentSettings { IndentSettings(useTabs: Prefs.defaultIndentUsesTabs, size: Prefs.defaultIndentSize) }
     var unit: String { useTabs ? "\t" : String(repeating: " ", count: size) }
     var label: String { useTabs ? "Tabs (\(size))" : "\(size) spaces" }
 
     static func resolve(for url: URL, text: String) -> IndentSettings {
         let ec = EditorConfig.settings(for: url)
         let detected = detect(text)
-        return IndentSettings(useTabs: ec.useTabs ?? detected?.useTabs ?? false, size: ec.size ?? detected?.size ?? 4)
+        let fallback = preferred
+        return IndentSettings(useTabs: ec.useTabs ?? detected?.useTabs ?? fallback.useTabs, size: ec.size ?? detected?.size ?? fallback.size)
     }
 
     /// Looks at the first lines: tab-indented majority -> tabs; otherwise the most common positive indent step (2, 3, 4 or 8).
