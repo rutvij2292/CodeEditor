@@ -42,6 +42,8 @@ enum Prefs {
     static var highlightOccurrences: Bool { get { get("highlightOccurrences", true) } set { set("highlightOccurrences", newValue) } }
     /// "auto" (Low Power Mode / serious thermal state / battery <= 20 %), "always" or "off". See PowerState.
     static var powerSaver: String { get { get("powerSaver", "auto") } set { set("powerSaver", ["auto", "always", "off"].contains(newValue) ? newValue : "auto") } }
+    /// Asynchronous text drawing: "auto" (big files, never in power saver / occluded, self-disables if slower), "on" or "off". See GPUAssist.
+    static var gpuAssist: String { get { get("gpuAssist", "auto") } set { set("gpuAssist", ["auto", "on", "off"].contains(newValue) ? newValue : "auto") } }
     static var inlineBlame: Bool { get { get("inlineBlame", true) } set { set("inlineBlame", newValue) } }
     /// Default indentation when neither .editorconfig nor the file's own content decides.
     static var defaultIndentSize: Int { get { get("defaultIndentSize", 4) } set { set("defaultIndentSize", min(8, max(1, newValue))) } }
@@ -75,7 +77,7 @@ enum Prefs {
     /// Every key above, for "Restore Defaults" and tests.
     static let allKeys: [String] = [
         "editorFontName", "editorFontSize", "lineHeightMultiple", "colorScheme", "lightScheme", "darkScheme", "editorLigatures", "showLineNumbers", "showIndentGuides", "highlightCurrentLine",
-        "softWrap", "bracketPairColorization", "showBreadcrumbs", "foldingEnabled", "foldImportsOnOpen", "highlightOccurrences", "inlineBlame", "powerSaver",
+        "softWrap", "bracketPairColorization", "showBreadcrumbs", "foldingEnabled", "foldImportsOnOpen", "highlightOccurrences", "inlineBlame", "powerSaver", "gpuAssist",
         "defaultIndentSize", "defaultIndentUsesTabs",
         "terminalDock", "terminalFontName", "terminalFontSize", "terminalCursorStyle", "terminalScrollback", "terminalShell",
         "terminalAgents", "terminalNotifyOnIdle", "completionMinChars", "completionDelayMs", "intelephenseLicenceConfigured",

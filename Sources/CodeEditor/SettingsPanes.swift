@@ -115,6 +115,10 @@ final class GeneralPane: SettingsPane {
               help: "Automatic: on in Low Power Mode, when the Mac runs hot, or on battery at 20% or less. Power saver lengthens debounces, pauses inline blame and live git diff, and shuts idle language servers down sooner.",
               get: { ["auto", "always", "off"].firstIndex(of: Prefs.powerSaver) ?? 0 },
               set: { Prefs.powerSaver = ["auto", "always", "off"][$0] })
+        popup("GPU assist", ["Automatic", "On", "Off"],
+              help: "Draws the editor text asynchronously. Automatic: only for files over about 2,000 lines, never in power saver or while the window is hidden, and it switches itself off if it measures slower than normal drawing.",
+              get: { ["auto", "on", "off"].firstIndex(of: Prefs.gpuAssist) ?? 0 },
+              set: { Prefs.gpuAssist = ["auto", "on", "off"][$0] })
 
         section("Projects")
         checkbox("Restore windows on launch", label: "Startup", get: { SessionStore.reopenOnLaunch }, set: { SessionStore.reopenOnLaunch = $0 })

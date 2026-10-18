@@ -18,9 +18,28 @@ final class GutterView: NSView {
     private static let leftPad: CGFloat = 8
     private static let numberGap: CGFloat = 4
     override var isFlipped: Bool { true }
+    static var narrow = AppEnv.value("CE_GUT_FULL") == nil
+    static var labelCache = AppEnv.value("CE_GUT_NOCACHE") == nil
+
+    /// Every invalidation goes through here (also feeds the bench's dirty-region model).
+    private func invalidate(_ rect: NSRect? = nil) {
+        guard let rect, Self.narrow else {
+            if DirtyTracker.on { DirtyTracker.gutter = DirtyTracker.gutter.union(bounds) }
+            needsDisplay = true
+            return
+        }
+        if DirtyTracker.on { DirtyTracker.gutter = DirtyTracker.gutter.union(rect) }
+        setNeedsDisplay(rect)
+    }
+
+    /// Full-width rect of the visible row that holds a logical line (nil if not on screen).
+    private func rowRect(ofLine line: Int) -> NSRect? {
+        guard let e = extent(ofLine: line) else { return nil }
+        return NSRect(x: 0, y: e.0 - 1, width: bounds.width, height: e.1 - e.0 + 2)
+    }
 
     /// Change markers (git etc.). Setting redraws.
-    var markers: [GutterMarker] = [] { didSet { if markers != oldValue { needsDisplay = true } } }
+    var markers: [GutterMarker] = [] { didSet { if markers != oldValue { markersChanged(from: oldValue) } } }
     /// Click on a marker bar; the rect is the marker's extent in this view's coordinates.
     var onMarkerClick: ((GutterMarker, NSRect) -> Void)?
     /// Called with the preferred width when the number of digits (or the font / prefs) changes.
@@ -49,9 +68,26 @@ final class GutterView: NSView {
         let key = "\(base.fontName)-\(base.pointSize)"
         guard key != fontKey else { return }
         fontKey = key
+        labelCache.removeAll()
         numberFont = base.withSize(max(9, (base.pointSize - 1).rounded()))
         boldNumberFont = NSFontManager.shared.convert(numberFont, toHaveTrait: .boldFontMask)
         digitWidth = ("0" as NSString).size(withAttributes: [.font: numberFont]).width
+    }
+
+    /// Typeset line-number labels (CTLine + metrics), keyed by number and active state. Replaces per-frame
+    /// NSString size/draw calls, which re-typeset every label on every redraw.
+    private struct Label { let line: CTLine; let width: CGFloat; let ascent: CGFloat; let height: CGFloat }
+    private var labelCache: [Int: Label] = [:]
+
+    private func label(_ n: Int, active: Bool, attrs: [NSAttributedString.Key: Any], font: NSFont) -> Label {
+        let key = n << 1 | (active ? 1 : 0)
+        if let l = labelCache[key] { return l }
+        if labelCache.count > 4096 { labelCache.removeAll(keepingCapacity: true) }
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: "\(n)", attributes: attrs))
+        let l = Label(line: line, width: CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)), ascent: ceil(font.ascender),      // what NSString.draw / size(withAttributes:) use
+                      height: ceil(font.ascender) - floor(font.descender) + ceil(font.leading))
+        labelCache[key] = l
+        return l
     }
 
     private func width(forDigits d: Int) -> CGFloat {
@@ -67,22 +103,62 @@ final class GutterView: NSView {
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(textChanged), name: NSText.didChangeNotification, object: textView)
         nc.addObserver(self, selector: #selector(refresh), name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
-        nc.addObserver(self, selector: #selector(refresh), name: NSTextView.didChangeSelectionNotification, object: textView)
+        nc.addObserver(self, selector: #selector(selectionChanged), name: NSTextView.didChangeSelectionNotification, object: textView)
         // Layout finishes after init; the text view growing is our cue to redraw.
         textView.postsFrameChangedNotifications = true
         nc.addObserver(self, selector: #selector(refresh), name: NSView.frameDidChangeNotification, object: textView)
-        nc.addObserver(self, selector: #selector(refresh), name: Theme.didChange, object: nil)
+        nc.addObserver(self, selector: #selector(themeChanged), name: Theme.didChange, object: nil)
         nc.addObserver(self, selector: #selector(prefsChanged), name: Prefs.didChange, object: nil)
         nc.addObserver(self, selector: #selector(refresh), name: CodeTextView.foldsDidChangeNotification, object: textView)
         updateLineCount()
         preferredWidth = width(forDigits: String(lineCount).count)
-        DispatchQueue.main.async { [weak self] in self?.updateLineCount(); self?.needsDisplay = true }
+        DispatchQueue.main.async { [weak self] in self?.updateLineCount(); self?.invalidate() }
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    @objc private func refresh() { needsDisplay = true }
-    @objc private func textChanged() { updateLineCount(); needsDisplay = true }
-    @objc private func prefsChanged() { fontKey = ""; updateLineCount(); needsDisplay = true }
+    @objc private func refresh() { invalidate() }
+    @objc private func themeChanged() { labelCache.removeAll(); invalidate() }
+    @objc private func prefsChanged() { fontKey = ""; updateLineCount(); invalidate() }
+
+    /// Typing: numbers only change when the line count does; otherwise just the caret row (bold label). Layout shifts
+    /// (wrap, fold, resize) arrive as frame / fold notifications, which redraw everything.
+    @objc private func textChanged() {
+        let before = lineCount
+        updateLineCount()
+        if lineCount != before { invalidate() } else { caretMoved() }
+    }
+
+    private var activeLine = 0
+    @objc private func selectionChanged() { caretMoved() }
+    private func caretMoved() {
+        guard let tv = textView else { return }
+        let caret = min(tv.selectedRange().location, tv.textStorage?.length ?? 0)
+        let line = codeView?.folds.lineNumber(at: caret) ?? 0
+        let old = activeLine
+        activeLine = line
+        guard Self.narrow, codeView != nil, !rows.isEmpty else { invalidate(); return }
+        // Chevrons on the caret row depend on it too, so both rows are fully repainted.
+        for l in (old == line ? [line] : [old, line]) { if let r = rowRect(ofLine: l) { invalidate(r) } }
+    }
+
+    private func markersChanged(from old: [GutterMarker]) {
+        guard Self.narrow, !rows.isEmpty else { invalidate(); return }
+        let removed = old.filter { !markers.contains($0) }, added = markers.filter { !old.contains($0) }
+        for m in removed + added { if let r = markerRect(m) { invalidate(r) } }
+    }
+
+    /// Rect a marker occupies in the last drawn rows (nil when entirely off screen).
+    private func markerRect(_ m: GutterMarker) -> NSRect? {
+        guard let first = rows.first?.line, let last = rows.last?.endLine else { return nil }
+        if m.kind == .deleted {
+            guard m.lines.lowerBound >= first, m.lines.lowerBound <= last + 1, let y = wedgeY(before: m.lines.lowerBound) else { return nil }
+            return NSRect(x: bounds.width - Self.barZone - 2, y: y - 6, width: Self.barZone + 2, height: 12)
+        }
+        guard m.lines.upperBound > first, m.lines.lowerBound <= last else { return nil }
+        let a = max(m.lines.lowerBound, first), b = min(m.lines.upperBound - 1, last)
+        guard let top = extent(ofLine: a)?.0, let bottom = extent(ofLine: b)?.1 else { return nil }
+        return NSRect(x: bounds.width - Self.barZone - 2, y: top - 1, width: Self.barZone + 2, height: max(1, bottom - top) + 2)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -93,11 +169,16 @@ final class GutterView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
+        let old = hoverY
         hoverY = convert(event.locationInWindow, from: nil).y
-        needsDisplay = true
+        guard showsChevrons else { return }   // hover only affects chevrons
+        guard old != nil else { invalidate(); return }   // hovering starts: chevrons of every row appear
+        let oldLine = old.flatMap { rowLine(atY: $0) }, newLine = hoverY.flatMap { rowLine(atY: $0) }
+        if oldLine == newLine { return }
+        for l in [oldLine, newLine].compactMap({ $0 }) { if let r = rowRect(ofLine: l) { invalidate(r) } }
     }
 
-    override func mouseExited(with event: NSEvent) { hoverY = nil; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hoverY = nil; invalidate() }
 
     private func updateLineCount() {
         guard let tv = textView else { return }
@@ -134,7 +215,7 @@ final class GutterView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         Theme.palette.gutterBackground.setFill()
-        bounds.fill()
+        dirtyRect.fill()
         rows.removeAll(keepingCapacity: true)
         guard let tv = textView,
               let layout = tv.layoutManager, let container = tv.textContainer else { return }
@@ -164,7 +245,18 @@ final class GutterView: NSView {
         let textRight = bounds.width - rightPad
         let showNumbers = showsNumbers
         func drawLabel(_ n: Int, y0: CGFloat, height: CGFloat, isActive: Bool) {
-            guard showNumbers else { return }
+            guard showNumbers, y0 + height >= dirtyRect.minY, y0 <= dirtyRect.maxY else { return }
+            if Self.labelCache {
+                let font = isActive ? boldNumberFont : numberFont
+                let l = label(n, active: isActive, attrs: isActive ? active : plain, font: font)
+                guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+                ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)   // flipped view
+                let scale = ctx.ctm.a == 0 ? 1 : abs(ctx.ctm.a)
+                let baseline = ((y0 + (height - l.height) / 2 + l.ascent) * scale).rounded(.down) / scale   // pixel-identical to NSString.draw
+                ctx.textPosition = CGPoint(x: textRight - l.width, y: baseline)
+                CTLineDraw(l.line, ctx)
+                return
+            }
             let label = "\(n)" as NSString
             let attrs = isActive ? active : plain
             let size = label.size(withAttributes: attrs)
@@ -316,7 +408,7 @@ final class GutterView: NSView {
         if showsChevrons, let cv = codeView, p.x >= bounds.width - Self.barZone - Self.chevronZone, p.x < bounds.width - Self.barZone + 2,
            let line = rowLine(atY: p.y), cv.foldControl(forLine: line) != nil {
             cv.toggleFold(atLine: line, recursive: event.modifierFlags.contains(.option))
-            needsDisplay = true
+            invalidate()
             return
         }
         super.mouseDown(with: event)

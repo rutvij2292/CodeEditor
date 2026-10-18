@@ -57,3 +57,13 @@ enum LayerTuning {
         if depth < 6 { for s in root.subviews { dump(s, depth: depth + 1, into: &out) } }
     }
 }
+
+/// Bench-only model of AppKit's dirty-region drawing: `CE_BENCH_DIRTY=1` makes the bench draw only the union of the rects
+/// the text view / gutter were invalidated with (cacheDisplay would otherwise always redraw the whole visible region).
+enum DirtyTracker {
+    static let on = AppEnv.value("CE_BENCH_DIRTY") != nil
+    static var text = NSRect.null
+    static var gutter = NSRect.null
+    static var textBounds = NSRect.null
+    static var gutterBounds = NSRect.null
+}

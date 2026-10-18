@@ -148,7 +148,7 @@ enum SettingsDefaults {
         SessionStore.reopenOnLaunch = true
         Formatter.formatOnSave = false
         ProjectIndex.includeVendor = false
-        Prefs.reset(["powerSaver"])
+        Prefs.reset(["powerSaver", "gpuAssist"])
     }
 
     static func restoreEditor() {

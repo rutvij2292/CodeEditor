@@ -202,6 +202,7 @@ final class BenchRunner {
 
     /// Draws what one frame draws: the text view's visible rect and the gutter (no off-screen document area).
     func drawFull(_ tab: EditorTab) {
+        if DirtyTracker.on, drawDirty(tab) { return }
         detach(tab)
         let id = ObjectIdentifier(tab)
         let v = tab.view!
@@ -217,6 +218,24 @@ final class BenchRunner {
         }
     }
     var repsText: [ObjectIdentifier: NSBitmapImageRep] = [:]
+
+    /// CE_BENCH_DIRTY: draw only what was invalidated since the last draw (union of rects). Always true (kept for symmetry with drawFull).
+    func drawDirty(_ tab: EditorTab) -> Bool {
+        detach(tab)
+        let v = tab.view!
+        v.layoutSubtreeIfNeeded()
+        let tv = tab.textView
+        var r = DirtyTracker.text.intersection(tv.visibleRect)
+        if DirtyTracker.text.isNull { r = .null }
+        DirtyTracker.text = .null
+        if !r.isNull, r.width > 0, r.height > 0, let rep = tv.bitmapImageRepForCachingDisplay(in: r) { tv.cacheDisplay(in: r, to: rep) }
+        if let g = (v.subviews.first as? EditorContainer)?.gutter {
+            let gr = DirtyTracker.gutter.intersection(g.bounds)
+            DirtyTracker.gutter = .null
+            if !gr.isNull, gr.width > 0, gr.height > 0, let rep = g.bitmapImageRepForCachingDisplay(in: gr) { g.cacheDisplay(in: gr, to: rep) }
+        }
+        return true
+    }
 
     /// One scroll frame as AppKit draws it with copiesOnScroll: only the newly exposed strip of the text view, plus the
     /// whole gutter (it is a separate view that redraws on every bounds change).
@@ -268,6 +287,7 @@ final class BenchRunner {
             fputs("--- \(label)\n", stderr)
             let tab = openScenario(label, url)
             if let tab {
+                if want("asyncdraw") { asyncDraw(label, tab) }
                 if want("key") { keystrokes(label, tab) }
                 if want("scroll"), label != "1k" { scroll(label, tab) }
                 if want("jump"), label == "20k" || label == "5k" { jump(label, tab) }
@@ -290,7 +310,7 @@ final class BenchRunner {
     }
 
     func openScenario(_ label: String, _ url: URL) -> EditorTab? {
-        guard want("open") || want("key") || want("scroll") || want("jump") else { return nil }
+        guard want("open") || want("key") || want("scroll") || want("jump") || want("asyncdraw") else { return nil }
         var tabSync: [Double] = [], paint: [Double] = [], hl: [Double] = []
         var kept: EditorTab?
         let reps = (label == "min" || label == "20k") ? 3 : 5
@@ -348,7 +368,7 @@ final class BenchRunner {
             }
             record("micro.tv.string", label, a); record("micro.mutableString", label, b)
         }
-        var sync: [Double] = [], total: [Double] = []
+        var sync: [Double] = [], total: [Double] = [], drawT: [Double] = []
         _ = Perf.drain()
         meter.resetStalls()
         let words = ["x", "a", "$", "-", "t", "(", " ", "e"]
@@ -360,6 +380,7 @@ final class BenchRunner {
             let t1 = now()
             drawFull(tab)
             let t2 = now()
+            drawT.append(ms(t2 - t1))
             let busy0 = meter.busy
             pump(0.12)
             sync.append(ms(t1 - t0))
@@ -369,7 +390,56 @@ final class BenchRunner {
         for (k, v) in Perf.drain() { ex["perf." + k] = v.total * 1000 / Double(keyCount) }
         record("key.insertText", label, sync)
         record("key.total", label, total, extra: ex)
+        record("key.draw", label, drawT)
         // restore via undo noise is irrelevant; the tab is closed afterwards
+    }
+
+    /// Main-thread cost of redrawing the text view through a standalone CALayer (no window needed), with and without
+    /// drawsAsynchronously. `strip` = one line (typing), `full` = the whole visible region (scroll jump / theme change).
+    /// The layer is not on screen, so this measures command recording vs. full rasterisation on the main thread, plus the
+    /// time CATransaction.flush() needs for the background replay to finish.
+    func asyncDraw(_ label: String, _ tab: EditorTab) {
+        detach(tab)
+        let tv = tab.textView
+        tab.view.layoutSubtreeIfNeeded()
+        let vis = tv.visibleRect
+        final class Delegate: NSObject, CALayerDelegate {
+            let tv: NSTextView; let origin: CGPoint
+            init(_ tv: NSTextView, _ o: CGPoint) { self.tv = tv; origin = o }
+            func draw(_ layer: CALayer, in ctx: CGContext) {
+                let gc = NSGraphicsContext(cgContext: ctx, flipped: true)
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = gc
+                ctx.translateBy(x: -origin.x, y: -origin.y)
+                tv.displayIgnoringOpacity(NSRect(origin: origin, size: layer.bounds.size), in: gc)
+                NSGraphicsContext.restoreGraphicsState()
+            }
+        }
+        let layer = CALayer()
+        let del = Delegate(tv, vis.origin)
+        layer.delegate = del
+        layer.frame = NSRect(origin: .zero, size: vis.size)
+        layer.contentsScale = 2
+        layer.isOpaque = true
+        layer.contentsFormat = .RGBA8Uint
+        for (name, rect) in [("full", NSRect(origin: .zero, size: vis.size)), ("strip", NSRect(x: 0, y: vis.size.height / 2, width: vis.width, height: 19))] {
+            for async in [false, true] {
+                layer.drawsAsynchronously = async
+                var main: [Double] = [], wall: [Double] = []
+                for _ in 0..<60 {
+                    let t0 = now()
+                    layer.setNeedsDisplay(rect)
+                    layer.displayIfNeeded()
+                    let t1 = now()
+                    CATransaction.flush()
+                    let t2 = now()
+                    main.append(ms(t1 - t0)); wall.append(ms(t2 - t0))
+                    pump(0.005)
+                }
+                record("async.\(name).\(async ? "on" : "off").main", label, main)
+                record("async.\(name).\(async ? "on" : "off").wall", label, wall)
+            }
+        }
     }
 
     func scroll(_ label: String, _ tab: EditorTab) {

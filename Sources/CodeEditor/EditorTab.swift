@@ -174,7 +174,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
     let scrollView = NSScrollView()
     private(set) var view: NSView!
     let textView: CodeTextView
-    private var highlighter: Highlighter?
+    private(set) var highlighter: Highlighter?
     private let storage: NSTextStorage
     private(set) var isDirty = false
     var onDirtyChange: (() -> Void)?

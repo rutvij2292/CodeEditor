@@ -104,6 +104,8 @@ enum SelfTestPerf {
         CFRunLoopRemoveObserver(CFRunLoopGetMain(), obs, .commonModes)
         SelfTest.check("perf: idle editor causes < 40 run-loop wakeups in 2 s (was \(wakeups))", wakeups < 40)
 
+        SelfTestGPU.run(tab: tab, dir: dir)
+
         // 7. Every repeating timer in the sources sets a tolerance (lint; only runs where the sources are available).
         timerLint()
         _ = tab; _ = longTab

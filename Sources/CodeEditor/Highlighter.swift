@@ -18,6 +18,11 @@ final class Highlighter {
     private var sawEdits = false
     private var treeStale = true
     private var applied: NSRange?
+    /// Style ids last painted (`loc` = first UTF-16 unit) so a repaint only touches the units that changed, and AppKit
+    /// only invalidates those lines instead of the whole window. `unknownID` marks units we cannot vouch for (fresh edits).
+    private var paintedMap: (loc: Int, ids: [UInt16])?
+    private static let unknownID: UInt16 = 0xFFFF
+    static var incrementalPaint = AppEnv.value("CE_HL_FULL") == nil
     private var flushScheduled = false
     private var lastCost: TimeInterval = 0
     private var observers: [NSObjectProtocol] = []
@@ -66,6 +71,7 @@ final class Highlighter {
             forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
             self?.styleIDs = [:]
             self?.styleAttrs = [[:]]
+            self?.paintedMap = nil
             self?.apply()
         })
     }
@@ -125,6 +131,9 @@ final class Highlighter {
         apply(margin: !afterEdit)
     }
 
+    /// Test hook: forget what is on screen and repaint the visible lines from scratch.
+    func forceFullRepaint() { paintedMap = nil; apply(margin: false) }
+
     /// Repaints the visible range (+ margin) from the current tree.
     func apply() { apply(margin: true) }
 
@@ -145,6 +154,7 @@ final class Highlighter {
     func textDidEdit(range: NSRange, changeInLength: Int) {
         sawEdits = true
         treeStale = true
+        spliceMap(range: range, changeInLength: changeInLength)
         if let ns = text, let tree, root.parser != nil {
             let oldLen = range.length - changeInLength
             let oldEnd = range.location + oldLen
@@ -164,6 +174,20 @@ final class Highlighter {
         }
         applied = nil
         scheduleFlush()
+    }
+
+    private func spliceMap(range: NSRange, changeInLength: Int) {
+        guard var m = paintedMap else { return }
+        let oldEnd = range.location + range.length - changeInLength
+        if oldEnd <= m.loc {
+            m.loc += changeInLength
+        } else if range.location >= m.loc + m.ids.count {
+            return
+        } else if range.location >= m.loc, oldEnd <= m.loc + m.ids.count {
+            let k = range.location - m.loc
+            m.ids.replaceSubrange(k..<(oldEnd - m.loc), with: [UInt16](repeating: Self.unknownID, count: range.length))
+        } else { paintedMap = nil; return }
+        paintedMap = m
     }
 
     private func scheduleFlush() {
@@ -281,21 +305,45 @@ final class Highlighter {
         } else if let tree = tree?.copy() {
             paint(tree: tree, grammar: root, text: ns, offset: 0, depth: 0, canvas)
         }
-        for key in [NSAttributedString.Key.foregroundColor, .backgroundColor, .obliqueness, .strokeWidth] {
-            lm.removeTemporaryAttribute(key, forCharacterRange: win)
-        }
-        var i = 0
+        let keys: [NSAttributedString.Key] = [.foregroundColor, .backgroundColor, .obliqueness, .strokeWidth]
         let n = canvas.ids.count
-        while i < n {
-            let id = canvas.ids[i]
-            var j = i + 1
-            while j < n, canvas.ids[j] == id { j += 1 }
-            if id != 0 {
-                lm.addTemporaryAttributes(styleAttrs[Int(id)],
-                                          forCharacterRange: NSRange(location: win.location + i, length: j - i))
+        // Runs (canvas indices) whose style differs from what is on screen; everything on the first paint.
+        var runs: [Range<Int>] = []
+        if Self.incrementalPaint, let m = paintedMap {
+            var i = 0
+            canvas.ids.withUnsafeBufferPointer { new in
+                m.ids.withUnsafeBufferPointer { old in
+                    let base = win.location - m.loc
+                    while i < n {
+                        let k = i + base
+                        if k >= 0, k < old.count, old[k] == new[i] { i += 1; continue }
+                        var j = i + 1
+                        while j < n {
+                            let kj = j + base
+                            if kj >= 0, kj < old.count, old[kj] == new[j] { break }
+                            j += 1
+                        }
+                        runs.append(i..<j)
+                        i = j
+                    }
+                }
             }
-            i = j
+        } else if n > 0 { runs = [0..<n] }
+        for r in runs {
+            let abs = NSRange(location: win.location + r.lowerBound, length: r.count)
+            for key in keys { lm.removeTemporaryAttribute(key, forCharacterRange: abs) }
+            var i = r.lowerBound
+            while i < r.upperBound {
+                let id = canvas.ids[i]
+                var j = i + 1
+                while j < r.upperBound, canvas.ids[j] == id { j += 1 }
+                if id != 0 {
+                    lm.addTemporaryAttributes(styleAttrs[Int(id)], forCharacterRange: NSRange(location: win.location + i, length: j - i))
+                }
+                i = j
+            }
         }
+        paintedMap = (win.location, canvas.ids)
     }
 
     private func context(_ text: NSString) -> SwiftTreeSitter.Predicate.Context {

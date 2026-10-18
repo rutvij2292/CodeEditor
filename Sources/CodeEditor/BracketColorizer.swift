@@ -234,10 +234,26 @@ final class TabBracketState: NSObject, NSLayoutManagerDelegate {
         var m = fresh
         for (loc, o, n) in editLog[min(job.logCount, editLog.count)...] { m.applyEdit(location: loc, oldLength: o, newLength: n) }
         if job.id == latestJob { editLog.removeAll() }
+        let old = model
         model = m
         updatePair(force: true)
-        redraw()
+        redrawChanged(from: old, to: m)
         onModelUpdated?()
+    }
+
+    private let narrowRedraw = AppEnv.value("CE_BR_FULL") == nil
+
+    /// Invalidates only the brackets whose colour/state differ between the (edit-adjusted) old model and the fresh one.
+    /// Falls back to the whole visible rect when there are many (e.g. an unbalanced opener recolours everything below).
+    func redrawChanged(from old: BracketModel, to new: BracketModel) {
+        guard narrowRedraw, let tv = textView, let lm = layout, let tc = tv.textContainer else { redraw(); return }
+        let origin = tv.textContainerOrigin
+        var rect = tv.visibleRect
+        rect.origin.x -= origin.x; rect.origin.y -= origin.y
+        let g = lm.glyphRange(forBoundingRect: rect, in: tc)
+        let vis = lm.characterRange(forGlyphRange: g, actualGlyphRange: nil)
+        guard let changed = BracketModel.changedPositions(from: old, to: new, in: vis, limit: 48) else { redraw(); return }
+        for p in changed { lm.invalidateDisplay(forCharacterRange: NSRange(location: p, length: 1)) }
     }
 
     func redraw() {
@@ -277,5 +293,24 @@ final class TabBracketState: NSObject, NSLayoutManagerDelegate {
         guard let t = target else { NSSound.beep(); return }
         tv.setSelectedRange(NSRange(location: t, length: 0))
         tv.scrollRangeToVisible(NSRange(location: t, length: 0))
+    }
+}
+
+extension BracketModel {
+    /// Offsets (inside `range`) of brackets whose presence, kind, matched state or depth differ; nil when more than `limit`.
+    static func changedPositions(from old: BracketModel, to new: BracketModel, in range: NSRange, limit: Int) -> [Int]? {
+        var changed: [Int] = []
+        var a = old.lowerBound(range.location), b = new.lowerBound(range.location)
+        let end = NSMaxRange(range)
+        while true {
+            let pa = a < old.count ? Int(old.pos[a]) : Int.max, pb = b < new.count ? Int(new.pos[b]) : Int.max
+            if min(pa, pb) >= end { break }
+            if pa == pb {
+                if old.info[a] != new.info[b] || old.depth[a] != new.depth[b] { changed.append(pa) }
+                a += 1; b += 1
+            } else if pa < pb { changed.append(pa); a += 1 } else { changed.append(pb); b += 1 }
+            if changed.count > limit { return nil }
+        }
+        return changed
     }
 }

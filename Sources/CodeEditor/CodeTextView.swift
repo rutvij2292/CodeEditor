@@ -96,7 +96,12 @@ final class CodeTextView: NSTextView {
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(applyThemeColors), name: Theme.didChange, object: nil)
         nc.addObserver(self, selector: #selector(softWrapPreferenceChanged), name: Self.softWrapDidChange, object: nil)
+        nc.addObserver(self, selector: #selector(gpuPolicyInputsChanged), name: Prefs.didChange, object: nil)
+        nc.addObserver(self, selector: #selector(gpuPolicyInputsChanged), name: PowerState.didChange, object: nil)
+        nc.addObserver(self, selector: #selector(gpuPolicyInputsChanged), name: NSWindow.didChangeOcclusionStateNotification, object: nil)
     }
+
+    @objc private func gpuPolicyInputsChanged() { if Prefs.gpuAssist != "auto" { gpuCheck.reset() }; updateGPUAssist() }
 
     @objc private func applyThemeColors() {
         // Background only: selection must not wash out syntax colours.
@@ -146,6 +151,11 @@ final class CodeTextView: NSTextView {
         needsDisplay = true
         sv?.reflectScrolledClipView(sv!.contentView)
         NotificationCenter.default.post(name: NSView.frameDidChangeNotification, object: self)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateGPUAssist()
     }
 
     override func viewDidMoveToSuperview() {
@@ -219,9 +229,19 @@ final class CodeTextView: NSTextView {
         drawOccurrences(in: rect)
     }
 
+    /// Drawing-cost bookkeeping for GPUAssist's self-disable check (see GPUAssist.swift).
+    var gpuCheck = GPUAssist.Check()
+    private var gpuDraws = 0
+
     override func draw(_ dirtyRect: NSRect) {
+        let auto = Prefs.gpuAssist == "auto"
+        let t0 = auto ? CACurrentMediaTime() : 0
         super.draw(dirtyRect)
         drawFoldChips(in: dirtyRect)     // after the text: syntax backgrounds (comments) must not paint over the chips
+        guard auto else { return }
+        gpuCheck.record(ms: (CACurrentMediaTime() - t0) * 1000, area: Double(dirtyRect.width * dirtyRect.height), async: gpuAssistActive)
+        gpuDraws += 1
+        if gpuDraws % 16 == 0 || gpuCheck.syncN == GPUAssist.sampleCount { updateGPUAssist() }
     }
 
     private var charWidth: CGFloat { ("0" as NSString).size(withAttributes: [.font: font ?? Theme.font]).width }
@@ -330,8 +350,11 @@ final class CodeTextView: NSTextView {
     override func setNeedsDisplay(_ invalidRect: NSRect, avoidAdditionalLayout flag: Bool) {
         var r = invalidRect
         r.size.width += 1
+        if DirtyTracker.on { DirtyTracker.text = DirtyTracker.text.union(r) }
         super.setNeedsDisplay(r, avoidAdditionalLayout: flag)
     }
+
+    override var needsDisplay: Bool { didSet { if DirtyTracker.on, needsDisplay { DirtyTracker.text = DirtyTracker.text.union(bounds) } } }
 
     static func commentStyle(forExtension ext: String) -> CommentStyle {
         switch ext.lowercased() {
