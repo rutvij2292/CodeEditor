@@ -22,6 +22,8 @@ enum Verification {
             case "everywhere": w.showSearchEverywhere()
             case "projects": app.showRecentProjects(nil)
             case "git": w.toggleGitPanel()
+            case "bottom": decorateBottom(w)
+            case "tabs": decorateTabs(w)
             case "completion":
                 if let tv = w.current?.textView {
                     tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))
@@ -37,10 +39,54 @@ enum Verification {
                 CompletionPopup.shared.snapshot(to: popupPath)
                 composeCompletion(window: w.window, tab: tab, baseShot: shot, popupShot: popupPath)
             }
-            if picker != nil, picker != "git", picker != "completion" { QuickPicker.snapshot(to: shot.replacingOccurrences(of: ".png", with: "_picker.png")) }
+            if picker != nil, !["git", "completion", "bottom", "tabs"].contains(picker!) { QuickPicker.snapshot(to: shot.replacingOccurrences(of: ".png", with: "_picker.png")) }
             fputs("snapshot done\n", stderr)
             NSApp.terminate(nil)
         }
+    }
+
+    /// CE_PICKER=bottom: the bottom panel with Git / Find / Problems tabs, a badge, and sample tool content.
+    private static func decorateBottom(_ w: ProjectWindow) {
+        func sample(_ lines: [String]) -> NSView {
+            let label = NSTextField(wrappingLabelWithString: lines.joined(separator: "\n"))
+            label.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            label.textColor = Theme.foreground
+            let host = NSView()
+            label.translatesAutoresizingMaskIntoConstraints = false
+            host.addSubview(label)
+            NSLayoutConstraint.activate([label.topAnchor.constraint(equalTo: host.topAnchor, constant: 10),
+                                         label.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 12)])
+            return host
+        }
+        w.registerToolPanel(id: "find", title: "Find", view: sample(["app/Http/UserController.php:12   return $user;", "resources/app.js:3   const user = 1"]))
+        w.registerToolPanel(id: "problems", title: "Problems", view: sample(["app/Cache.php:4  Undefined variable $x"]))
+        w.setToolPanelBadge("12", for: "problems")
+        w.setToolPanelBadge("2", for: "find")
+        w.showToolPanel("find")
+    }
+
+    /// CE_PICKER=tabs: many tabs with a dirty dot and VCS colours, plus the status bar's Git summary.
+    private static func decorateTabs(_ w: ProjectWindow) {
+        guard let root = w.root else { return }
+        let files = (FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
+            .filter { !$0.hasDirectoryPath }.sorted { $0.path < $1.path }
+        for url in files.prefix(AppEnv.value("CE_TABS").flatMap(Int.init) ?? 6) { w.open(url) }
+        if let first = w.editors.values.first {
+            first.textView.string += " "
+            first.textView.didChangeText()
+        }
+        let rel = files.map { url -> String in
+            let p = VCSKind.canonical(url.path), r = VCSKind.canonical(root.path)
+            return p.hasPrefix(r + "/") ? String(p.dropFirst(r.count + 1)) : p
+        }
+        func change(_ i: Int, index: Character = " ", work: Character = "M", conflict: Bool = false, untracked: Bool = false) -> GitChange? {
+            guard rel.indices.contains(i) else { return nil }
+            return GitChange(path: rel[i], origPath: nil, index: index, work: work, isConflict: conflict, isUntracked: untracked, isStaged: false)
+        }
+        let changes = [change(0), change(1, work: " ", untracked: true), change(2, index: "A", work: " "), change(3, conflict: true)].compactMap { $0 }
+        w.applyGitStatus(changes: changes, info: ("main", nil, 1, 0, false), repoRoot: root)
+        w.tabs.select(w.tabs.entries[min(1, max(0, w.tabs.entries.count - 1))].id)
+        for item in w.tree.menuItems(for: files.first) { fputs("tree menu: \(item.isSeparatorItem ? "-----" : item.title + (item.isEnabled ? "" : " (disabled)"))\n", stderr) }
     }
 
     /// Draws the popup snapshot onto the editor render just below the caret, like it appears on screen.

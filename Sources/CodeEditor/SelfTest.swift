@@ -2,9 +2,9 @@ import AppKit
 
 /// CE_SELFTEST=1: headless checks of project-window logic; prints PASS/FAIL lines and exits non-zero on failure.
 enum SelfTest {
-    private static var failures = 0
+    static var failures = 0
 
-    private static func check(_ name: String, _ ok: @autoclosure () -> Bool) {
+    static func check(_ name: String, _ ok: @autoclosure () -> Bool) {
         let result = ok()
         if !result { failures += 1 }
         fputs((result ? "PASS " : "FAIL ") + name + "\n", stderr)
@@ -15,7 +15,7 @@ enum SelfTest {
         DispatchQueue.main.async { runChecks(app: app) }
     }
 
-    private static func finish() -> Never {
+    static func finish() -> Never {
         fputs(failures == 0 ? "ALL PASSED\n" : "\(failures) FAILED\n", stderr)
         exit(failures == 0 ? 0 : 1)
     }
@@ -60,7 +60,7 @@ enum SelfTest {
         let editor = w.current!
         editor.textView.string += "/* edit */"
         editor.textView.didChangeText()
-        check("edit marks tab dirty", editor.isDirty && w.tabs.entries.first { $0.id == w.tabs.selectedID }?.title.hasPrefix("●") == true)
+        check("edit marks tab dirty", editor.isDirty && w.tabs.entries.first { $0.id == w.tabs.selectedID }?.isDirty == true)
         editor.save()
         check("save clears dirty and writes disk", !editor.isDirty && ((try? String(contentsOf: c)) ?? "").contains("/* edit */"))
 
@@ -76,8 +76,10 @@ enum SelfTest {
         index.refresh(force: true) {
             indexChecks(index)
             laterChecks(w: w, a: a, dir: dir)
-            try? fm.removeItem(at: dir)
-            finish()
+            projectChecks(app: app, w: w, dir: dir) {
+                try? fm.removeItem(at: dir)
+                finish()
+            }
         }
     }
 
@@ -140,7 +142,7 @@ enum SelfTest {
         check("recent projects not persisted in headless mode", !RecentProjects.all.contains(dir))
     }
 
-    private static func shortcut(_ title: String) -> String {
+    static func shortcut(_ title: String) -> String {
         func find(_ menu: NSMenu) -> NSMenuItem? {
             for item in menu.items {
                 if item.title == title { return item }

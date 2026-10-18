@@ -2,7 +2,37 @@ import Foundation
 
 /// Flat list of project files for Go to File. Scanned off the main thread; skips heavy directories.
 final class ProjectIndex {
-    static let skipNames: Set<String> = ["node_modules", ".git", ".build", "vendor", ".idea", ".DS_Store"]
+    /// Hidden from the file tree.
+    static let treeHidden: Set<String> = ["node_modules", ".git", ".build", "vendor", ".idea", ".DS_Store"]
+    /// Not indexed for Go to File and ignored by the file watcher. Entries with "/" match two consecutive path components.
+    static let skipNames: Set<String> = treeHidden.union([
+        "storage/framework", "storage/logs", "bootstrap/cache", "public/build", "public/hot",
+        ".next", ".nuxt", "dist", "coverage", ".cache", ".phpunit.cache",
+    ])
+    /// Index (and watch) `vendor` too. View menu: "Include vendor in Go to File".
+    static var includeVendor: Bool {
+        get { UserDefaults.standard.bool(forKey: "includeVendor") }
+        set { UserDefaults.standard.set(newValue, forKey: "includeVendor") }
+    }
+
+    /// Whether a path relative to the project root lies in a skipped directory (or is a skipped file).
+    static func isSkipped(relativePath: String, includeVendor: Bool = ProjectIndex.includeVendor) -> Bool {
+        let parts = relativePath.split(separator: "/").map(String.init)
+        for (i, name) in parts.enumerated() {
+            if name == "vendor", includeVendor { continue }
+            if skipNames.contains(name) { return true }
+            if i + 1 < parts.count, skipNames.contains(name + "/" + parts[i + 1]) { return true }
+        }
+        return false
+    }
+
+    /// Absolute-path variant (accepts `/private/var` and `/var` spellings of the root).
+    static func isSkipped(path: String, under root: URL, includeVendor: Bool = ProjectIndex.includeVendor) -> Bool {
+        let base = VCSKind.canonical(root.path), p = VCSKind.canonical(path)
+        guard p.hasPrefix(base + "/") else { return false }
+        return isSkipped(relativePath: String(p.dropFirst(base.count + 1)), includeVendor: includeVendor)
+    }
+
     let root: URL
     private(set) var files: [String] = [] { didSet { lower = files.map { $0.lowercased() } } }
     private var lower: [String] = []
@@ -16,6 +46,7 @@ final class ProjectIndex {
         guard !scanning, force || Date().timeIntervalSince(lastScan) > 10 else { completion?(); return }
         scanning = true
         let root = self.root
+        let includeVendor = Self.includeVendor
         DispatchQueue.global(qos: .userInitiated).async {
             var found: [String] = []
             // The enumerator may report symlink-resolved paths (/var -> /private/var), so accept either spelling.
@@ -25,10 +56,15 @@ final class ProjectIndex {
             if let en = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey],
                                                        options: [], errorHandler: { _, _ in true }) {
                 for case let url as URL in en {
-                    if Self.skipNames.contains(url.lastPathComponent) { en.skipDescendants(); continue }
-                    if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { continue }
                     guard let prefix = prefixes.first(where: { url.path.hasPrefix($0) }) else { continue }
-                    found.append(String(url.path.dropFirst(prefix.count)))
+                    let rel = String(url.path.dropFirst(prefix.count))
+                    let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                    if Self.isSkipped(relativePath: rel, includeVendor: includeVendor) {
+                        if isDir { en.skipDescendants() }
+                        continue
+                    }
+                    if isDir { continue }
+                    found.append(rel)
                     if found.count >= 100_000 { break }
                 }
             }

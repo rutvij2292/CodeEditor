@@ -4,7 +4,8 @@ import AppKit
 enum MainMenu {
     private static func fn(_ code: Int) -> String { String(UnicodeScalar(UInt32(code))!) }
     private static let up = fn(NSUpArrowFunctionKey), down = fn(NSDownArrowFunctionKey)
-    private static let f12 = fn(NSF12FunctionKey), f1 = fn(NSF1FunctionKey)
+    private static let f12 = fn(NSF12FunctionKey), f1 = fn(NSF1FunctionKey), f2 = fn(NSF2FunctionKey)
+    private static let f6 = fn(NSF6FunctionKey), f7 = fn(NSF7FunctionKey)
     private static let backspace = "\u{7f}"
 
     private static func item(_ title: String, _ action: Selector?, _ key: String = "",
@@ -44,6 +45,7 @@ enum MainMenu {
             item("Open Project…", #selector(AppDelegate.openProjectPanel(_:)), "o", [.command, .control], target: a),
             recent,
             item("Recent Projects…", #selector(AppDelegate.showRecentProjects(_:)), "p", [.command, .shift], target: a),
+            item("Reopen Windows on Launch", #selector(AppDelegate.toggleReopenWindows(_:)), target: a),
             sep,
             item("Save", #selector(AppDelegate.saveFile(_:)), "s", target: a),
             item("Save All", #selector(AppDelegate.saveAll(_:)), "s", [.command, .option], target: a),
@@ -72,6 +74,8 @@ enum MainMenu {
             item("Select All", #selector(NSText.selectAll(_:)), "a"),
             sep,
             findItem,
+            item("Find in Files…", #selector(AppDelegate.findInFiles(_:)), "f", [.command, .shift], target: a),
+            item("Replace in Files…", #selector(AppDelegate.replaceInFiles(_:)), "r", [.command, .shift], target: a),
         ]))
 
         main.addItem(menu("Code", [
@@ -90,6 +94,8 @@ enum MainMenu {
             item("Select All Occurrences", Selector(("selectAllOccurrences:")), "g", [.control, .command]),
             sep,
             item("Reformat Code", Selector(("reformatCode:")), "l", [.command, .option]),
+            item("Format Document", #selector(AppDelegate.formatDocument(_:)), "l", [.command, .option, .shift], target: a),
+            item("Toggle Soft Wrap", Selector(("toggleSoftWrap:")), ""),
             sep,
             item("Basic Completion", Selector(("triggerCompletion:")), " ", [.control]),
             item("Parameter Info", Selector(("showParameterInfo:")), "p"),
@@ -106,6 +112,11 @@ enum MainMenu {
             item("Search Everywhere", #selector(AppDelegate.searchEverywhere(_:)), "", target: a),
             item("Find Action…", #selector(AppDelegate.findAction(_:)), "a", [.command, .shift], target: a),
             item("Go to Line…", #selector(AppDelegate.goToLine(_:)), "l", target: a),
+            sep,
+            item("Next Problem", #selector(AppDelegate.nextProblem(_:)), f2, [], target: a),
+            item("Previous Problem", #selector(AppDelegate.previousProblem(_:)), f2, [.shift], target: a),
+            item("Find Usages", #selector(AppDelegate.findUsages(_:)), f7, [.option], target: a),
+            item("Rename…", #selector(AppDelegate.renameSymbol(_:)), f6, [.shift], target: a),
             sep,
             item("Back", #selector(AppDelegate.goBack(_:)), "[", target: a),
             item("Forward", #selector(AppDelegate.goForward(_:)), "]", target: a),
@@ -127,8 +138,13 @@ enum MainMenu {
         main.addItem(menu("View", [
             item("Project Tree", #selector(AppDelegate.focusTree(_:)), "1", target: a),
             item("Commit Panel", #selector(AppDelegate.commitChanges(_:)), "0", target: a),
+            item("Find Tool Window", #selector(AppDelegate.showFindTool(_:)), "3", target: a),
+            item("Problems Tool Window", #selector(AppDelegate.showProblemsTool(_:)), "6", target: a),
+            item("Git Tool Window", #selector(AppDelegate.showGitTool(_:)), "", target: a),
+            sep,
             item("Select Opened File", #selector(AppDelegate.selectOpenedFile(_:)), f1, [.option], target: a),
             item("Collapse All in Tree", #selector(AppDelegate.collapseAll(_:)), "-", target: a),
+            item("Include vendor in Go to File", #selector(AppDelegate.toggleIncludeVendor(_:)), target: a),
             sep,
             appearanceMenu(a),
             item("Bracket Pair Colorization", #selector(BracketColorizer.toggleBracketColorization(_:)), target: BracketColorizer.shared),
@@ -170,8 +186,7 @@ enum MainMenu {
         case UInt32(NSRightArrowFunctionKey): out += "→"
         case 0x7f: out += "⌫"
         case 13: out += "↩"
-        case UInt32(NSF1FunctionKey): out += "F1"
-        case UInt32(NSF12FunctionKey): out += "F12"
+        case UInt32(NSF1FunctionKey)...UInt32(NSF12FunctionKey): out += "F\(key.unicodeScalars.first!.value - UInt32(NSF1FunctionKey) + 1)"
         default: out += key.uppercased()
         }
         return out
