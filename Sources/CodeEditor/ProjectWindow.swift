@@ -186,7 +186,11 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         changeBatches += 1
         let gitMeta = paths.contains { $0.contains("/.git/") }
         let content = paths.contains { !$0.contains("/.git/") }
+        if let root, paths.contains(where: { $0.hasSuffix("/composer.lock") || $0.hasSuffix("/vendor/composer/installed.json") }) {
+            VendorIndex.invalidate(root: root)
+        }
         if content {
+            if let root { LaravelNavigator.invalidate(root: root) }
             tree.refresh()
             index?.refresh(force: true) { [weak self] in self?.symbols?.rebuild() }
             editors.values.forEach { $0.reloadIfChangedOnDisk() }
@@ -474,6 +478,13 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
                 self.statusBar.flash("Reloaded\(name) from disk (agent edit?)  ⌘Z to undo", seconds: 8)
             }
             tabs.add(id: id, title: url.lastPathComponent, view: editor.view)
+            if VendorIndex.isLibraryFile(url), !editor.isReadOnly, let container = editor.view as? EditorPane {
+                editor.textView.isEditable = false
+                container.showBanner("Library file (vendor) — read only.", actions: [("Edit Anyway", { [weak editor, weak container] in
+                    editor?.textView.isEditable = true
+                    container?.hideBanner()
+                })])
+            }
             applyTint(id)
         } else {
             tabs.select(id)
