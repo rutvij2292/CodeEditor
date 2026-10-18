@@ -49,6 +49,9 @@ enum Prefs {
     static var defaultIndentSize: Int { get { get("defaultIndentSize", 4) } set { set("defaultIndentSize", min(8, max(1, newValue))) } }
     static var defaultIndentUsesTabs: Bool { get { get("defaultIndentUsesTabs", false) } set { set("defaultIndentUsesTabs", newValue) } }
 
+    /// Where "Open Project" goes when this instance already has a project: "same" (a window here) or "new" (its own process).
+    static var openProjectsIn: String { get { get("openProjectsIn", "same") } set { set("openProjectsIn", newValue == "new" ? "new" : "same") } }
+
     // MARK: Viewers (Markdown preview, JSON/YAML tree)
     /// View mode remembered per file type: "source" | "split" | "preview". See ViewerKinds.swift.
     static func viewerMode(_ kind: String, fallback: String) -> String { get("viewerMode." + kind, fallback) }

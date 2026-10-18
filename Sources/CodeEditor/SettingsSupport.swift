@@ -148,7 +148,7 @@ enum SettingsDefaults {
         SessionStore.reopenOnLaunch = true
         Formatter.formatOnSave = false
         ProjectIndex.includeVendor = false
-        Prefs.reset(["powerSaver", "gpuAssist"])
+        Prefs.reset(["powerSaver", "gpuAssist", "openProjectsIn"])
     }
 
     static func restoreEditor() {
@@ -169,7 +169,7 @@ enum SettingsDefaults {
     static func resetAll() {
         restoreGeneral(); restoreEditor(); restoreLanguages(); restoreTerminal()
         UserDefaults.standard.removeObject(forKey: "themeMode")
-        for key in ["autoSaveOnFocusLoss", "autoSaveOnTabSwitch", "autoSaveIdleSeconds", "reopenWindows", "formatOnSave", "includeVendor"] {
+        for key in ["autoSaveOnFocusLoss", "autoSaveOnTabSwitch", "autoSaveIdleSeconds", "reopenWindows", "formatOnSave", "includeVendor", "openProjectsIn"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
     }

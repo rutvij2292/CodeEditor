@@ -6,6 +6,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var shiftDown = false
     private var lastShiftUp: TimeInterval = 0
     private weak var lastKeyWindow: ProjectWindow?
+    /// Owns session restore (the reopen-windows list). Instances started with `--project`, or while another primary lives, don't.
+    private var isPrimaryInstance = true
 
     // Handlers other features install (menu items call them with the active window; no-ops until set).
     static var nextProblemHandler: ((ProjectWindow) -> Void)?
@@ -107,9 +109,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         NotificationCenter.default.addObserver(self, selector: #selector(windowDidBecomeKey(_:)),
                                                name: NSWindow.didBecomeKeyNotification, object: nil)
 
-        let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
-        for arg in args { openPath(URL(fileURLWithPath: arg)) }
-        if windows.isEmpty { SessionStore.windowsToReopen().forEach { openProject($0) } }
+        installInstanceSupport()
+        let launch = LaunchArguments.current
+        isPrimaryInstance = !launch.isProjectLaunch && InstanceRegistry.claimPrimary()
+        for url in launch.projects + launch.paths { openPath(url) }
+        if launch.isProjectLaunch, windows.isEmpty, !AppEnv.headless, launch.projects.contains(where: { InstanceRegistry.owner(of: $0) != nil }) {
+            NSApp.terminate(nil)      // the project is already open in another instance (which was just raised)
+            return
+        }
+        if windows.isEmpty, isPrimaryInstance {
+            SessionStore.windowsToReopen().filter { InstanceRegistry.owner(of: $0) == nil }.forEach { openProject($0) }
+        }
         if windows.isEmpty {
             let w = newWindow()
             if !AppEnv.headless, !RecentProjects.all.isEmpty { DispatchQueue.main.async { self.showRecentProjects(nil) } }
@@ -130,7 +140,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         TerminalPanelController.terminateAll()
         ClaudeBridge.removeAllLocksAtExit()
         windows.forEach { $0.saveSession() }
-        SessionStore.rememberOpenWindows(windows.compactMap(\.root))
+        if isPrimaryInstance { SessionStore.rememberOpenWindows(windows.compactMap(\.root)) }
+        InstanceRegistry.releaseAll()
+        InstanceRegistry.releasePrimary()
         LanguageServers.stopAll()
     }
 
@@ -141,8 +153,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @discardableResult
     func newWindow() -> ProjectWindow {
         let w = ProjectWindow()
-        w.onClose = { [weak self] closed in self?.windows.removeAll { $0 === closed } }
-        w.onOpenFolder = { [weak self] url in self?.openProject(url) }
+        w.onClose = { [weak self] closed in
+            self?.windows.removeAll { $0 === closed }
+            if let root = closed.root { InstanceRegistry.release(root) }
+        }
+        w.onOpenFolder = { [weak self] url in self?.openProjectRouted(url) }
         windows.append(w)
         lastKeyWindow = w
         if !AppEnv.headless {
@@ -157,8 +172,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     func openPath(_ url: URL) {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { return }
-        if isDir.boolValue { openProject(url); return }
+        if isDir.boolValue { openProjectRouted(url); return }
         let root = Self.projectRoot(for: url)
+        if routeProject(root) { return }
         let target = openProject(root)
         target.open(url)
     }
@@ -179,6 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             if !AppEnv.headless { existing.window.makeKeyAndOrderFront(nil) }
             return existing
         }
+        InstanceRegistry.claim(url)
         let target = windows.first(where: { $0.root == nil }) ?? newWindow()
         target.openFolder(url)
         if !AppEnv.headless { target.window.makeKeyAndOrderFront(nil) }
@@ -207,14 +224,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.prompt = "Open Project"
-        if panel.runModal() == .OK, let url = panel.url { openProject(url) }
+        if panel.runModal() == .OK, let url = panel.url { openProjectRouted(url) }
     }
 
     @objc func showRecentProjects(_ sender: Any?) {
         let host = active ?? newWindow()
         var items = RecentProjects.all.map { url in
             PickerItem(title: url.lastPathComponent, detail: (url.path as NSString).abbreviatingWithTildeInPath,
-                       symbol: "folder.fill", key: url.path) { [weak self] in self?.openProject(url) }
+                       symbol: "folder.fill", key: url.path) { [weak self] in self?.openProjectRouted(url) }
         }
         items.append(PickerItem(title: "Open Folder…", detail: "Choose a project folder", symbol: "folder.badge.plus",
                                 key: "open folder browse") { [weak self] in self?.openProjectPanel(nil) })
@@ -329,7 +346,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func themeDark(_ sender: Any?) { Theme.setMode(.dark) }
 
     @objc private func openRecent(_ sender: NSMenuItem) {
-        if let path = sender.representedObject as? String { openProject(URL(fileURLWithPath: path)) }
+        if let path = sender.representedObject as? String { openProjectRouted(URL(fileURLWithPath: path)) }
+    }
+
+    @objc private func openRecentInNewInstance(_ sender: NSMenuItem) {
+        if let path = sender.representedObject as? String { openProjectInNewInstance(URL(fileURLWithPath: path)) }
     }
 
     @objc private func clearRecent(_ sender: Any?) { RecentProjects.clear() }
@@ -345,6 +366,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 item.target = self
                 item.representedObject = url.path
                 menu.addItem(item)
+                // Holding ⌥ swaps the row for its new-instance variant.
+                let alt = NSMenuItem(title: url.lastPathComponent + " (New Instance)", action: #selector(openRecentInNewInstance(_:)), keyEquivalent: "")
+                alt.target = self
+                alt.representedObject = url.path
+                alt.isAlternate = true
+                alt.keyEquivalentModifierMask = [.option]
+                menu.addItem(alt)
             }
             if !menu.items.isEmpty { menu.addItem(.separator()) }
             let clear = NSMenuItem(title: "Clear Menu", action: #selector(clearRecent(_:)), keyEquivalent: "")
