@@ -33,7 +33,12 @@ final class ProjectIndex {
         return isSkipped(relativePath: String(p.dropFirst(base.count + 1)), includeVendor: includeVendor)
     }
 
+    /// Whether `path` lies inside a Composer vendor directory (library file; tabs should open read-only).
+    static func isVendor(path: String) -> Bool { VendorIndex.isLibraryFile(URL(fileURLWithPath: path)) }
+
     let root: URL
+    /// With includeVendor and a large vendor tree, vendor files are not loaded into `files`; `search` lists them lazily instead.
+    private(set) var vendorLazy = false
     private(set) var files: [String] = [] { didSet { lower = files.map { $0.lowercased() } } }
     private var lower: [String] = []
     private var scanning = false
@@ -46,8 +51,9 @@ final class ProjectIndex {
         guard !scanning, force || Date().timeIntervalSince(lastScan) > 10 else { completion?(); return }
         scanning = true
         let root = self.root
-        let includeVendor = Self.includeVendor
+        let wantVendor = Self.includeVendor
         DispatchQueue.global(qos: .userInitiated).async {
+            let includeVendor = wantVendor && VendorIndex.vendorIsSmall(root: root)
             var found: [String] = []
             // The enumerator may report symlink-resolved paths (/var -> /private/var), so accept either spelling.
             var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
@@ -70,6 +76,8 @@ final class ProjectIndex {
             }
             found.sort { $0.localizedStandardCompare($1) == .orderedAscending }
             DispatchQueue.main.async {
+                self.vendorLazy = wantVendor && !includeVendor
+                if self.vendorLazy { VendorIndex.shared(for: root).prewarmFiles() }
                 self.files = found
                 self.lastScan = Date()
                 self.scanning = false
@@ -91,6 +99,11 @@ final class ProjectIndex {
             scored.append((files[i], score))
         }
         scored.sort { $0.score > $1.score }
+        if vendorLazy, Self.includeVendor, scored.count < limit {
+            scored = Array(scored.prefix(limit))
+            scored.append(contentsOf: VendorIndex.shared(for: root).searchFiles(query, limit: limit - scored.count))
+            return scored
+        }
         return Array(scored.prefix(limit))
     }
 }
