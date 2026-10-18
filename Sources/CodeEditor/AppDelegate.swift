@@ -250,6 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func showFindTool(_ sender: Any?) { active?.showToolPanel("find") }
     @objc func showProblemsTool(_ sender: Any?) { active?.showToolPanel("problems") }
     @objc func showGitTool(_ sender: Any?) { active?.showToolPanel("git") }
+    @objc func showClaudeChangesTool(_ sender: Any?) { active?.showClaudeChanges() }
     @objc func findInFiles(_ sender: Any?) { active?.onFindInFiles?() }
     @objc func replaceInFiles(_ sender: Any?) { active?.onReplaceInFiles?() }
     @objc func nextProblem(_ sender: Any?) { active.map { Self.nextProblemHandler?($0) } }

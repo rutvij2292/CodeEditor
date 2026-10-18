@@ -99,17 +99,9 @@ enum GitGutter {
             if u.last == 13 { u.removeLast() }
             return String(decoding: u, as: UTF8.self)
         }
-        let body = oldLines[hunk.old].map(strip)
-        var text = body.joined(separator: eol)
-        let endsWithTerminator = range.length > 0 && {
-            let c = buffer.character(at: NSMaxRange(range) - 1); return c == 10 || c == 13
-        }()
-        if !body.isEmpty, endsWithTerminator || range.length == 0 { text += eol }
-        // Insert-only revert at the very end of a buffer lacking a final terminator: separate from the last line.
-        if range.length == 0, !body.isEmpty, range.location == buffer.length, buffer.length > 0 {
-            let c = buffer.character(at: buffer.length - 1)
-            if c != 10 && c != 13 { text = eol + body.joined(separator: eol) }
-        }
+        // Each old line keeps its own terminator (or lacks it at the end of the file), converted to the buffer's line ending.
+        var text = ""
+        for l in oldLines[hunk.old] { text += strip(l) + (l.utf8.last == 10 ? eol : "") }
         return (range, text)
     }
 
@@ -129,6 +121,15 @@ final class GitGutterController {
     private var relPath: String?
     private var root: URL?
     private(set) var head: String?
+    /// HEAD content; `head` is this unless a Claude change review overrides it with the pre-agent baseline.
+    private var gitHead: String?
+    /// While set, markers and the hunk popover compare against this (Claude change review) instead of HEAD.
+    var reviewBaseline: String? {
+        didSet { if oldValue != reviewBaseline { head = reviewBaseline ?? gitHead; schedule(after: 0) } }
+    }
+    /// Review mode: the popover offers Accept (hunk, buffer text) and its Revert button reports through `onReviewRejected`.
+    var onReviewAccept: ((GitGutter.Hunk, String) -> Void)?
+    var onReviewRejected: (() -> Void)?
     private(set) var hunks: [GitGutter.Hunk] = []
     private var generation = 0
     private var debounce: DispatchWorkItem?
@@ -143,7 +144,8 @@ final class GitGutterController {
         self.tab = tab
         self.url = tab.url
         self.textView = tab.textView
-        self.gutter = (tab.view as? EditorContainer)?.gutter
+        // The tab's view is an EditorPane wrapping the container.
+        self.gutter = ((tab.view as? EditorContainer) ?? ((tab.view as? EditorPane)?.contentView as? EditorContainer))?.gutter
     }
 
     func begin() {
@@ -204,7 +206,7 @@ final class GitGutterController {
             }
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.root = rootURL; self.relPath = rel; self.head = content
+                self.root = rootURL; self.relPath = rel; self.gitHead = content; self.head = self.reviewBaseline ?? content
                 self.schedule(after: 0)
             }
         }
@@ -252,6 +254,12 @@ final class GitGutterController {
         popover?.close()
         let content = HunkPopoverView(hunk: hunk, head: head, buffer: tv.string as NSString)
         content.onRevert = { [weak self] in self?.revert(hunk) }
+        if reviewBaseline != nil {
+            content.onAccept = { [weak self] in
+                self?.onReviewAccept?(hunk, tv.string)
+                self?.popover?.close()
+            }
+        }
         content.onCopy = { [weak self] in
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(GitGutter.oldText(hunk: hunk, head: head), forType: .string)
@@ -281,6 +289,7 @@ final class GitGutterController {
         tv.replaceUndoable(edit.range, with: edit.text)
         popover?.close()
         schedule(after: 0)
+        if reviewBaseline != nil { onReviewRejected?() }
         return true
     }
 }
@@ -291,6 +300,10 @@ final class GitGutterController {
 final class HunkPopoverView: NSView {
     var onRevert: (() -> Void)?
     var onCopy: (() -> Void)?
+    /// Review mode (Claude changes): adds an Accept button and calls the Revert button "Reject".
+    var onAccept: (() -> Void)? { didSet { acceptButton.isHidden = onAccept == nil; revertButton.title = onAccept == nil ? "Revert" : "Reject" } }
+    private let acceptButton = NSButton(title: "Accept", target: nil, action: nil)
+    private let revertButton = NSButton(title: "Revert", target: nil, action: nil)
 
     init(hunk: GitGutter.Hunk, head: String, buffer: NSString) {
         let width: CGFloat = 520
@@ -348,15 +361,19 @@ final class HunkPopoverView: NSView {
         scroll.backgroundColor = Theme.background
         addSubview(scroll)
 
-        let revert = NSButton(title: "Revert", target: self, action: #selector(revertTapped))
+        let revert = revertButton
+        revert.target = self; revert.action = #selector(revertTapped)
+        acceptButton.target = self; acceptButton.action = #selector(acceptTapped)
+        acceptButton.isHidden = true
+        acceptButton.frame = NSRect(x: width - 236, y: 10, width: 70, height: 24)
         let copy = NSButton(title: "Copy old", target: self, action: #selector(copyTapped))
-        for b in [revert, copy] { b.bezelStyle = .rounded; b.controlSize = .small; addSubview(b) }
+        for b in [revert, copy, acceptButton] { b.bezelStyle = .rounded; b.controlSize = .small; addSubview(b) }
         revert.frame = NSRect(x: width - 160, y: 10, width: 70, height: 24)
         copy.frame = NSRect(x: width - 84, y: 10, width: 76, height: 24)
         let title = NSTextField(labelWithString: "Lines \(hunk.new.lowerBound + 1)–\(max(hunk.new.lowerBound + 1, hunk.new.upperBound))  (HEAD \(hunk.old.count) → \(hunk.new.count))")
         title.font = .systemFont(ofSize: 11)
         title.textColor = .secondaryLabelColor
-        title.frame = NSRect(x: 10, y: 14, width: width - 180, height: 16)
+        title.frame = NSRect(x: 10, y: 14, width: width - 250, height: 16)
         addSubview(title)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -369,5 +386,6 @@ final class HunkPopoverView: NSView {
     }
 
     @objc private func revertTapped() { onRevert?() }
+    @objc private func acceptTapped() { onAccept?() }
     @objc private func copyTapped() { onCopy?() }
 }

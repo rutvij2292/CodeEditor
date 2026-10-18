@@ -167,6 +167,7 @@ enum MainMenu {
             item("Commit Panel", #selector(AppDelegate.commitChanges(_:)), "0", target: a),
             item("Find Tool Window", #selector(AppDelegate.showFindTool(_:)), "3", target: a),
             item("Problems Tool Window", #selector(AppDelegate.showProblemsTool(_:)), "6", target: a),
+            item("Claude Changes Tool Window", #selector(AppDelegate.showClaudeChangesTool(_:)), "", target: a),
             item("Git Tool Window", #selector(AppDelegate.showGitTool(_:)), "", target: a),
             sep,
             item("Select Opened File", #selector(AppDelegate.selectOpenedFile(_:)), f1, [.option], target: a),

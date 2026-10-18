@@ -205,6 +205,10 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
     var doneCount: Int { tabs.filter(\.done).count }
     enum Attention { case none, activity, done }
     var attention: Attention { hasDoneTabs ? .done : (hasUnreadActivity ? .activity : .none) }
+    /// The active tab when it is an agent tab (Claude Code, Codex, ...); nil for a plain shell.
+    var activeAgentTab: (id: Int, title: String)? {
+        tabs.indices.contains(active) && tabs[active].lockedTitle && !tabs[active].exited ? (tabs[active].id, tabs[active].title) : nil
+    }
     var activeTitle: String { tabs.indices.contains(active) ? tabs[active].title : "Terminal" }
     /// Shell PIDs of live tabs (verification).
     var shellPIDs: [pid_t] { tabs.map(\.pid).filter { $0 > 0 } }
