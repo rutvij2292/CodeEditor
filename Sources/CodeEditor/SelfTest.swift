@@ -22,6 +22,7 @@ enum SelfTest {
 
     private static func runChecks(app: AppDelegate) {
         let fm = FileManager.default
+        LocalHistory.root = fm.temporaryDirectory.appendingPathComponent("ce-selftest-history-\(getpid())")
         let dir = fm.temporaryDirectory.appendingPathComponent("ce-selftest-\(getpid())")
         try? fm.createDirectory(at: dir.appendingPathComponent("app/Http"), withIntermediateDirectories: true)
         let files = ["app/Http/UserController.php": "<?php\nclass UserController {}\n", "app/Cache.php": "<?php\n",
@@ -78,6 +79,7 @@ enum SelfTest {
             laterChecks(w: w, a: a, dir: dir)
             projectChecks(app: app, w: w, dir: dir) {
                 try? fm.removeItem(at: dir)
+                try? fm.removeItem(at: LocalHistory.root)
                 finish()
             }
         }

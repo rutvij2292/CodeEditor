@@ -23,6 +23,7 @@ extension SelfTest {
         tabChecks(w: w, dir: dir)
         bannerChecks(w: w, dir: dir)
         encodingChecks(w: w, dir: dir)
+        integrityChecks(w: w, dir: dir)
         statusChecks(w: w, dir: dir)
         menuChecks(app: app, w: w)
         miscChecks(app: app, w: w)

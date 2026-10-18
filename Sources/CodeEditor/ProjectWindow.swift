@@ -35,6 +35,9 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     private var restoring = false
     private var sessionWork: DispatchWorkItem?
     private var diffWindows: [NSWindow] = []
+    private var lastSelectedID: String?
+    /// The most recent clean-buffer reload caused by a change on disk (agent edit, git checkout); for tests and status UI.
+    private(set) var lastExternalChange: ExternalChange?
     private lazy var coalescer = ChangeCoalescer(interval: 0.75) { [weak self] paths in self?.processChanges(paths) }
     /// FS-event bursts handled so far (after coalescing).
     private(set) var changeBatches = 0
@@ -87,6 +90,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         statusBar.onGoToLine = { [weak self] in self?.goToLine() }
         statusBar.onChooseIndent = { [weak self] anchor in self?.chooseIndent(from: anchor) }
         statusBar.onShowGit = { [weak self] in self?.showCommit() }
+        statusBar.onChooseEncoding = { [weak self] anchor in self?.chooseEncoding(from: anchor) }
         let sidebarItem = NSSplitViewItem(viewController: sidebarVC)
         sidebarItem.minimumThickness = 180
         sidebarItem.maximumThickness = 500
@@ -120,6 +124,10 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
 
         NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive),
                                                name: NSApplication.didBecomeActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appResignedActive),
+                                               name: NSApplication.didResignActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(windowResignedKey),
+                                               name: NSWindow.didResignKeyNotification, object: window)
         NotificationCenter.default.addObserver(self, selector: #selector(selectionChanged(_:)),
                                                name: NSTextView.didChangeSelectionNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(languageServerStatusChanged),
@@ -212,11 +220,182 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         statusBar.update(line: caret?.line, column: caret?.column, selected: editor?.textView.selectedRange().length ?? 0,
                          indent: editor?.indent.label, language: editor.map { Self.languageName($0.url) },
                          lineEnding: editor?.lineEnding, branch: gitSummary,
-                         server: root.map { LanguageServers.statusText(forRoot: $0) } ?? "")
+                         server: root.map { LanguageServers.statusText(forRoot: $0) } ?? "", encoding: editor?.encodingName)
     }
 
     var statusBarBranchText: String { statusBar.branchText }
     var statusBarNotice: String { statusBar.noticeText }
+    var statusBarEncoding: String { statusBar.encodingText }
+
+    // MARK: Auto-save
+
+    /// Saves every modified buffer that is safe to save (see `EditorTab.autoSave`).
+    func autoSaveAll(_ trigger: AutoSave.Trigger) {
+        for editor in editors.values { editor.autoSave(trigger) }
+    }
+
+    @objc private func appResignedActive() { autoSaveAll(.focusLoss) }
+
+    /// The window lost key status: auto-save unless focus only moved to one of our own panels/sheets (pickers, dialogs).
+    @objc private func windowResignedKey() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if let key = NSApp.keyWindow, key is NSPanel || self.window.childWindows?.contains(key) == true { return }
+            if self.window.attachedSheet != nil { return }
+            self.autoSaveAll(.focusLoss)
+        }
+    }
+
+    // MARK: Encoding
+
+    private func chooseEncoding(from anchor: NSView) {
+        guard let editor = current else { return }
+        let menu = NSMenu()
+        func header(_ title: String) {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+        header("Reopen with Encoding")
+        for (i, choice) in TextEncodings.choices.enumerated() {
+            let item = NSMenuItem(title: choice.name, action: #selector(reopenEncodingPicked(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = i
+            item.state = editor.encoding == choice.encoding ? .on : .off
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        header("Save with Encoding")
+        for (i, choice) in TextEncodings.choices.enumerated() {
+            let item = NSMenuItem(title: choice.name, action: #selector(saveEncodingPicked(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = i
+            item.state = editor.encoding == choice.encoding ? .on : .off
+            menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 4), in: anchor)
+    }
+
+    @objc private func reopenEncodingPicked(_ item: NSMenuItem) {
+        guard TextEncodings.choices.indices.contains(item.tag) else { return }
+        reopenCurrentTab(encoding: TextEncodings.choices[item.tag].encoding)
+    }
+
+    @objc private func saveEncodingPicked(_ item: NSMenuItem) {
+        guard TextEncodings.choices.indices.contains(item.tag) else { return }
+        setCurrentSaveEncoding(TextEncodings.choices[item.tag].encoding)
+    }
+
+    /// "Reopen with encoding": re-decodes the file from disk in `encoding`. A modified buffer is only discarded after asking
+    /// (headless runs refuse). The old tab stays if the file cannot be decoded that way.
+    @discardableResult
+    func reopenCurrentTab(encoding: String.Encoding) -> Bool {
+        guard let editor = current else { return false }
+        if editor.isDirty {
+            guard !AppEnv.headless else { return false }
+            let alert = NSAlert()
+            alert.messageText = "Discard changes to “\(editor.url.lastPathComponent)”?"
+            alert.informativeText = "Reopening re-reads the file from disk with another encoding."
+            alert.addButton(withTitle: "Reopen"); alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        }
+        let options = OpenOptions(encoding: encoding, autoDetect: false)
+        guard case .success = EditorTab.read(editor.url, options: options) else {
+            statusBar.flash("Can’t decode “\(editor.url.lastPathComponent)” as that encoding")
+            return false
+        }
+        reopenEditor(editor, options)
+        return true
+    }
+
+    /// "Save with encoding": the next save writes the buffer in `encoding`.
+    @discardableResult
+    func setCurrentSaveEncoding(_ encoding: String.Encoding) -> Bool {
+        guard let editor = current else { return false }
+        guard editor.setSaveEncoding(encoding) else {
+            statusBar.flash("Some characters can’t be saved in that encoding")
+            return false
+        }
+        refreshStatus()
+        return true
+    }
+
+    /// Replaces an open editor by a fresh one over the same file with other options (position, caret and scroll kept).
+    private func reopenEditor(_ editor: EditorTab, _ options: OpenOptions) {
+        let url = editor.url
+        let id = url.standardizedFileURL.path
+        let position = tabs.entries.firstIndex { $0.id == id }
+        let caret = editor.caretLocation, scrollY = editor.scrollY
+        closeNow(id)
+        open(url, options: options)
+        if let position { tabs.move(id, toIndex: position) }
+        editors[id]?.restore(caret: caret, scrollY: scrollY)
+        refreshStatus()
+    }
+
+    // MARK: Save As
+
+    /// Banner "Save As…" (file deleted / replaced by a directory / unwritable).
+    private func promptSaveAs(_ editor: EditorTab) {
+        guard !AppEnv.headless else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = editor.url.lastPathComponent
+        panel.directoryURL = editor.url.deletingLastPathComponent()
+        panel.beginSheetModal(for: window) { [weak self, weak editor] response in
+            guard response == .OK, let url = panel.url, let editor else { return }
+            self?.saveEditor(editor, as: url)
+        }
+    }
+
+    /// Saves the buffer to `newURL` and retargets its tab there.
+    @discardableResult
+    func saveEditor(_ editor: EditorTab, as newURL: URL) -> Bool {
+        let old = editor.url.standardizedFileURL, new = newURL.standardizedFileURL
+        if old != new {
+            guard editors[new.path] == nil else { statusBar.flash("“\(new.lastPathComponent)” is already open"); return false }
+            retargetTabs(from: old, to: new)
+        }
+        let ok = editor.save(overwriteNewer: true)
+        tree.refresh()
+        return ok
+    }
+
+    // MARK: Local history
+
+    /// Local History…: pick an earlier version of the current file; it replaces the buffer as one undoable edit.
+    func showLocalHistory() {
+        guard let editor = current else { return }
+        let revisions = LocalHistory.revisions(for: editor.url)
+        let items: [PickerItem]
+        if revisions.isEmpty {
+            items = [PickerItem(title: "No local history for this file yet", detail: "Versions are kept on save and on external reload",
+                                symbol: "clock", key: "none") {}]
+        } else {
+            items = revisions.map { rev in
+                let lines = LocalHistory.data(of: rev).map { $0.reduce(0) { $1 == 10 ? $0 + 1 : $0 } } ?? 0
+                return PickerItem(title: LocalHistory.describe(rev), detail: "\(lines) lines", symbol: "clock.arrow.circlepath",
+                                  key: LocalHistory.describe(rev)) { [weak self, weak editor] in
+                    if let editor { self?.restoreRevision(rev, into: editor) }
+                }
+            }
+        }
+        QuickPicker.present(over: window, placeholder: "Local History — \(editor.url.lastPathComponent)", items: items)
+    }
+
+    /// Replaces the buffer with a revision (undoable; nothing is written to disk until the user saves).
+    @discardableResult
+    func restoreRevision(_ revision: LocalHistory.Revision, into editor: EditorTab, confirm: Bool? = nil) -> Bool {
+        guard !editor.isReadOnly, let text = LocalHistory.text(of: revision, encoding: editor.encoding) else { return false }
+        if confirm ?? !AppEnv.headless {
+            let alert = NSAlert()
+            alert.messageText = "Restore the version from \(LocalHistory.describe(revision))?"
+            alert.informativeText = "The buffer is replaced; press ⌘Z to undo. Nothing is saved until you save."
+            alert.addButton(withTitle: "Restore"); alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        }
+        editor.replaceText(text, actionName: "Restore from Local History")
+        return true
+    }
 
     private func chooseIndent(from anchor: NSView) {
         guard current != nil else { return }
@@ -285,6 +464,15 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             editor.onSave = { [weak self, weak editor] in if let editor { self?.fileSaved(editor.url) } }
             editor.onDropURLs = { [weak self] urls in self?.handleDrop(urls) }
             editor.onShowDiff = { [weak self] e in self?.showDiff(e) }
+            editor.onSaveAs = { [weak self] e in self?.promptSaveAs(e) }
+            editor.onCloseRequest = { [weak self] e in self?.close(e.url.standardizedFileURL.path) }
+            editor.onOpenAnyway = { [weak self] e in self?.reopenEditor(e, OpenOptions(openAnyway: true)) }
+            editor.onExternalReload = { [weak self] e, change in
+                guard let self else { return }
+                self.lastExternalChange = change
+                let name = e === self.current ? "" : " “\(e.url.lastPathComponent)”"
+                self.statusBar.flash("Reloaded\(name) from disk (agent edit?)  ⌘Z to undo", seconds: 8)
+            }
             tabs.add(id: id, title: url.lastPathComponent, view: editor.view)
             applyTint(id)
         } else {
@@ -307,12 +495,16 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         case .notUTF8:
             view = LoadProblemView(message: "“\(name)” is not valid UTF-8 text.",
                                    detail: "It may be binary or use another encoding.",
-                                   actions: [("Open anyway as Latin-1", { [weak self] in self?.reopen(url, OpenOptions(encoding: .isoLatin1)) })])
+                                   actions: [("Open anyway as Latin-1", { [weak self] in self?.reopen(url, OpenOptions(encoding: .isoLatin1, autoDetect: false)) }),
+                                             ("Windows-1252", { [weak self] in self?.reopen(url, OpenOptions(encoding: .windowsCP1252, autoDetect: false)) }),
+                                             ("Shift-JIS", { [weak self] in self?.reopen(url, OpenOptions(encoding: .shiftJIS, autoDetect: false)) }),
+                                             ("GB18030", { [weak self] in self?.reopen(url, OpenOptions(encoding: TextEncodings.gb18030, autoDetect: false)) })])
         case .tooLarge(let size):
             let mb = String(format: "%.1f", Double(size) / 1_000_000)
             view = LoadProblemView(message: "“\(name)” is \(mb) MB, over the 5 MB limit.",
                                    detail: "Large files are slow to edit and highlight.",
-                                   actions: [("Open read-only (first 5 MB)", { [weak self] in self?.reopen(url, OpenOptions(readOnlyTruncated: true)) })])
+                                   actions: [("Open read-only (first 5 MB)", { [weak self] in self?.reopen(url, OpenOptions(readOnlyTruncated: true)) })]
+                                   + (size <= EditorTab.hardLimit ? [("Open anyway (editable, features off)", { [weak self] in self?.reopen(url, OpenOptions(openAnyway: true)) })] : []))
         case .unreadable:
             view = LoadProblemView(message: "“\(name)” could not be read.", detail: "Check that the file exists and you can read it.", actions: [])
         }
@@ -338,6 +530,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     }
 
     private func didSelect(_ id: String) {
+        if let previous = lastSelectedID, previous != id { editors[previous]?.autoSave(.tabSwitch) }
+        lastSelectedID = id
         problemsPanel?.reload()
         mru.removeAll { $0 == id }
         mru.insert(id, at: 0)
