@@ -175,6 +175,8 @@ enum MainMenu {
 
         main.addItem(menu("View", [
             item("Project Tree", #selector(AppDelegate.focusTree(_:)), "1", target: a),
+            item("Toggle Sidebar", #selector(AppDelegate.toggleSidebar(_:)), "\\", target: a),
+            item("Focus Editor", #selector(AppDelegate.focusEditor(_:)), "\u{1b}", target: a),
             item("Commit Panel", #selector(AppDelegate.commitChanges(_:)), "0", target: a),
             item("Find Tool Window", #selector(AppDelegate.showFindTool(_:)), "3", target: a),
             item("Problems Tool Window", #selector(AppDelegate.showProblemsTool(_:)), "6", target: a),

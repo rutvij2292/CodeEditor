@@ -355,6 +355,23 @@ extension SelfTest {
         tw.toggleTerminalFocus()
         check("focus toggle: back to the editor", !tw.isTerminalFocused && tw.window.firstResponder === tw.current?.textView)
 
+        // Sidebar toggle and Cmd-1 tree focus.
+        let sidebarWasVisible = tw.isSidebarVisible
+        tw.window.makeFirstResponder(tw.current?.textView)
+        tw.toggleSidebar()
+        check("sidebar: toggle hides it", tw.isSidebarVisible != sidebarWasVisible)
+        tw.toggleSidebar()
+        check("sidebar: toggle shows it again", tw.isSidebarVisible == sidebarWasVisible)
+        tw.toggleProjectTree()
+        check("cmd-1: shows the sidebar and focuses the tree", tw.isSidebarVisible && tw.isTreeFocused)
+        tw.toggleProjectTree()
+        check("cmd-1 again: hides the tree and returns to the editor", !tw.isSidebarVisible && tw.window.firstResponder === tw.current?.textView)
+        tw.toggleProjectTree()
+        check("cmd-1 from hidden: brings it back with focus", tw.isSidebarVisible && tw.isTreeFocused)
+        tw.toggleSidebar()
+        check("sidebar: hiding while the tree has focus moves focus to the editor", !tw.isTreeFocused && tw.window.firstResponder === tw.current?.textView)
+        if !sidebarWasVisible { tw.toggleSidebar(); tw.toggleSidebar() } else { tw.toggleSidebar() }
+
         // Live prefs.
         Prefs.terminalFontSize = 17
         Prefs.terminalFontName = "Menlo"

@@ -253,7 +253,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func goForward(_ sender: Any?) { active?.goForward() }
     @objc func previousTab(_ sender: Any?) { active?.selectTab(offset: -1) }
     @objc func nextTab(_ sender: Any?) { active?.selectTab(offset: 1) }
-    @objc func focusTree(_ sender: Any?) { active?.focusTree() }
+    @objc func focusTree(_ sender: Any?) { active?.toggleProjectTree() }
+    @objc func toggleSidebar(_ sender: Any?) { active?.toggleSidebar() }
+    @objc func focusEditor(_ sender: Any?) { active?.focusEditor() }
     @objc func toggleGit(_ sender: Any?) { active?.toggleGitPanel() }
     @objc func showFileHistory(_ sender: Any?) { active?.showFileHistory() }
     @objc func showBranches(_ sender: Any?) { active?.showBranchPopup() }

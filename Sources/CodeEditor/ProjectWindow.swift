@@ -895,6 +895,26 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     }
 
     func focusEditor() { window.makeFirstResponder(current?.textView) }
+
+    var isSidebarVisible: Bool { !termDock.sidebarItem.isCollapsed }
+    var isTreeFocused: Bool { window.firstResponder === tree.outline }
+
+    /// Cmd-\: show or hide the file tree sidebar. Hiding it while it has focus hands focus back to the editor.
+    func toggleSidebar() {
+        guard !isTerminalMaximized else { return }
+        let hide = isSidebarVisible
+        let hadFocus = isTreeFocused
+        termDock.sidebarItem.animator().isCollapsed = hide
+        if hide, hadFocus { focusEditor() }
+    }
+
+    /// Cmd-1 (PhpStorm): focus the tree, showing the sidebar if needed; pressed again while the tree has focus, hide it and return to the editor.
+    func toggleProjectTree() {
+        guard !isTerminalMaximized else { return }
+        if isSidebarVisible, isTreeFocused { toggleSidebar(); return }
+        if !isSidebarVisible { termDock.sidebarItem.animator().isCollapsed = false }
+        focusTree()
+    }
     func collapseTree() { tree.collapseAll() }
     func selectOpenedFile() { if let id = tabs.selectedID { tree.reveal(URL(fileURLWithPath: id)) } }
 
