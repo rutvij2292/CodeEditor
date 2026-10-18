@@ -48,11 +48,244 @@ final class CodeTextView: NSTextView {
     private var extendTarget: NSRange?
     private var occurrenceStack: [NSRange] = []
 
-    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
-        super.init(frame: frameRect, textContainer: container)
+    /// The file's line terminator ("\r\n" when the loaded text contains one). Detected whenever `string` is assigned.
+    var lineEnding = "\n"
+    override var string: String { didSet { detectLineEnding() } }
+
+    private func detectLineEnding() {
+        lineEnding = (string as NSString).range(of: "\r\n").location != NSNotFound ? "\r\n" : "\n"
     }
 
-    required init?(coder: NSCoder) { super.init(coder: coder) }
+    /// Posted (object: nil) after the soft-wrap preference changes; every CodeTextView re-applies it.
+    static let softWrapDidChange = Notification.Name("CodeEditor.softWrapDidChange")
+    static var softWrapEnabled: Bool { UserDefaults.standard.bool(forKey: "softWrap") }
+    private var appliedSoftWrap: Bool?
+    private var lastCaretLineRect: NSRect = .zero
+
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+        super.init(frame: frameRect, textContainer: container)
+        setup()
+    }
+
+    required init?(coder: NSCoder) { super.init(coder: coder); setup() }
+
+    private func setup() {
+        GitGutter.start()   // idempotent; registers before the owning tab fires its open hook
+        applyThemeColors()
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(applyThemeColors), name: Theme.didChange, object: nil)
+        nc.addObserver(self, selector: #selector(softWrapPreferenceChanged), name: Self.softWrapDidChange, object: nil)
+    }
+
+    @objc private func applyThemeColors() {
+        // Background only: selection must not wash out syntax colours.
+        selectedTextAttributes = [.backgroundColor: Theme.palette.selection]
+        insertionPointColor = Theme.foreground
+        needsDisplay = true
+    }
+
+    // MARK: - Soft wrap
+
+    @objc private func softWrapPreferenceChanged() { applySoftWrap(Self.softWrapEnabled) }
+
+    @objc func toggleSoftWrap(_ sender: Any?) {
+        UserDefaults.standard.set(!Self.softWrapEnabled, forKey: "softWrap")
+        NotificationCenter.default.post(name: Self.softWrapDidChange, object: nil)
+    }
+
+    override func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggleSoftWrap(_:)) { item.state = Self.softWrapEnabled ? .on : .off; return true }
+        return super.validateMenuItem(item)
+    }
+
+    func applySoftWrap(_ on: Bool) {
+        guard let tc = textContainer else { return }
+        appliedSoftWrap = on
+        let sv = enclosingScrollView
+        if on {
+            isHorizontallyResizable = false
+            autoresizingMask = [.width]
+            tc.widthTracksTextView = true
+            sv?.hasHorizontalScroller = false
+            if let sv, sv.contentSize.width > 50 {   // before the first layout pass the scroll view is still 0 wide
+                setFrameSize(NSSize(width: sv.contentSize.width, height: frame.height))
+                sv.contentView.scroll(to: NSPoint(x: 0, y: sv.contentView.bounds.origin.y))
+            }
+            tc.containerSize = NSSize(width: max(10, frame.width - textContainerInset.width * 2), height: .greatestFiniteMagnitude)
+        } else {
+            tc.widthTracksTextView = false
+            tc.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            isHorizontallyResizable = true
+            autoresizingMask = []
+            sv?.hasHorizontalScroller = true
+        }
+        layoutManager?.ensureLayout(for: tc)
+        sizeToFit()
+        needsDisplay = true
+        sv?.reflectScrolledClipView(sv!.contentView)
+        NotificationCenter.default.post(name: NSView.frameDidChangeNotification, object: self)
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        if enclosingScrollView != nil, appliedSoftWrap == nil, Self.softWrapEnabled { applySoftWrap(true) }
+    }
+
+    // MARK: - Current line, indent guides, caret
+
+    /// Colour for the caret-line band; the dark palette value is too faint to see, so derive it from the foreground.
+    private var currentLineColor: NSColor {
+        Theme.isDark ? Theme.foreground.withAlphaComponent(0.07) : Theme.palette.currentLine
+    }
+
+    private var guideColor: NSColor {
+        Theme.isDark ? Theme.foreground.withAlphaComponent(0.12) : Theme.foreground.withAlphaComponent(0.13)
+    }
+
+    /// Rect (view coordinates, full visible width) of the caret's logical line, nil unless the selection is a single caret.
+    private func caretLineRect() -> NSRect? {
+        guard selectedRanges.count == 1, selectedRange().length == 0,
+              let lm = layoutManager else { return nil }
+        let s = ns
+        let loc = min(selectedRange().location, s.length)
+        let origin = textContainerOrigin
+        var rect: NSRect
+        if s.length == 0 || (loc == s.length && s.character(at: s.length - 1) == 10) {
+            rect = lm.extraLineFragmentRect
+            if rect.height == 0 { return nil }
+        } else {
+            let lr = s.lineRange(for: NSRange(location: loc, length: 0))
+            let g = lm.glyphRange(forCharacterRange: lr, actualCharacterRange: nil)
+            guard g.length > 0 else { return nil }
+            rect = lm.lineFragmentRect(forGlyphAt: g.location, effectiveRange: nil)
+            if g.length > 1 { rect = rect.union(lm.lineFragmentRect(forGlyphAt: NSMaxRange(g) - 1, effectiveRange: nil)) }
+        }
+        rect.origin.y += origin.y
+        rect.origin.x = visibleRect.minX
+        rect.size.width = visibleRect.width
+        return rect
+    }
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        if !lastCaretLineRect.isEmpty { setNeedsDisplay(lastCaretLineRect) }
+        lastCaretLineRect = caretLineRect() ?? .zero
+        if !lastCaretLineRect.isEmpty { setNeedsDisplay(lastCaretLineRect) }
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        if let band = caretLineRect() {
+            let r = band.intersection(rect)
+            if !r.isEmpty { currentLineColor.setFill(); r.fill() }
+            lastCaretLineRect = band
+        }
+        drawIndentGuides(in: rect)
+    }
+
+    private var charWidth: CGFloat { ("0" as NSString).size(withAttributes: [.font: font ?? Theme.font]).width }
+
+    /// Leading-whitespace width in columns of the line [st, ce); nil for blank lines.
+    private func indentColumns(_ s: NSString, _ st: Int, _ ce: Int) -> Int? {
+        var col = 0, i = st
+        let n = max(1, tabColumns)
+        while i < ce {
+            let c = s.character(at: i)
+            if c == 32 { col += 1 } else if c == 9 { col += n - col % n } else { return col }
+            i += 1
+        }
+        return nil
+    }
+
+    /// Draws vertical guides at each indent level for the lines intersecting `rect`.
+    func drawIndentGuides(in rect: NSRect) {
+        guard let lm = layoutManager, let tc = textContainer else { return }
+        let s = ns
+        guard s.length > 0 else { return }
+        let origin = textContainerOrigin
+        let local = NSRect(x: rect.minX - origin.x, y: rect.minY - origin.y, width: rect.width, height: rect.height)
+        let glyphs = lm.glyphRange(forBoundingRect: local, in: tc)
+        guard glyphs.length > 0 else { return }
+        let unit = indentUnit.contains("\t") ? max(1, tabColumns) : max(1, indentUnit.utf16.count)
+
+        struct L { var y0: CGFloat; var y1: CGFloat; var cols: Int?; var st: Int; var en: Int }
+        var lines: [L] = []
+        var glyph = glyphs.location
+        while glyph < NSMaxRange(glyphs) {
+            let ch = lm.characterIndexForGlyph(at: glyph)
+            var st = 0, en = 0, ce = 0
+            s.getLineStart(&st, end: &en, contentsEnd: &ce, for: NSRange(location: ch, length: 0))
+            let g = lm.glyphRange(forCharacterRange: NSRange(location: st, length: en - st), actualCharacterRange: nil)
+            let f0 = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            var y1 = f0.maxY
+            if g.length > 1 { y1 = lm.lineFragmentRect(forGlyphAt: NSMaxRange(g) - 1, effectiveRange: nil).maxY }
+            lines.append(L(y0: f0.minY, y1: y1, cols: indentColumns(s, st, ce), st: st, en: en))
+            glyph = max(NSMaxRange(g), glyph + 1)
+        }
+        guard !lines.isEmpty else { return }
+
+        // Blank lines continue the guides of the surrounding indented lines (min of previous / next non-blank).
+        func neighbour(from start: Int, step: Int, limit: Int) -> Int? {
+            var pos = start, tries = 0
+            while tries < limit {
+                var st = 0, en = 0, ce = 0
+                if step < 0 {
+                    if pos <= 0 { return nil }
+                    s.getLineStart(&st, end: &en, contentsEnd: &ce, for: NSRange(location: pos - 1, length: 0))
+                } else {
+                    if pos >= s.length { return nil }
+                    s.getLineStart(&st, end: &en, contentsEnd: &ce, for: NSRange(location: pos, length: 0))
+                }
+                if let c = indentColumns(s, st, ce) { return c }
+                pos = step < 0 ? st : en
+                tries += 1
+            }
+            return nil
+        }
+        var prev = lines.first!.cols == nil ? neighbour(from: lines.first!.st, step: -1, limit: 400) : nil
+        var prevs = [Int?](repeating: nil, count: lines.count)
+        for i in 0..<lines.count {
+            if let c = lines[i].cols { prev = c }
+            prevs[i] = prev
+        }
+        var next = lines.last!.cols == nil ? neighbour(from: lines.last!.en, step: 1, limit: 400) : nil
+        for i in stride(from: lines.count - 1, through: 0, by: -1) {
+            if let c = lines[i].cols { next = c }
+            else if let p = prevs[i], let n = next { lines[i].cols = min(p, n) }
+            else { lines[i].cols = 0 }
+        }
+
+        let cw = charWidth
+        let baseX = origin.x + (textContainer?.lineFragmentPadding ?? 5)
+        var rects: [CGRect] = []
+        for l in lines {
+            guard let c = l.cols, c > 0 else { continue }
+            var col = 0
+            while col < c {
+                let x = (baseX + CGFloat(col) * cw).rounded(.down)
+                rects.append(CGRect(x: x, y: l.y0 + origin.y, width: 1, height: l.y1 - l.y0))
+                col += unit
+            }
+        }
+        guard !rects.isEmpty, let ctx = NSGraphicsContext.current?.cgContext else { return }
+        ctx.saveGState()
+        ctx.clip(to: rect)
+        ctx.setFillColor(guideColor.cgColor)
+        ctx.fill(rects)
+        ctx.restoreGState()
+    }
+
+    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        var r = rect
+        r.size.width = 2
+        super.drawInsertionPoint(in: r, color: color, turnedOn: flag)
+    }
+
+    override func setNeedsDisplay(_ invalidRect: NSRect, avoidAdditionalLayout flag: Bool) {
+        var r = invalidRect
+        r.size.width += 1
+        super.setNeedsDisplay(r, avoidAdditionalLayout: flag)
+    }
 
     static func commentStyle(forExtension ext: String) -> CommentStyle {
         switch ext.lowercased() {
@@ -112,6 +345,13 @@ final class CodeTextView: NSTextView {
         return true
     }
 
+    /// Replaces a range as exactly one undo step (used by "Revert hunk"); selects nothing, caret goes to the end of the new text.
+    func replaceUndoable(_ range: NSRange, with text: String) {
+        grouped {
+            if replace(range, with: text) { setSelectedRange(NSRange(location: range.location + text.utf16.count, length: 0)) }
+        }
+    }
+
     private func grouped(_ body: () -> Void) {
         undoManager?.beginUndoGrouping()
         body()
@@ -122,6 +362,10 @@ final class CodeTextView: NSTextView {
 
     /// Applies ascending, non-overlapping edits as one replacement and maps the selection through them.
     private func applyEdits(_ edits: [LineEdit], selection: NSRange) {
+        applyEdits(edits, selections: [selection])
+    }
+
+    private func applyEdits(_ edits: [LineEdit], selections: [NSRange]) {
         guard let first = edits.first, let last = edits.last else { return }
         let s = ns
         let start = first.loc, end = last.loc + last.len
@@ -136,10 +380,36 @@ final class CodeTextView: NSTextView {
             for e in edits where e.loc < o { r += e.text.utf16.count - min(e.len, o - e.loc) }
             return r
         }
-        let a = map(selection.location), b = map(selection.upperBound)
+        let mapped = selections.map { sel -> NSRange in
+            let a = map(sel.location), b = map(sel.upperBound)
+            return NSRange(location: a, length: max(0, b - a))
+        }
         var ok = false
         grouped { ok = replace(NSRange(location: start, length: end - start), with: out) }
-        if ok { setSelectedRange(NSRange(location: a, length: max(0, b - a))) }
+        if ok {
+            if mapped.count == 1 { setSelectedRange(mapped[0]) }
+            else { setSelectedRanges(mapped.map { NSValue(range: $0) }, affinity: .downstream, stillSelecting: false) }
+        }
+    }
+
+    /// Replaces several ascending, non-overlapping ranges in one undo step; `caret` is the new caret offset inside each replacement.
+    private func replaceRanges(_ items: [(range: NSRange, text: String, caret: Int)]) {
+        guard !items.isEmpty else { return }
+        guard shouldChangeText(inRanges: items.map { NSValue(range: $0.range) }, replacementStrings: items.map { $0.text }) else { return }
+        grouped {
+            textStorage?.beginEditing()
+            for it in items.reversed() {
+                textStorage?.replaceCharacters(in: it.range, with: NSAttributedString(string: it.text, attributes: typingAttributes))
+            }
+            textStorage?.endEditing()
+            var carets: [NSValue] = [], shift = 0
+            for it in items {
+                carets.append(NSValue(range: NSRange(location: it.range.location + shift + it.caret, length: 0)))
+                shift += it.text.utf16.count - it.range.length
+            }
+            didChangeText()
+            setSelectedRanges(carets, affinity: .downstream, stillSelecting: false)
+        }
     }
 
     // MARK: - Position
@@ -204,9 +474,9 @@ final class CodeTextView: NSTextView {
             s.getLineStart(&st, end: &en, contentsEnd: &ce, for: line)
             if ce == en {
                 // last line without terminator
-                let text = "\n" + s.substring(with: line)
+                let text = lineEnding + s.substring(with: line)
                 if replace(NSRange(location: en, length: 0), with: text) {
-                    setSelectedRange(NSRange(location: sel.location + (en - st) + 1, length: 0))
+                    setSelectedRange(NSRange(location: sel.location + (en - st) + lineEnding.utf16.count, length: 0))
                 }
             } else if replace(NSRange(location: en, length: 0), with: s.substring(with: line)) {
                 setSelectedRange(NSRange(location: sel.location + (en - st), length: 0))
@@ -239,7 +509,7 @@ final class CodeTextView: NSTextView {
         let prev = s.lineRange(for: NSRange(location: t.location - 1, length: 0))
         let (pc, pt) = split(prev), (bc, bt) = split(t)
         let region = NSRange(location: prev.location, length: prev.length + t.length)
-        let new = bc + (pt.isEmpty ? "\n" : pt) + pc + bt
+        let new = bc + (pt.isEmpty ? lineEnding : pt) + pc + bt
         let shift = -prev.length
         moveBlock(region, new, selection: NSRange(location: sel.location + shift, length: sel.length))
     }
@@ -487,27 +757,63 @@ final class CodeTextView: NSTextView {
 
     // MARK: - Reformat
 
+    /// Safe re-indenter: only lines that begin a statement (previous code line ends with `{ } ; :`, or after a blank line)
+    /// are re-indented from bracket depth; continuation lines (chains, multi-line arguments, arrays) and block-comment
+    /// bodies are shifted by the same delta as their statement's first line so relative indentation is preserved.
     @objc func reformatCode(_ sender: Any?) {
+        guard let edits = reformatEdits() else { return }
+        applyEdits(edits.0, selection: edits.1)
+    }
+
+    private func columns(_ u: [UInt16], _ a: Int, _ b: Int) -> Int {
+        var col = 0
+        let n = max(1, tabColumns)
+        for i in a..<b { col += u[i] == 9 ? n - col % n : 1 }
+        return col
+    }
+
+    private func indentString(columns c: Int) -> String {
+        if indentUnit.contains("\t") {
+            let n = max(1, tabColumns)
+            return String(repeating: "\t", count: c / n) + String(repeating: " ", count: c % n)
+        }
+        return String(repeating: " ", count: c)
+    }
+
+    /// Edits a reformat would make (exposed for tests).
+    func reformatEdits() -> ([(loc: Int, len: Int, text: String)], NSRange)? {
         var lineComments = false
         switch commentStyle {
-        case .block(let o, _): if o == "<!--" { return }
-        case .line(let p): if p != "//" { return }; lineComments = true
+        case .block(let o, _): if o == "<!--" { return nil }
+        case .line(let p): if p != "//" { return nil }; lineComments = true
         case .none: break
         }
         let u = Array(string.utf16)
         let len = u.count
-        guard len > 0 else { return }
+        guard len > 0 else { return nil }
         let sel = selectedRange()
         let target = sel.length > 0 ? touchedLines(sel) : NSRange(location: 0, length: len)
 
         enum State: Equatable { case code, block, template, heredoc(String) }
+        // openIndent: final indent (columns) of the line that opened the bracket; caseIndent: indent of statements inside a case.
+        struct Frame { var isSwitch: Bool; var inCase: Bool; var openIndent: Int; var caseIndent: Int }
         var state = State.code
-        var depth = 0
+        var stack: [Frame] = []
+        var pendingSwitch = false
         var edits: [LineEdit] = []
         func isIdent(_ c: UInt16) -> Bool { isWordUnit(c) }
         let ch = { (s: String) in s.utf16.first! }
         let slash = ch("/"), star = ch("*"), bs = ch("\\"), bt = ch("`"), lt = ch("<")
+        let statementEnders: Set<UInt16> = [123, 125, 59, 58]   // { } ; :
+        func startsWord(_ w: String, at p: Int, _ ce: Int) -> Bool {
+            let wu = Array(w.utf16)
+            guard p + wu.count <= ce, Array(u[p..<(p + wu.count)]) == wu else { return false }
+            return p + wu.count == ce || !isIdent(u[p + wu.count])
+        }
 
+        var prevAllowsStart = true
+        var delta = 0
+        let unitCols = columns(Array(indentUnit.utf16), 0, indentUnit.utf16.count)
         var loc = 0
         let s = ns
         while loc < len {
@@ -516,22 +822,47 @@ final class CodeTextView: NSTextView {
             var ws = st
             while ws < ce, isBlank(u[ws]) { ws += 1 }
             var i = st
+            let inTarget = st >= target.location && st < target.upperBound
+            var lastSig: UInt16?
+            var isLabel = false
+            var finalCols = columns(u, st, ws)   // indent of this line after reformatting
             if case .heredoc(let id) = state {
-                let idu = Array(id.utf16)
-                if ws + idu.count <= ce, Array(u[ws..<(ws + idu.count)]) == idu,
-                   ws + idu.count == ce || !isIdent(u[ws + idu.count]) {
+                if startsWord(id, at: ws, ce) {
                     state = .code
-                    i = ws + idu.count
+                    i = ws + id.utf16.count
                 } else { i = ce }
-            } else if state == .code {
+            } else if state == .block {
+                if inTarget, ws < ce, delta != 0 {
+                    let cur = columns(u, st, ws)
+                    let new = indentString(columns: max(0, cur + delta))
+                    finalCols = max(0, cur + delta)
+                    if s.substring(with: NSRange(location: st, length: ws - st)) != new { edits.append((st, ws - st, new)) }
+                }
+            } else if state == .code, ws < ce {
                 var closers = 0, k = ws
                 while k < ce, u[k] == 125 || u[k] == 41 || u[k] == 93 { closers += 1; k += 1 }
-                let inTarget = st >= target.location && st < target.upperBound
-                if ws < ce, inTarget {
-                    let want = String(repeating: indentUnit, count: max(0, depth - closers))
-                    if s.substring(with: NSRange(location: st, length: ws - st)) != want { edits.append((st, ws - st, want)) }
+                if let top = stack.last, top.isSwitch, startsWord("case", at: ws, ce) || startsWord("default", at: ws, ce) {
+                    isLabel = true
                 }
-            }
+                if !inTarget { delta = 0 }
+                else if prevAllowsStart || closers > 0 {
+                    // Align closers with the line that opened their bracket; otherwise indent one level inside the
+                    // innermost open bracket (case bodies one level inside their label).
+                    var base = 0
+                    if closers > 0 { base = stack.indices.contains(stack.count - closers) ? stack[stack.count - closers].openIndent : 0 }
+                    else if let top = stack.last { base = isLabel ? top.openIndent + unitCols : (top.inCase ? top.caseIndent : top.openIndent + unitCols) }
+                    finalCols = base
+                    let want = indentString(columns: base)
+                    delta = base - columns(u, st, ws)
+                    if s.substring(with: NSRange(location: st, length: ws - st)) != want { edits.append((st, ws - st, want)) }
+                } else if delta != 0 {
+                    finalCols = max(0, columns(u, st, ws) + delta)
+                    let new = indentString(columns: finalCols)
+                    if s.substring(with: NSRange(location: st, length: ws - st)) != new { edits.append((st, ws - st, new)) }
+                }
+            } else if !inTarget { delta = 0 }
+            if ws >= ce, state == .code { prevAllowsStart = true }   // blank line
+            var sawCode = false
             while i < ce {
                 let c = u[i]
                 switch state {
@@ -540,12 +871,15 @@ final class CodeTextView: NSTextView {
                     if c == star, i + 1 < ce, u[i + 1] == slash { state = .code; i += 2; continue }
                 case .template:
                     if c == bs { i += 2; continue }
-                    if c == bt { state = .code }
+                    if c == bt { state = .code; lastSig = c; sawCode = true }
                 case .code:
                     if c == slash, i + 1 < ce {
                         if u[i + 1] == slash, lineComments { i = ce; continue }
                         if u[i + 1] == star { state = .block; i += 2; continue }
                     }
+                    if isBlank(c) { i += 1; continue }
+                    sawCode = true
+                    lastSig = c
                     if c == 34 || c == 39 {
                         var j = i + 1
                         while j < ce, u[j] != c { j += u[j] == bs ? 2 : 1 }
@@ -562,23 +896,34 @@ final class CodeTextView: NSTextView {
                         while j < ce, isIdent(u[j]) { j += 1 }
                         if j > a { state = .heredoc(String(utf16CodeUnits: Array(u[a..<j]), count: j - a)); i = ce; continue }
                     }
-                    else if c == 123 || c == 40 || c == 91 { depth += 1 }
-                    else if c == 125 || c == 41 || c == 93 { depth = max(0, depth - 1) }
+                    else if isIdent(c) {   // consume the whole word so `switch` inside identifiers is not matched
+                        var j = i
+                        while j < ce, isIdent(u[j]) { j += 1 }
+                        if startsWord("switch", at: i, ce) { pendingSwitch = true }
+                        lastSig = u[j - 1]
+                        i = j
+                        continue
+                    }
+                    else if c == 123 { stack.append(Frame(isSwitch: pendingSwitch, inCase: false, openIndent: finalCols, caseIndent: 0)); pendingSwitch = false }
+                    else if c == 40 || c == 91 { stack.append(Frame(isSwitch: false, inCase: false, openIndent: finalCols, caseIndent: 0)) }
+                    else if c == 125 || c == 41 || c == 93 { _ = stack.popLast() }
+                    else if c == 59 { pendingSwitch = false }
                 }
                 i += 1
             }
+            if isLabel, !stack.isEmpty { stack[stack.count - 1].inCase = true; stack[stack.count - 1].caseIndent = finalCols + unitCols }
+            if sawCode, let l = lastSig { prevAllowsStart = statementEnders.contains(l) }
             if en <= loc { break }
             loc = en
         }
-        applyEdits(edits, selection: sel)
+        return (edits, sel)
     }
 
     // MARK: - Overrides
 
-    override func insertNewline(_ sender: Any?) {
-        guard selectedRanges.count == 1, !hasMarkedText() else { super.insertNewline(sender); return }
+    /// Replacement text and caret offset for a Return at `sel`.
+    private func newlineEdit(for sel: NSRange) -> (text: String, caret: Int) {
         let s = ns
-        let sel = selectedRange()
         let ls = s.lineRange(for: NSRange(location: sel.location, length: 0)).location
         var ws = ls
         while ws < sel.location, isBlank(s.character(at: ws)) { ws += 1 }
@@ -587,51 +932,77 @@ final class CodeTextView: NSTextView {
         while p > ls, isBlank(s.character(at: p - 1)) { p -= 1 }
         let prev: unichar? = p > ls ? s.character(at: p - 1) : nil
         let closers: [unichar: unichar] = [123: 125, 40: 41, 91: 93]
-        var text = "\n" + indent
+        var text = lineEnding + indent
         var caretOffset = text.utf16.count
         if let pv = prev, let close = closers[pv] {
             text += indentUnit
             caretOffset = text.utf16.count
-            if sel.upperBound < s.length, s.character(at: sel.upperBound) == close { text += "\n" + indent }
+            if sel.upperBound < s.length, s.character(at: sel.upperBound) == close { text += lineEnding + indent }
         }
-        grouped {
-            if replace(sel, with: text) { setSelectedRange(NSRange(location: sel.location + caretOffset, length: 0)) }
+        return (text, caretOffset)
+    }
+
+    override func insertNewline(_ sender: Any?) {
+        guard !hasMarkedText() else { super.insertNewline(sender); return }
+        let ranges = currentRanges.sorted { $0.location < $1.location }
+        if ranges.count == 1 {
+            let sel = ranges[0]
+            let (text, caret) = newlineEdit(for: sel)
+            grouped {
+                if replace(sel, with: text) { setSelectedRange(NSRange(location: sel.location + caret, length: 0)) }
+            }
+            return
         }
+        replaceRanges(ranges.map { r in let e = newlineEdit(for: r); return (r, e.text, e.caret) })
+    }
+
+    /// Union of whole lines touched by the given ranges as (start, contentsEnd) pairs, ascending and unique.
+    private func touchedLineList(_ ranges: [NSRange]) -> [(st: Int, ce: Int)] {
+        var seen = Set<Int>(), out: [(st: Int, ce: Int)] = []
+        for r in ranges.sorted(by: { $0.location < $1.location }) {
+            if r.length == 0 {
+                let ls = ns.lineRange(for: NSRange(location: min(r.location, ns.length), length: 0))
+                var st = 0, en = 0, ce = 0
+                ns.getLineStart(&st, end: &en, contentsEnd: &ce, for: ls)
+                if seen.insert(st).inserted { out.append((st, ce)) }
+                continue
+            }
+            forEachLine(in: touchedLines(r)) { st, ce, _ in if seen.insert(st).inserted { out.append((st, ce)) } }
+        }
+        return out.sorted { $0.st < $1.st }
     }
 
     override func insertTab(_ sender: Any?) {
-        guard selectedRanges.count == 1, !hasMarkedText() else { super.insertTab(sender); return }
+        guard !hasMarkedText() else { super.insertTab(sender); return }
         let s = ns
-        let sel = selectedRange()
-        let t = touchedLines(sel)
+        let ranges = currentRanges.sorted { $0.location < $1.location }
         let n = max(1, tabColumns)
-        if sel.length > 0, splitLineCount(t) > 1 {
-            var edits: [LineEdit] = []
-            forEachLine(in: t) { st, ce, _ in if ce > st { edits.append((st, 0, indentUnit)) } }
-            applyEdits(edits, selection: sel)
+        if ranges.contains(where: { $0.length > 0 }) {
+            // Any selection indents the touched lines (blank lines are left alone).
+            let edits: [LineEdit] = touchedLineList(ranges).filter { $0.ce > $0.st }.map { ($0.st, 0, indentUnit) }
+            applyEdits(edits, selections: ranges)
             return
         }
-        let ls = s.lineRange(for: NSRange(location: sel.location, length: 0)).location
-        let col = sel.location - ls
-        let pad = useTabs ? "\t" : String(repeating: " ", count: n - col % n)
-        grouped {
-            if replace(sel, with: pad) { setSelectedRange(NSRange(location: sel.location + pad.utf16.count, length: 0)) }
-        }
+        replaceRanges(ranges.map { r in
+            let ls = s.lineRange(for: NSRange(location: min(r.location, s.length), length: 0)).location
+            let col = r.location - ls
+            let pad = useTabs ? "\t" : String(repeating: " ", count: n - col % n)
+            return (r, pad, pad.utf16.count)
+        })
     }
 
     override func insertBacktab(_ sender: Any?) {
         let s = ns
-        let sel = selectedRange()
-        let t = touchedLines(sel)
+        let ranges = currentRanges.sorted { $0.location < $1.location }
         let n = max(1, tabColumns)
         var edits: [LineEdit] = []
-        forEachLine(in: t) { st, ce, _ in
-            if st < ce, s.character(at: st) == 9 { edits.append((st, 1, "")); return }
+        for (st, ce) in touchedLineList(ranges) {
+            if st < ce, s.character(at: st) == 9 { edits.append((st, 1, "")); continue }
             var k = 0
             while k < n, st + k < ce, s.character(at: st + k) == 32 { k += 1 }
             if k > 0 { edits.append((st, k, "")) }
         }
-        applyEdits(edits, selection: sel)
+        applyEdits(edits, selections: ranges)
     }
 
     private static let pairs: [unichar: unichar] = [40: 41, 91: 93, 123: 125, 34: 34, 39: 39, 96: 96]
