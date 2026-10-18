@@ -7,6 +7,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/tree-sitter/swift-tree-sitter", from: "0.9.0"),
         .package(url: "https://github.com/tree-sitter/tree-sitter-php", from: "0.23.0"),
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm", exact: "1.20.0"),
         .package(path: "Vendor/tree-sitter-javascript"),
         .package(path: "Vendor/tree-sitter-html"),
         .package(path: "Vendor/tree-sitter-css"),
@@ -26,6 +27,7 @@ let package = Package(
             name: "CodeEditor",
             dependencies: [
                 .product(name: "SwiftTreeSitter", package: "swift-tree-sitter"),
+                .product(name: "SwiftTerm", package: "SwiftTerm"),
                 .product(name: "TreeSitterPHP", package: "tree-sitter-php"),
                 .product(name: "TreeSitterJavaScript", package: "tree-sitter-javascript"),
                 .product(name: "TreeSitterHTML", package: "tree-sitter-html"),
