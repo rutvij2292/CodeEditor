@@ -35,7 +35,7 @@ struct IndentSettings: Equatable {
         if tabLines > spaceLines { return IndentSettings(useTabs: true, size: 4) }
         // Prefer 4 on ties; ignore 6/5/7 which are artefacts of continuation lines.
         let candidates = [4, 2, 8, 3].compactMap { size in steps[size].map { (size, $0) } }
-        guard let best = candidates.max(by: { $0.1 < $1.1 }), best.1 >= 3 else { return nil }
+        guard let best = candidates.max(by: { $0.1 < $1.1 }), best.1 >= 2 else { return nil }
         return IndentSettings(useTabs: false, size: best.0)
     }
 }

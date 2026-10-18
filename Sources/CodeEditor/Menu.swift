@@ -150,6 +150,7 @@ enum MainMenu {
             item("Collapse All in Tree", #selector(AppDelegate.collapseAll(_:)), "-", target: a),
             item("Include vendor in Go to File", #selector(AppDelegate.toggleIncludeVendor(_:)), target: a),
             item("Format on Save", #selector(AppDelegate.toggleFormatOnSave(_:)), target: a),
+            item("Restart Language Servers", #selector(AppDelegate.restartLanguageServers(_:)), target: a),
             sep,
             appearanceMenu(a),
             item("Bracket Pair Colorization", #selector(BracketColorizer.toggleBracketColorization(_:)), target: BracketColorizer.shared),

@@ -45,6 +45,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             w.current?.textView.goToLine(line, column: column)
         }
         Self.installLanguageHandlers()
+        // Laravel-aware targets (view(), route(), <x-…>) take precedence over the language server for Cmd-click / Cmd-B.
+        LanguageServers.beforeDefinition = { tab, offset in
+            guard !LaravelNavigator.targets(in: tab, at: offset).isEmpty else { return false }
+            tab.textView.setSelectedRange(NSRange(location: offset, length: 0))
+            return LaravelNavigator.goToDeclaration(in: tab, openLocation: { url, line, column in LaravelNavigator.openLocation?(url, line, column) },
+                                                    over: tab.textView.window)
+        }
+        LanguageServers.suppressHoverUnderline = { tab, offset in !LaravelNavigator.targets(in: tab, at: offset).isEmpty }
         NSApp.mainMenu = MainMenu.build(app: self)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
             self?.trackDoubleShift(event)
@@ -200,6 +208,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func renameSymbol(_ sender: Any?) { active.map { Self.renameHandler?($0) } }
     @objc func formatDocument(_ sender: Any?) { active.map { Self.formatHandler?($0) } }
     @objc func toggleReopenWindows(_ sender: Any?) { SessionStore.reopenOnLaunch.toggle() }
+    @objc func restartLanguageServers(_ sender: Any?) {
+        if let root = active?.root { LanguageServers.restartAll(forRoot: root) }
+    }
     @objc func toggleFormatOnSave(_ sender: Any?) { Formatter.formatOnSave.toggle() }
     @objc func toggleAutoSaveFocus(_ sender: Any?) { AutoSave.focusLossEnabled.toggle() }
     @objc func toggleAutoSaveTabSwitch(_ sender: Any?) { AutoSave.tabSwitchEnabled.toggle() }
