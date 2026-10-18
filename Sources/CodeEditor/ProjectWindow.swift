@@ -18,6 +18,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     var findPanel: FindPanelController?
     var problemsPanel: ProblemsPanelController?
     var terminalPanel: TerminalPanelController?
+    /// Claude Code CLI integration (ClaudeBridge.swift).
+    var claudeBridge: ClaudeBridge?
     /// Right/bottom dock state of the terminal (see TerminalDocking.swift).
     let termDock = TerminalDockState()
     var problemsObserver: NSObjectProtocol?
@@ -255,6 +257,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     }
 
     func refreshStatus() {
+        claudeBridge?.editorStateChanged()
         let editor = current
         let caret = editor?.textView.lineAndColumn
         statusBar.update(line: caret?.line, column: caret?.column, selected: editor?.textView.selectedRange().length ?? 0,
@@ -683,6 +686,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         fallbackTimer?.invalidate()
         watcher = nil
         terminalPanel?.terminate()
+        claudeBridge?.shutdown()
         editors.values.forEach { EditorEvents.notifyClosed($0) }
         diffWindows.forEach { $0.close() }
         QuickPicker.dismiss()

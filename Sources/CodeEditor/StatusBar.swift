@@ -20,6 +20,7 @@ final class StatusBar: NSView {
     private let server = StatusBar.label()
     private let notice = StatusBar.label()
     private let powerLabel = StatusBar.label()
+    private let claudeLabel = StatusBar.label()
     private var noticeTimer: Timer?
     private let topLine = NSView()
     private let terminalButton = NSButton()
@@ -59,7 +60,8 @@ final class StatusBar: NSView {
         viewerButton.target = self; viewerButton.action = #selector(viewerTapped)
         viewerButton.toolTip = "View mode: Source / Split / Preview (\u{2303}\u{2325}\u{2318}V)"
         viewerButton.isHidden = true
-        let right = NSStackView(views: [powerLabel, server, language, viewerButton, indent, lineEnding, encoding, position, terminalBox])
+        claudeLabel.isHidden = true
+        let right = NSStackView(views: [claudeLabel, powerLabel, server, language, viewerButton, indent, lineEnding, encoding, position, terminalBox])
         right.spacing = 14
         notice.setContentHuggingPriority(.init(1), for: .horizontal)
         notice.setContentCompressionResistancePriority(.init(1), for: .horizontal)
@@ -134,6 +136,21 @@ final class StatusBar: NSView {
         terminalDot.isHidden = attention == .none
         terminalDot.layer?.backgroundColor = (attention == .done ? NSColor.systemGreen : NSColor.systemOrange).cgColor
     }
+    /// Claude Code bridge indicator: hidden when the bridge is off, "Claude: waiting" until a CLI connects.
+    func setClaude(_ status: ClaudeBridge.Status) {
+        switch status {
+        case .off: claudeLabel.isHidden = true
+        case .waiting:
+            claudeLabel.isHidden = false
+            claudeLabel.stringValue = "\u{25CB} Claude: waiting"
+            claudeLabel.toolTip = "Run `claude` in the terminal (or /ide) to connect to this window"
+        case .connected(let n):
+            claudeLabel.isHidden = false
+            claudeLabel.stringValue = "\u{25CF} Claude connected" + (n > 1 ? " (\(n))" : "")
+            claudeLabel.toolTip = "Claude Code CLI is connected to this window"
+        }
+    }
+    var claudeText: String { claudeLabel.isHidden ? "" : claudeLabel.stringValue }
     var terminalDotVisible: Bool { !terminalDot.isHidden }
     func clickTerminalButton() { terminalTapped() }
 

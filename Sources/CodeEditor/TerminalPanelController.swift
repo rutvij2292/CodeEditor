@@ -150,6 +150,8 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         var allowHeadlessShell = false
     }
     static var testHooks = TestHooks()
+    /// Per-window environment for new shells (Claude Code IDE bridge port); applies to tabs started or restarted afterwards.
+    var extraEnvironment: [String: String] = [:]
 
     private static var nextTabID = 1
 
@@ -443,7 +445,8 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         let exe: String, args: [String]
         if let e = hooks.executable { exe = e; args = hooks.args } else { exe = TerminalEnvironment.resolvedShell; args = ["-l", "-i"] }
         let env = TerminalEnvironment.build(base: ProcessInfo.processInfo.environment,
-                                            path: TerminalEnvironment.effectivePath(), extra: hooks.extraEnvironment)
+                                            path: TerminalEnvironment.effectivePath(),
+                                            extra: hooks.extraEnvironment.merging(extraEnvironment) { _, new in new })
         tab.exited = false; tab.view.dead = false; tab.launchedAt = Date()
         tab.view.startProcess(executable: exe, args: args, environment: env, execName: nil, currentDirectory: root.path)
     }

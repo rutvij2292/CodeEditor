@@ -68,6 +68,9 @@ enum Prefs {
     /// Show a badge/bounce when a background terminal tab produced output and then went quiet (an agent finished).
     static var terminalNotifyOnIdle: Bool { get { get("terminalNotifyOnIdle", true) } set { set("terminalNotifyOnIdle", newValue) } }
 
+    /// Claude Code IDE bridge: loopback-only server + ~/.claude/ide lock file so the `claude` CLI can connect (default on).
+    static var claudeBridgeEnabled: Bool { get { get("claudeBridgeEnabled", true) } set { set("claudeBridgeEnabled", newValue) } }
+
     // MARK: Completion
     /// Identifier characters typed before the completion popup opens on its own (1...4).
     static var completionMinChars: Int { get { get("completionMinChars", 2) } set { set("completionMinChars", min(4, max(1, newValue))) } }
@@ -85,7 +88,7 @@ enum Prefs {
         "softWrap", "bracketPairColorization", "showBreadcrumbs", "foldingEnabled", "foldImportsOnOpen", "highlightOccurrences", "inlineBlame", "powerSaver", "gpuAssist",
         "defaultIndentSize", "defaultIndentUsesTabs",
         "terminalDock", "terminalFontName", "terminalFontSize", "terminalCursorStyle", "terminalScrollback", "terminalShell",
-        "terminalAgents", "terminalNotifyOnIdle", "completionMinChars", "completionDelayMs", "intelephenseLicenceConfigured",
+        "terminalAgents", "terminalNotifyOnIdle", "claudeBridgeEnabled", "completionMinChars", "completionDelayMs", "intelephenseLicenceConfigured",
         "viewerMode.markdown", "viewerMode.json", "viewerMode.yaml",
     ]
 
