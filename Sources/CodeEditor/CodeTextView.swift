@@ -101,7 +101,7 @@ final class CodeTextView: NSTextView {
     @objc private func applyThemeColors() {
         // Background only: selection must not wash out syntax colours.
         selectedTextAttributes = [.backgroundColor: Theme.palette.selection]
-        insertionPointColor = Theme.foreground
+        insertionPointColor = Theme.palette.caret
         needsDisplay = true
     }
 
@@ -1505,9 +1505,7 @@ extension CodeTextView {
     }
 
     private func occurrenceColors() -> (read: NSColor, write: NSColor) {
-        Theme.isDark
-            ? (NSColor(srgbRed: 0.70, green: 0.55, blue: 1.00, alpha: 0.24), NSColor(srgbRed: 1.00, green: 0.45, blue: 0.52, alpha: 0.26))
-            : (NSColor(srgbRed: 0.58, green: 0.42, blue: 0.90, alpha: 0.20), NSColor(srgbRed: 0.92, green: 0.30, blue: 0.38, alpha: 0.22))
+        (Theme.palette.occurrenceRead, Theme.palette.occurrenceWrite)
     }
 
     /// 0 = code, 1 = comment, 2 = string, judged by the highlighter's colours (cheap, no re-lexing).

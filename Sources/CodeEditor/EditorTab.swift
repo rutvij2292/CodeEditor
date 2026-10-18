@@ -304,7 +304,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         textView.font = Self.currentFont()
         textView.textColor = Theme.foreground
         textView.backgroundColor = Theme.background
-        textView.insertionPointColor = Theme.foreground
+        textView.insertionPointColor = Theme.palette.caret
         indent = IndentSettings.resolve(for: url, text: text)
         paragraph = Self.paragraphStyle(for: indent)
         textView.indentUnit = indent.unit
@@ -413,7 +413,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
     @objc private func themeChanged() {
         textView.textColor = Theme.foreground
         textView.backgroundColor = Theme.background
-        textView.insertionPointColor = Theme.foreground
+        textView.insertionPointColor = Theme.palette.caret
         textView.typingAttributes = Theme.textAttributes(paragraph: paragraph)
         textView.textStorage?.addAttribute(.foregroundColor, value: Theme.foreground,
                                            range: NSRange(location: 0, length: textView.textStorage?.length ?? 0))

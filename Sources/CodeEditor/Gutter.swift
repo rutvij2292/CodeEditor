@@ -133,7 +133,7 @@ final class GutterView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        Theme.background.setFill()
+        Theme.palette.gutterBackground.setFill()
         bounds.fill()
         rows.removeAll(keepingCapacity: true)
         guard let tv = textView,
@@ -159,8 +159,8 @@ final class GutterView: NSView {
         }
 
         let caret = min(tv.selectedRange().location, text.length)
-        let plain: [NSAttributedString.Key: Any] = [.font: numberFont, .foregroundColor: Theme.gutter]
-        let active: [NSAttributedString.Key: Any] = [.font: boldNumberFont, .foregroundColor: Theme.foreground]
+        let plain: [NSAttributedString.Key: Any] = [.font: numberFont, .foregroundColor: Theme.palette.lineNumber]
+        let active: [NSAttributedString.Key: Any] = [.font: boldNumberFont, .foregroundColor: Theme.palette.lineNumberActive]
         let textRight = bounds.width - rightPad
         let showNumbers = showsNumbers
         func drawLabel(_ n: Int, y0: CGFloat, height: CGFloat, isActive: Bool) {
