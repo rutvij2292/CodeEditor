@@ -63,6 +63,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         BracketColorizer.start()
         GitGutter.start()
         Formatter.start()
+        Self.terminalHandlers.sendFileReference = { $0.sendFileReference() }
+        Self.terminalHandlers.sendSelectionReference = { $0.sendSelectionReference() }
+        Self.terminalHandlers.sendSelectionText = { $0.sendSelectionText() }
+        Self.terminalHandlers.focus = { $0.toggleTerminalFocus() }
+        Self.terminalHandlers.maximize = { $0.maximizeTerminal() }
+        BlameController.onShowCommit = { [weak self] _, url in self?.active?.showCommitWindow { $0.showHistory(for: url) } }
         LanguageServers.openProjectRoot = { [weak self] url in
             let path = url.standardizedFileURL.path
             return self?.windows.compactMap(\.root)
@@ -247,7 +253,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func formatDocument(_ sender: Any?) { active.map { Self.formatHandler?($0) } }
     @objc func toggleReopenWindows(_ sender: Any?) { SessionStore.reopenOnLaunch.toggle() }
     @objc func focusBreadcrumbs(_ sender: Any?) { active?.current?.focusBreadcrumbs() }
-    @objc func showTerminal(_ sender: Any?) { active?.showTerminal() }
+    @objc func showTerminal(_ sender: Any?) { active?.toggleTerminal() }
+    @objc func toggleBlameAnnotations(_ sender: Any?) { if let tab = active?.current { _ = BlameController.toggleAnnotate(for: tab) } }
     @objc func restartLanguageServers(_ sender: Any?) {
         if let root = active?.root { LanguageServers.restartAll(forRoot: root) }
     }
@@ -298,6 +305,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         switch item.action {
         case #selector(toggleReopenWindows(_:)): item.state = SessionStore.reopenOnLaunch ? .on : .off
         case #selector(toggleIncludeVendor(_:)): item.state = ProjectIndex.includeVendor ? .on : .off
+        case #selector(toggleBlameAnnotations(_:)): item.state = active?.current.map { Blame.isAnnotating($0) } == true ? .on : .off
         case #selector(toggleFormatOnSave(_:)): item.state = Formatter.formatOnSave ? .on : .off
         case #selector(toggleAutoSaveFocus(_:)): item.state = AutoSave.focusLossEnabled ? .on : .off
         case #selector(toggleAutoSaveTabSwitch(_:)): item.state = AutoSave.tabSwitchEnabled ? .on : .off

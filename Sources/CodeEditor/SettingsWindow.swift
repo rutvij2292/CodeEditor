@@ -108,7 +108,7 @@ class SettingsPane: NSViewController {
     private var tokens: [NSObjectProtocol] = []
 
     /// Notifications that make controls re-read their values.
-    var observedNotifications: [Notification.Name] { [Prefs.didChange, Theme.didChange, AutoSave.didChange, TerminalPanelController.settingsDidChange] }
+    var observedNotifications: [Notification.Name] { [Prefs.didChange, Theme.didChange, AutoSave.didChange] }
 
     override func loadView() {
         let scroll = NSScrollView(frame: NSRect(origin: .zero, size: SettingsWindowController.contentSize))

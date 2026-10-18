@@ -148,7 +148,7 @@ enum MainMenu {
             item("Update Project (Pull)", #selector(AppDelegate.updateProject(_:)), "t", target: a),
             item("Fetch", #selector(AppDelegate.fetchChanges(_:)), "", target: a),
             item("Show History for File", #selector(AppDelegate.showFileHistory(_:)), "", target: a),
-            item("Annotate with Git Blame", Selector(("toggleBlameAnnotations:")), "a", [.command, .option]),
+            item("Annotate with Git Blame", #selector(AppDelegate.toggleBlameAnnotations(_:)), "a", [.command, .option], target: a),
             toggleItem("Toggle Inline Blame", "inlineBlame", a),
             sep,
             item("Show Git Panel", #selector(AppDelegate.toggleGit(_:)), "9", target: a),
