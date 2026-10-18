@@ -147,6 +147,7 @@ enum MainMenu {
             item("Git Tool Window", #selector(AppDelegate.showGitTool(_:)), "", target: a),
             sep,
             item("Select Opened File", #selector(AppDelegate.selectOpenedFile(_:)), f1, [.option], target: a),
+            item("Terminal", #selector(AppDelegate.showTerminal(_:)), f12, [.option], target: a),
             item("Collapse All in Tree", #selector(AppDelegate.collapseAll(_:)), "-", target: a),
             item("Include vendor in Go to File", #selector(AppDelegate.toggleIncludeVendor(_:)), target: a),
             item("Format on Save", #selector(AppDelegate.toggleFormatOnSave(_:)), target: a),

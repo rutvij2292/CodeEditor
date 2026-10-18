@@ -22,6 +22,7 @@ enum Verification {
             case "everywhere": w.showSearchEverywhere()
             case "projects": app.showRecentProjects(nil)
             case "git": w.toggleGitPanel()
+            case "terminal": w.showTerminal()
             case "commit": w.showCommitWindow()
             case "problems": w.showToolPanel("problems")
             case "find":

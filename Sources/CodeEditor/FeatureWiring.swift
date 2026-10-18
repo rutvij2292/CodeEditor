@@ -16,6 +16,7 @@ extension ProjectWindow {
         findPanel = find
         registerToolPanel(id: "find", title: "Find", view: find.view) { close in find.onClose = close }
         installProblemsPanel(root: root)
+        installTerminalPanel(root: root)
         onFindInFiles = { [weak self] in self?.showFind(replace: false) }
         onReplaceInFiles = { [weak self] in self?.showFind(replace: true) }
     }
@@ -46,5 +47,23 @@ extension ProjectWindow {
             let errors = files.reduce(0) { $0 + $1.errorCount }, warnings = files.reduce(0) { $0 + $1.warningCount }
             self.setToolPanelBadge(errors + warnings > 0 ? (errors > 0 ? "\(errors)" : "\(warnings)") : nil, for: "problems")
         }
+    }
+
+    private func installTerminalPanel(root: URL) {
+        let term = TerminalPanelController(root: root)
+        term.openPath = { [weak self] path, line, column in
+            self?.open(URL(fileURLWithPath: path), line: line)
+            if let line { self?.current?.textView.goToLine(line, column: column ?? 1) }
+        }
+        term.onActivity = { [weak self] in self?.setToolPanelBadge("•", for: "terminal") }
+        terminalPanel = term
+        registerToolPanel(id: "terminal", title: "Terminal", view: term.view) { close in term.onClose = close }
+    }
+
+    /// Option-F12: opens the Terminal tab in the bottom panel (lazily starts the shell) and focuses it.
+    func showTerminal() {
+        guard let term = terminalPanel else { return }
+        setToolPanelBadge(nil, for: "terminal")
+        showToolPanel("terminal") { term.focusTerminal() }
     }
 }

@@ -81,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        TerminalPanelController.terminateAll()
         windows.forEach { $0.saveSession() }
         SessionStore.rememberOpenWindows(windows.compactMap(\.root))
         LanguageServers.stopAll()
@@ -208,6 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func renameSymbol(_ sender: Any?) { active.map { Self.renameHandler?($0) } }
     @objc func formatDocument(_ sender: Any?) { active.map { Self.formatHandler?($0) } }
     @objc func toggleReopenWindows(_ sender: Any?) { SessionStore.reopenOnLaunch.toggle() }
+    @objc func showTerminal(_ sender: Any?) { active?.showTerminal() }
     @objc func restartLanguageServers(_ sender: Any?) {
         if let root = active?.root { LanguageServers.restartAll(forRoot: root) }
     }

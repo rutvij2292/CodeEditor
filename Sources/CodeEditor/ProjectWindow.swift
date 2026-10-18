@@ -17,6 +17,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     private var index: ProjectIndex?
     var findPanel: FindPanelController?
     var problemsPanel: ProblemsPanelController?
+    var terminalPanel: TerminalPanelController?
     var problemsObserver: NSObjectProtocol?
     var projectFiles: [String] { index?.files ?? [] }
     private var symbols: SymbolIndex?
@@ -631,6 +632,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         coalescer.cancel()
         fallbackTimer?.invalidate()
         watcher = nil
+        terminalPanel?.terminate()
         editors.values.forEach { EditorEvents.notifyClosed($0) }
         diffWindows.forEach { $0.close() }
         QuickPicker.dismiss()
