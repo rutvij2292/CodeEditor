@@ -42,6 +42,9 @@ final class GutterView: NSView {
     var markers: [GutterMarker] = [] { didSet { if markers != oldValue { markersChanged(from: oldValue) } } }
     /// Click on a marker bar; the rect is the marker's extent in this view's coordinates.
     var onMarkerClick: ((GutterMarker, NSRect) -> Void)?
+    /// 1-based lines that get a ▶ run marker (HTTP client files) and the click handler.
+    var playLines: Set<Int> = [] { didSet { if playLines != oldValue { invalidate() } } }
+    var onPlayClick: ((Int) -> Void)?
     /// Called with the preferred width when the number of digits (or the font / prefs) changes.
     var onWidthChange: ((CGFloat) -> Void)?
 
@@ -306,6 +309,19 @@ final class GutterView: NSView {
         }
         drawChevrons(caret: caret)
         drawMarkers()
+        drawPlayMarkers()
+    }
+
+    private func drawPlayMarkers() {
+        guard !playLines.isEmpty else { return }
+        NSColor(srgbRed: 0.30, green: 0.70, blue: 0.35, alpha: 1).setFill()
+        for row in rows where playLines.contains(row.line) {
+            let midY = row.y0 + row.firstHeight / 2
+            let p = NSBezierPath()
+            p.move(to: NSPoint(x: 1.5, y: midY - 4)); p.line(to: NSPoint(x: 8, y: midY)); p.line(to: NSPoint(x: 1.5, y: midY + 4))
+            p.close()
+            p.fill()
+        }
     }
 
     // MARK: fold chevrons
@@ -401,6 +417,10 @@ final class GutterView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+        if p.x < 11, !playLines.isEmpty, let line = rowLine(atY: p.y), playLines.contains(line) {
+            onPlayClick?(line)
+            return
+        }
         if p.x >= bounds.width - Self.barZone, let (m, r) = marker(at: p) {
             onMarkerClick?(m, r)
             return
