@@ -1,15 +1,15 @@
 #!/bin/bash
-# Builds a release Linnet.app in ./dist (grammar query bundles, fonts and the icon go in Contents/Resources).
+# Builds a release Kode.app in ./dist (grammar query bundles, fonts and the icon go in Contents/Resources).
 set -euo pipefail
 cd "$(dirname "$0")"
 
 swift build -c release --build-system native
 BIN_DIR=$(swift build -c release --build-system native --show-bin-path)
 
-NAME=Linnet
+NAME=Kode
 APP="dist/$NAME.app"
 VERSION="0.$(git rev-list --count HEAD 2>/dev/null || echo 1)"
-rm -rf dist/CodeEditor.app "$APP"
+rm -rf dist/CodeEditor.app dist/Linnet.app "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/CodeEditor" "$APP/Contents/MacOS/$NAME"
 [ -f Branding/AppIcon.icns ] || ./scripts/make-icns.sh

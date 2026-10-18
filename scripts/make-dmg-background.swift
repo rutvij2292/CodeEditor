@@ -25,7 +25,7 @@ func render(scale: CGFloat, to path: String) {
         let width = str.size().width
         str.draw(at: CGPoint(x: centered ? p.x - width / 2 : p.x, y: p.y))
     }
-    text("Linnet", size: 34, weight: .bold, color: c(0x0A3F78), at: CGPoint(x: 330, y: 330))
+    text("Kode", size: 34, weight: .bold, color: c(0x0A3F78), at: CGPoint(x: 330, y: 330))
     text("A light, native code editor", size: 14, weight: .regular, color: c(0x2F6E8F), at: CGPoint(x: 330, y: 304))
 
     // Arrow between the app icon (x≈180) and the Applications shortcut (x≈480), vertically at icon centre (y≈190 from bottom).
@@ -40,7 +40,7 @@ func render(scale: CGFloat, to path: String) {
     arrow.line(to: CGPoint(x: 372, y: 174))
     c(0x13A89A, 0.85).setStroke()
     arrow.stroke()
-    text("Drag Linnet into Applications", size: 13, weight: .medium, color: c(0x2F6E8F), at: CGPoint(x: 330, y: 92))
+    text("Drag Kode into Applications", size: 13, weight: .medium, color: c(0x2F6E8F), at: CGPoint(x: 330, y: 92))
     NSGraphicsContext.restoreGraphicsState()
     try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: path))
 }

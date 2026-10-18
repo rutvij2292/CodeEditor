@@ -1,4 +1,4 @@
-# Linnet
+# Kode
 
 A light, native macOS code editor (Swift/AppKit) built as a low-memory alternative to PhpStorm for Laravel/PHP, Blade, JS/TS, Vue/React, HTML and CSS work. Runs next to CLI AI tools such as Claude Code or Gemini.
 
@@ -12,12 +12,12 @@ A light, native macOS code editor (Swift/AppKit) built as a low-memory alternati
 
 ## Build and install
 ```sh
-./build-app.sh          # dist/Linnet.app (ad-hoc signed)
-./scripts/make-dmg.sh   # dist/Linnet-<version>.dmg
+./build-app.sh          # dist/Kode.app (ad-hoc signed)
+./scripts/make-dmg.sh   # dist/Kode-<version>.dmg
 ```
 Requires the Swift toolchain (`swift build --build-system native` is used). On another Mac, first launch of an ad-hoc signed app needs right-click → Open.
 
 ## Checks
-`CE_SELFTEST=1 dist/Linnet.app/Contents/MacOS/Linnet` runs the logic self-tests; `CE_SNAPSHOT=1` renders headless screenshots.
+`CE_SELFTEST=1 dist/Kode.app/Contents/MacOS/Kode` runs the logic self-tests; `CE_SNAPSHOT=1` renders headless screenshots.
 
 The app name lives in `Sources/CodeEditor/Brand.swift`.
