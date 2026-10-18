@@ -26,7 +26,35 @@ enum ThemeMode: String { case system, light, dark }
 
 enum Theme {
     static let didChange = Notification.Name("CodeEditor.themeDidChange")
-    static let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+    private static var fontCache: (name: String, size: Double, font: NSFont)?
+
+    /// Editor font from `Prefs.editorFontName` / `Prefs.editorFontSize` (system monospaced when unset or not installed).
+    /// Recomputed when either changes; `Theme.didChange` is posted so editors, gutters and the tab strip restyle.
+    static var font: NSFont {
+        _ = prefsObserver
+        let name = Prefs.editorFontName, size = Prefs.editorFontSize
+        if let c = fontCache, c.name == name, c.size == size { return c.font }
+        let font = resolveFont(name: name, size: size)
+        fontCache = (name, size, font)
+        return font
+    }
+
+    static func resolveFont(name: String, size: Double) -> NSFont {
+        let pt = CGFloat(size)
+        if !name.isEmpty {
+            if let f = NSFont(name: name, size: pt) { return f }
+            let d = NSFontDescriptor(fontAttributes: [.family: name])
+            if let f = NSFont(descriptor: d, size: pt), f.familyName?.caseInsensitiveCompare(name) == .orderedSame { return f }
+        }
+        return NSFont.monospacedSystemFont(ofSize: pt, weight: .regular)
+    }
+
+    /// Restyles everything that listens to `didChange` when a font / line-height preference changes.
+    private static let prefsObserver: NSObjectProtocol = NotificationCenter.default.addObserver(
+        forName: Prefs.didChange, object: nil, queue: .main) { note in
+        guard let key = note.userInfo?["key"] as? String, ["editorFontName", "editorFontSize", "lineHeightMultiple"].contains(key) else { return }
+        NotificationCenter.default.post(name: didChange, object: nil)
+    }
 
     private static func c(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> NSColor {
         NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
@@ -111,6 +139,7 @@ enum Theme {
 
     /// Applies the saved (or CE_THEME) mode and starts following macOS appearance changes.
     static func start() {
+        _ = prefsObserver
         if let forced = AppEnv.value("CE_THEME").flatMap(ThemeMode.init(rawValue:)) { mode = forced }
         apply()
         observation = NSApp.observe(\.effectiveAppearance) { _, _ in

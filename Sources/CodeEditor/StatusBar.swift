@@ -6,6 +6,7 @@ final class StatusBar: NSView {
     var onChooseIndent: ((NSView) -> Void)?
     var onShowGit: (() -> Void)?
     var onChooseEncoding: ((NSView) -> Void)?
+    var onToggleTerminal: (() -> Void)?
 
     private let branch = StatusBar.button()
     private let position = StatusBar.button()
@@ -17,6 +18,9 @@ final class StatusBar: NSView {
     private let notice = StatusBar.label()
     private var noticeTimer: Timer?
     private let topLine = NSView()
+    private let terminalButton = NSButton()
+    private let terminalDot = NSView()
+    private(set) var terminalAttention: TerminalPanelController.Attention = .none
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -25,7 +29,24 @@ final class StatusBar: NSView {
         position.target = self; position.action = #selector(positionTapped)
         indent.target = self; indent.action = #selector(indentTapped)
         encoding.target = self; encoding.action = #selector(encodingTapped)
-        let right = NSStackView(views: [server, language, indent, lineEnding, encoding, position])
+        terminalButton.isBordered = false
+        terminalButton.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: "Toggle terminal")
+        terminalButton.imageScaling = .scaleProportionallyDown
+        terminalButton.toolTip = "Toggle terminal (\u{2325}F12)  \u{2022}  focus terminal/editor (\u{2303}`)"
+        terminalButton.target = self; terminalButton.action = #selector(terminalTapped)
+        terminalButton.translatesAutoresizingMaskIntoConstraints = false
+        terminalButton.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        terminalButton.heightAnchor.constraint(equalToConstant: 16).isActive = true
+        terminalDot.wantsLayer = true
+        terminalDot.layer?.cornerRadius = 3
+        terminalDot.isHidden = true
+        terminalDot.translatesAutoresizingMaskIntoConstraints = false
+        terminalDot.widthAnchor.constraint(equalToConstant: 6).isActive = true
+        terminalDot.heightAnchor.constraint(equalToConstant: 6).isActive = true
+        let terminalBox = NSStackView(views: [terminalDot, terminalButton])
+        terminalBox.spacing = 3
+        terminalBox.alignment = .centerY
+        let right = NSStackView(views: [server, language, indent, lineEnding, encoding, position, terminalBox])
         right.spacing = 14
         notice.setContentHuggingPriority(.init(1), for: .horizontal)
         notice.setContentCompressionResistancePriority(.init(1), for: .horizontal)
@@ -68,6 +89,8 @@ final class StatusBar: NSView {
         topLine.layer?.backgroundColor = Theme.foreground.withAlphaComponent(0.12).cgColor
         for l in [lineEnding, language, server, notice] { l.textColor = Theme.gutter }
         for b in [branch, position, indent, encoding] { b.contentTintColor = Theme.gutter; setTitle(b, b.title) }
+        terminalButton.contentTintColor = Theme.gutter
+        setTerminal(attention: terminalAttention)
     }
 
     private func setTitle(_ b: NSButton, _ text: String) {
@@ -84,6 +107,15 @@ final class StatusBar: NSView {
         server.stringValue = serverText
         setTitle(branch, branchName ?? "")
     }
+
+    /// Terminal toggle state: orange dot = background output, green = an agent finished.
+    func setTerminal(attention: TerminalPanelController.Attention) {
+        terminalAttention = attention
+        terminalDot.isHidden = attention == .none
+        terminalDot.layer?.backgroundColor = (attention == .done ? NSColor.systemGreen : NSColor.systemOrange).cgColor
+    }
+    var terminalDotVisible: Bool { !terminalDot.isHidden }
+    func clickTerminalButton() { terminalTapped() }
 
     var encodingText: String { encoding.attributedTitle.string }
     var branchText: String { branch.attributedTitle.string }
@@ -108,5 +140,6 @@ final class StatusBar: NSView {
     @objc private func positionTapped() { onGoToLine?() }
     @objc private func indentTapped() { onChooseIndent?(indent) }
     @objc private func encodingTapped() { onChooseEncoding?(encoding) }
+    @objc private func terminalTapped() { onToggleTerminal?() }
     @objc private func branchTapped() { onShowGit?() }
 }

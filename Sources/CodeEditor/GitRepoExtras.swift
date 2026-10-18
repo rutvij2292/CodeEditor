@@ -44,7 +44,61 @@ struct BlameLine: Equatable {
     let author: String
     let date: Date
     let summary: String
+    var authorMail = ""
+    var committerTime: TimeInterval = 0
+    var boundary = false
+    var previousHash: String?
+    var previousPath: String?
     var isUncommitted: Bool { hash.allSatisfy { $0 == "0" } }
+}
+
+/// One commit of a blame result (strings are stored once per commit, not once per line).
+struct BlameCommit: Equatable {
+    let hash: String
+    var author = "", mail = "", summary = "", filename = ""
+    var authorTime: TimeInterval = 0, committerTime: TimeInterval = 0
+    var boundary = false
+    var previousHash: String?, previousPath: String?
+    var shortHash: String { String(hash.prefix(8)) }
+    var isUncommitted: Bool { hash.allSatisfy { $0 == "0" } }
+    var date: Date { Date(timeIntervalSince1970: authorTime) }
+}
+
+/// Compact blame of one file: a commit table plus one table index per line (4 bytes per line).
+struct BlameData: Equatable {
+    var commits: [BlameCommit] = []
+    var lineCommit: [UInt32] = []
+    var lineCount: Int { lineCommit.count }
+    func commitIndex(atLine line: Int) -> Int? {
+        guard line >= 0, line < lineCommit.count else { return nil }
+        let i = Int(lineCommit[line])
+        return i < commits.count ? i : nil
+    }
+    func commit(atLine line: Int) -> BlameCommit? { commitIndex(atLine: line).map { commits[$0] } }
+    /// Approximate resident size.
+    var approximateBytes: Int {
+        lineCommit.count * 4 + commits.reduce(0) { $0 + 160 + $1.author.utf8.count + $1.mail.utf8.count + $1.summary.utf8.count + $1.filename.utf8.count }
+    }
+    var lines: [BlameLine] {
+        lineCommit.enumerated().compactMap { (i, c) in
+            guard Int(c) < commits.count else { return nil }
+            let m = commits[Int(c)]
+            return BlameLine(line: i + 1, hash: m.hash, shortHash: m.shortHash, author: m.author, date: m.date, summary: m.summary,
+                             authorMail: m.mail, committerTime: m.committerTime, boundary: m.boundary,
+                             previousHash: m.previousHash, previousPath: m.previousPath)
+        }
+    }
+}
+
+/// Full commit details for the blame popover.
+struct GitCommitInfo: Equatable {
+    let hash: String
+    let author: String
+    let mail: String
+    let authorTime: TimeInterval
+    let message: String
+    let fileCount: Int
+    let parents: [String]
 }
 
 struct GitPushPreview {
@@ -265,46 +319,156 @@ extension GitRepo {
 
     // MARK: blame
 
-    func blame(path: String) throws -> [BlameLine] {
-        parseBlame(try git(["blame", "--porcelain", "--", path], optionalLocks: true))
+    /// `-w` ignores whitespace-only changes; `-M`/`-C` follow moved/copied lines modestly (blame has no `--follow`).
+    private static let blameArgs = ["blame", "--porcelain", "-w", "-M", "-C"]
+
+    /// Compact blame of the working-tree file. Fails for untracked, ignored or uncommitted paths.
+    func blameData(path: String) throws -> BlameData {
+        Self.parseBlameData(try git(Self.blameArgs + ["--", path], optionalLocks: true))
     }
+
+    func blame(path: String) throws -> [BlameLine] { try blameData(path: path).lines }
 
     /// Blame of an unsaved buffer: the content replaces the working copy (`--contents -`).
     func blameForBuffer(path: String, content: String) throws -> [BlameLine] {
-        parseBlame(try git(["blame", "--porcelain", "--contents", "-", "--", path], optionalLocks: true, input: Data(content.utf8)))
+        Self.parseBlameData(try git(Self.blameArgs + ["--contents", "-", "--", path], optionalLocks: true,
+                                    input: Data(content.utf8))).lines
     }
 
-    private func parseBlame(_ data: Data) -> [BlameLine] {
-        struct Meta { var author = "", time: TimeInterval = 0, summary = "" }
-        var metas: [String: Meta] = [:]
-        var out: [BlameLine] = []
-        var cur: (hash: String, line: Int)?
-        var curMeta = Meta()
-        for sub in String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = String(sub)
-            if line.hasPrefix("\t") {
-                guard let c = cur else { continue }
-                let m = metas[c.hash] ?? curMeta
-                metas[c.hash] = m
-                out.append(BlameLine(line: c.line, hash: c.hash, shortHash: String(c.hash.prefix(8)), author: m.author,
-                                     date: Date(timeIntervalSince1970: m.time), summary: m.summary))
-                cur = nil
-                continue
+    /// Parses `blame --porcelain` output byte-wise (20k lines in a few ms).
+    static func parseBlameData(_ data: Data) -> BlameData {
+        struct Key: Hashable { var a: UInt64, b: UInt64 }
+        var out = BlameData()
+        var index: [Key: Int] = [:]
+        var cur = -1, finalLine = 0
+        func hexValue(_ b: UInt8) -> UInt64? {
+            switch b {
+            case 48...57: return UInt64(b - 48)
+            case 97...102: return UInt64(b - 87)
+            default: return nil
             }
-            if cur == nil {
-                let p = line.split(separator: " ")
-                if p.count >= 3, p[0].count == 40, let final = Int(p[2]) {
-                    cur = (String(p[0]), final)
-                    curMeta = metas[String(p[0])] ?? Meta()
+        }
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            let p = raw.bindMemory(to: UInt8.self)
+            let n = p.count
+            guard let base = p.baseAddress else { return }
+            var pos = 0
+            func str(_ a: Int, _ b: Int) -> String { String(decoding: UnsafeBufferPointer(rebasing: p[a..<b]), as: UTF8.self) }
+            while pos < n {
+                var end = n
+                if let nl = memchr(base + pos, 10, n - pos) { end = base.distance(to: nl.assumingMemoryBound(to: UInt8.self)) }
+                if p[pos] == 9 {                     // content line
+                    if cur >= 0, finalLine > 0 {
+                        if finalLine > out.lineCommit.count {
+                            out.lineCommit.append(contentsOf: repeatElement(UInt32.max, count: finalLine - out.lineCommit.count))
+                        }
+                        out.lineCommit[finalLine - 1] = UInt32(cur)
+                    }
+                    cur = -1; finalLine = 0
+                } else if cur < 0 {                  // header: <hash> <orig> <final> [<count>]
+                    var sp = pos
+                    var valid = true
+                    var ka: UInt64 = 0, kb: UInt64 = 0
+                    while sp < end, p[sp] != 32 {
+                        if let v = hexValue(p[sp]) {
+                            let k = sp - pos
+                            if k < 16 { ka = ka << 4 | v } else if k < 32 { kb = kb << 4 | v }
+                        } else { valid = false }
+                        sp += 1
+                    }
+                    let hl = sp - pos
+                    if valid, hl == 40 || hl == 64 {
+                        // second number after the hash is the final line number
+                        var q = sp + 1, fields = 0, value = 0
+                        while q < end, fields < 2 {
+                            var num = 0
+                            while q < end, p[q] >= 48, p[q] <= 57 { num = num * 10 + Int(p[q] - 48); q += 1 }
+                            value = num; fields += 1; q += 1
+                        }
+                        finalLine = fields == 2 ? value : 0
+                        let key = Key(a: ka, b: kb)
+                        if let i = index[key] { cur = i } else {
+                            cur = out.commits.count
+                            index[key] = cur
+                            out.commits.append(BlameCommit(hash: str(pos, sp)))
+                        }
+                    }
+                } else {                             // key line of the current commit
+                    var sp = pos
+                    while sp < end, p[sp] != 32 { sp += 1 }
+                    let key = str(pos, sp)
+                    // only the first appearance of a commit carries details; skip work for anything else
+                    switch key {
+                    case "author", "author-mail", "author-time", "committer-time", "summary", "boundary", "previous", "filename": break
+                    default: pos = end + 1; continue
+                    }
+                    let value = sp < end ? str(sp + 1, end) : ""
+                    switch key {
+                    case "author": out.commits[cur].author = value
+                    case "author-mail": out.commits[cur].mail = value.trimmingCharacters(in: CharacterSet(charactersIn: "<>"))
+                    case "author-time": out.commits[cur].authorTime = TimeInterval(value) ?? 0
+                    case "committer-time": out.commits[cur].committerTime = TimeInterval(value) ?? 0
+                    case "summary": out.commits[cur].summary = value
+                    case "boundary": out.commits[cur].boundary = true
+                    case "previous":
+                        let parts = value.split(separator: " ", maxSplits: 1).map(String.init)
+                        out.commits[cur].previousHash = parts.first
+                        out.commits[cur].previousPath = parts.count > 1 ? parts[1] : nil
+                    default: out.commits[cur].filename = value
+                    }
                 }
-                continue
+                pos = end + 1
             }
-            if line.hasPrefix("author ") { curMeta.author = String(line.dropFirst(7)) }
-            else if line.hasPrefix("author-time ") { curMeta.time = TimeInterval(line.dropFirst(12)) ?? 0 }
-            else if line.hasPrefix("summary ") { curMeta.summary = String(line.dropFirst(8)) }
-            if let c = cur, line.hasPrefix("summary ") { metas[c.hash] = curMeta }
         }
         return out
+    }
+
+    // MARK: identity and commit details
+
+    private static var identityCache: [String: (name: String, email: String)] = [:]
+    private static var infoCache: [String: GitCommitInfo] = [:]
+    private static let cacheLock = NSLock()
+
+    /// `config user.name / user.email` of this repository (cached; used to show "You").
+    func userIdentity() -> (name: String, email: String) {
+        let key = root.path
+        Self.cacheLock.lock(); let hit = Self.identityCache[key]; Self.cacheLock.unlock()
+        if let hit { return hit }
+        func cfg(_ k: String) -> String {
+            ((try? text(["config", "--get", k])) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let id = (name: cfg("user.name"), email: cfg("user.email"))
+        Self.cacheLock.lock(); Self.identityCache[key] = id; Self.cacheLock.unlock()
+        return id
+    }
+
+    static func forgetCaches() {
+        cacheLock.lock(); identityCache.removeAll(); infoCache.removeAll(); cacheLock.unlock()
+    }
+
+    /// Message body, author, parents and changed-files count of a commit (cached, at most 300 entries).
+    func commitInfo(hash: String) throws -> GitCommitInfo {
+        let key = root.path + "|" + hash
+        Self.cacheLock.lock(); let hit = Self.infoCache[key]; Self.cacheLock.unlock()
+        if let hit { return hit }
+        let raw = try text(["show", "-s", "--no-color", "--format=%H%x1f%an%x1f%ae%x1f%at%x1f%P%x1f%B", hash])
+        let f = raw.split(separator: "\u{1f}", maxSplits: 5, omittingEmptySubsequences: false).map(String.init)
+        guard f.count >= 6 else { throw GitError(message: "Unknown commit") }
+        let files = (try? commitFiles(hash).count) ?? 0
+        let info = GitCommitInfo(hash: f[0].trimmingCharacters(in: .whitespacesAndNewlines), author: f[1], mail: f[2],
+                                 authorTime: TimeInterval(f[3]) ?? 0,
+                                 message: f[5].trimmingCharacters(in: .whitespacesAndNewlines), fileCount: files,
+                                 parents: f[4].split(separator: " ").map(String.init))
+        Self.cacheLock.lock()
+        if Self.infoCache.count >= 300 { Self.infoCache.removeAll() }
+        Self.infoCache[key] = info
+        Self.cacheLock.unlock()
+        return info
+    }
+
+    /// Current HEAD commit id ("" when there are no commits).
+    func headOID() -> String {
+        ((try? text(["rev-parse", "--verify", "-q", "HEAD"])) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: hooks

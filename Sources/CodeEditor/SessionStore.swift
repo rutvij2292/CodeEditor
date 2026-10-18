@@ -12,12 +12,19 @@ struct Session: Codable, Equatable {
         var selected: String?
         var height: Double
     }
+    /// Terminal dock: "right" | "bottom", width of the right dock, whether it was shown.
+    struct TerminalState: Codable, Equatable {
+        var dock: String
+        var width: Double
+        var visible: Bool
+    }
     var tabs: [TabState] = []
     var selected: String?
     /// x, y, width, height
     var windowFrame: [Double]?
     var sidebarWidth: Double?
     var bottom: BottomState?
+    var terminal: TerminalState?
     var expanded: [String] = []
 }
 

@@ -7,6 +7,9 @@ enum LanguageServers {
 
     /// Called FIRST by both Cmd-click and Cmd-B (go to definition) with the click / caret UTF-16 offset in the tab's text.
     /// Return true to consume the event (the LSP definition request is skipped), false/nil to continue as usual.
+    /// Root of the open project window that contains `url` (longest match), if any. Files under vendor/ or node_modules/ then share
+    /// the project's language server instead of starting a second one for the nested package (each costs 150–600 MB and re-indexes).
+    static var openProjectRoot: ((URL) -> URL?)?
     static var beforeDefinition: ((_ tab: EditorTab, _ utf16Offset: Int) -> Bool)?
     /// Cmd-hover shows LSP docs for the token; return true here for tokens `beforeDefinition` would handle to suppress that.
     static var suppressHoverUnderline: ((_ tab: EditorTab, _ utf16Offset: Int) -> Bool)?

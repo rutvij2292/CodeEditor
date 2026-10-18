@@ -14,6 +14,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     static var renameHandler: ((ProjectWindow) -> Void)?
     static var formatHandler: ((ProjectWindow) -> Void)?
 
+    /// Terminal integration hooks (Edit/View menu items). The integrator connects the terminal package's APIs here;
+    /// until set, Focus Terminal falls back to showing the terminal and the rest do nothing.
+    struct TerminalHandlers {
+        var sendFileReference: ((ProjectWindow) -> Void)?
+        var sendSelectionReference: ((ProjectWindow) -> Void)?
+        var sendSelectionText: ((ProjectWindow) -> Void)?
+        var focus: ((ProjectWindow) -> Void)?
+        var maximize: ((ProjectWindow) -> Void)?
+    }
+    static var terminalHandlers = TerminalHandlers()
+
+    /// Boolean preferences behind the View/Git menu checkmarks (`NSMenuItem.representedObject` holds the key).
+    static let preferenceToggles: [String: (get: () -> Bool, set: (Bool) -> Void)] = [
+        "showBreadcrumbs": ({ Prefs.showBreadcrumbs }, { Prefs.showBreadcrumbs = $0 }),
+        "inlineBlame": ({ Prefs.inlineBlame }, { Prefs.inlineBlame = $0 }),
+        "showIndentGuides": ({ Prefs.showIndentGuides }, { Prefs.showIndentGuides = $0 }),
+        "highlightCurrentLine": ({ Prefs.highlightCurrentLine }, { Prefs.highlightCurrentLine = $0 }),
+        "showLineNumbers": ({ Prefs.showLineNumbers }, { Prefs.showLineNumbers = $0 }),
+        "softWrap": ({ Prefs.softWrap }, { setSoftWrap($0) }),
+    ]
+
     /// The project window menu commands act on: the key window, else the last project window that was key
     /// (a QuickPicker or other panel can be key while a command runs), else the newest window.
     var active: ProjectWindow? {
@@ -31,6 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Theme.start()
+        applyCompletionPrefs()
+        NotificationCenter.default.addObserver(forName: Prefs.didChange, object: nil, queue: .main) { [weak self] note in
+            if let key = note.userInfo?["key"] as? String, key.hasPrefix("completion") { self?.applyCompletionPrefs() }
+        }
         CompletionSystem.start()
         CompletionSystem.symbolProvider = { [weak self] in self?.active?.symbolEntries ?? [] }
         LanguageServers.start()
@@ -38,6 +63,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         BracketColorizer.start()
         GitGutter.start()
         Formatter.start()
+        Self.terminalHandlers.sendFileReference = { $0.sendFileReference() }
+        Self.terminalHandlers.sendSelectionReference = { $0.sendSelectionReference() }
+        Self.terminalHandlers.sendSelectionText = { $0.sendSelectionText() }
+        Self.terminalHandlers.focus = { $0.toggleTerminalFocus() }
+        Self.terminalHandlers.maximize = { $0.maximizeTerminal() }
+        BlameController.onShowCommit = { [weak self] _, url in self?.active?.showCommitWindow { $0.showHistory(for: url) } }
+        LanguageServers.openProjectRoot = { [weak self] url in
+            let path = url.standardizedFileURL.path
+            return self?.windows.compactMap(\.root)
+                .filter { path.hasPrefix($0.path + "/") }
+                .max { $0.path.count < $1.path.count }
+        }
+        // Breadcrumb callbacks resolve their project window lazily (the tab isn't registered with a window yet when it opens).
+        EditorEvents.onOpen { [weak self] tab in
+            func owner() -> ProjectWindow? { self?.windows.first { $0.editors.values.contains { $0 === tab } } }
+            tab.projectRoot = { owner()?.root }
+            tab.onOpenURL = { url in owner()?.open(url) }
+        }
         LaravelNavigator.start()
         LaravelNavigator.openLocation = { [weak self] url, line, column in
             guard let w = self?.active else { return }
@@ -209,7 +252,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func renameSymbol(_ sender: Any?) { active.map { Self.renameHandler?($0) } }
     @objc func formatDocument(_ sender: Any?) { active.map { Self.formatHandler?($0) } }
     @objc func toggleReopenWindows(_ sender: Any?) { SessionStore.reopenOnLaunch.toggle() }
-    @objc func showTerminal(_ sender: Any?) { active?.showTerminal() }
+    @objc func focusBreadcrumbs(_ sender: Any?) { active?.current?.focusBreadcrumbs() }
+    @objc func showTerminal(_ sender: Any?) { active?.toggleTerminal() }
+    @objc func toggleBlameAnnotations(_ sender: Any?) { if let tab = active?.current { _ = BlameController.toggleAnnotate(for: tab) } }
     @objc func restartLanguageServers(_ sender: Any?) {
         if let root = active?.root { LanguageServers.restartAll(forRoot: root) }
     }
@@ -217,6 +262,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func toggleAutoSaveFocus(_ sender: Any?) { AutoSave.focusLossEnabled.toggle() }
     @objc func toggleAutoSaveTabSwitch(_ sender: Any?) { AutoSave.tabSwitchEnabled.toggle() }
     @objc func showLocalHistory(_ sender: Any?) { active?.showLocalHistory() }
+    @objc func showSettings(_ sender: Any?) { SettingsWindowController.shared.show() }
+    @objc func sendFileToTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.sendFileReference?($0) } }
+    @objc func sendSelectionReferenceToTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.sendSelectionReference?($0) } }
+    @objc func sendSelectionTextToTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.sendSelectionText?($0) } }
+    @objc func focusTerminal(_ sender: Any?) {
+        guard let w = active else { return }
+        if let focus = Self.terminalHandlers.focus { focus(w) } else { w.showTerminal() }
+    }
+    @objc func maximizeTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.maximize?($0) } }
+    @objc func togglePreference(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String, let t = Self.preferenceToggles[key] else { return }
+        t.set(!t.get())
+    }
+
+    /// Completion popup tuning lives in `Prefs`; `CompletionSystem` holds the live values.
+    private func applyCompletionPrefs() {
+        CompletionSystem.autoOpenMinChars = Prefs.completionMinChars
+        CompletionSystem.debounce = TimeInterval(Prefs.completionDelayMs) / 1000
+    }
 
     /// Cmd-Opt-L: the project's real formatter (Pint / Prettier / LSP); if none applies, the editor's safe re-indent.
     @objc func reformatCode(_ sender: Any?) {
@@ -241,9 +305,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         switch item.action {
         case #selector(toggleReopenWindows(_:)): item.state = SessionStore.reopenOnLaunch ? .on : .off
         case #selector(toggleIncludeVendor(_:)): item.state = ProjectIndex.includeVendor ? .on : .off
+        case #selector(toggleBlameAnnotations(_:)): item.state = active?.current.map { Blame.isAnnotating($0) } == true ? .on : .off
         case #selector(toggleFormatOnSave(_:)): item.state = Formatter.formatOnSave ? .on : .off
         case #selector(toggleAutoSaveFocus(_:)): item.state = AutoSave.focusLossEnabled ? .on : .off
         case #selector(toggleAutoSaveTabSwitch(_:)): item.state = AutoSave.tabSwitchEnabled ? .on : .off
+        case #selector(togglePreference(_:)):
+            if let key = item.representedObject as? String, let t = Self.preferenceToggles[key] { item.state = t.get() ? .on : .off }
         default: break
         }
         return true
