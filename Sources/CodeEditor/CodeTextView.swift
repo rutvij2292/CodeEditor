@@ -28,6 +28,7 @@ final class CodeTextView: NSTextView {
     /// Fired before every single-range edit (range, replacement length in UTF-16) so tab-stop trackers can follow the text.
     var onWillChange: ((NSRange, Int) -> Void)?
     override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        folds.unfold(intersecting: affectedCharRange)      // any edit touching folded text unfolds it first
         let ok = super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
         if ok { onWillChange?(affectedCharRange, (replacementString as NSString?)?.length ?? 0) }
         return ok
@@ -62,6 +63,16 @@ final class CodeTextView: NSTextView {
     private var appliedSoftWrap: Bool?
     private var lastCaretLineRect: NSRect = .zero
 
+    /// Code folding engine (TextKit 1 glyph hiding); see FoldController.
+    private(set) var folds: FoldController!
+    /// True while a keyboard command / mouse gesture moves the selection (snap to fold edges instead of unfolding).
+    var userNavigating = false
+    /// Overrides the file name used to pick the folding language (defaults to the owning tab's file name).
+    var foldFileName: String?
+    /// Fired after the folded set or the detected regions changed (session persistence, gutter redraw).
+    var onFoldsChange: (() -> Void)?
+    static let foldsDidChangeNotification = Notification.Name("CodeEditor.foldsDidChange")
+
     override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
         super.init(frame: frameRect, textContainer: container)
         setup()
@@ -70,6 +81,8 @@ final class CodeTextView: NSTextView {
     required init?(coder: NSCoder) { super.init(coder: coder); setup() }
 
     private func setup() {
+        folds = FoldController(textView: self)
+        folds.onFirstCompute = { [weak self] in self?.applyOpenFolds() }
         GitGutter.start()   // idempotent; registers before the owning tab fires its open hook
         applyThemeColors()
         let nc = NotificationCenter.default
@@ -95,6 +108,7 @@ final class CodeTextView: NSTextView {
 
     override func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = Self.softWrapEnabled ? .on : .off; return true }
+        if let a = item.action, Self.foldActions.contains(a) { return Prefs.foldingEnabled && !folds.regions.isEmpty }
         return super.validateMenuItem(item)
     }
 
@@ -166,7 +180,19 @@ final class CodeTextView: NSTextView {
         return rect
     }
 
+    override func setSelectedRange(_ charRange: NSRange, affinity: NSSelectionAffinity, stillSelecting stillSelectingFlag: Bool) {
+        var r = charRange
+        if folds.hasHidden, let n = folds.normalized([NSValue(range: charRange)], navigating: userNavigating, previous: selectedRanges.first?.rangeValue).first {
+            r = n.rangeValue
+        }
+        super.setSelectedRange(r, affinity: affinity, stillSelecting: stillSelectingFlag)
+    }
+
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        var ranges = ranges
+        if folds.hasHidden {
+            ranges = folds.normalized(ranges, navigating: userNavigating, previous: selectedRanges.first?.rangeValue)
+        }
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
         if !lastCaretLineRect.isEmpty { setNeedsDisplay(lastCaretLineRect) }
         lastCaretLineRect = caretLineRect() ?? .zero
@@ -181,6 +207,11 @@ final class CodeTextView: NSTextView {
             lastCaretLineRect = band
         }
         drawIndentGuides(in: rect)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        drawFoldChips(in: dirtyRect)     // after the text: syntax backgrounds (comments) must not paint over the chips
     }
 
     private var charWidth: CGFloat { ("0" as NSString).size(withAttributes: [.font: font ?? Theme.font]).width }
@@ -221,6 +252,11 @@ final class CodeTextView: NSTextView {
             if g.length > 1 { y1 = lm.lineFragmentRect(forGlyphAt: NSMaxRange(g) - 1, effectiveRange: nil).maxY }
             lines.append(L(y0: f0.minY, y1: y1, cols: indentColumns(s, st, ce), st: st, en: en))
             glyph = max(NSMaxRange(g), glyph + 1)
+            if folds.hasHidden, let h = folds.hiddenRange(startingAt: ce), h.end > ce {
+                // The row continues past folded lines: skip them (and the closer's remainder) in one step.
+                let next = folds.nextRowStart(from: st, in: s)
+                glyph = max(glyph, next >= s.length ? lm.numberOfGlyphs : lm.glyphIndexForCharacter(at: next))
+            }
         }
         guard !lines.isEmpty else { return }
 
@@ -1075,9 +1111,109 @@ final class CodeTextView: NSTextView {
 
     private func isCloserOnly(_ c: unichar) -> Bool { c == 41 || c == 93 || c == 125 }
 
+    // MARK: - Folding hooks
+
+    override func shouldChangeText(inRanges affectedRanges: [NSValue], replacementStrings: [String]?) -> Bool {
+        if folds.hasHidden { for v in affectedRanges { folds.unfold(intersecting: v.rangeValue) } }
+        return super.shouldChangeText(inRanges: affectedRanges, replacementStrings: replacementStrings)
+    }
+
+    override func doCommand(by selector: Selector) {
+        let was = userNavigating
+        userNavigating = true
+        defer { userNavigating = was }
+        let before = selectedRanges.first?.rangeValue
+        super.doCommand(by: selector)
+        snapAfterNavigation(previous: before)
+    }
+
+    /// AppKit moves the caret for some commands through paths we cannot override; re-snap afterwards.
+    private func snapAfterNavigation(previous: NSRange?) {
+        guard folds.hasHidden else { return }
+        let now = selectedRanges
+        let fixed = folds.normalized(now, navigating: true, previous: previous)
+        if fixed != now {
+            super.setSelectedRanges(fixed, affinity: selectionAffinity, stillSelecting: false)
+            super.scrollRangeToVisible(selectedRange())
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if folds.hasHidden, let r = folds.hiddenRange(atChipPoint: convert(event.locationInWindow, from: nil)) {
+            folds.expand(r, recursive: event.modifierFlags.contains(.option))
+            return
+        }
+        let was = userNavigating
+        userNavigating = true
+        defer { userNavigating = was }
+        let before = selectedRanges.first?.rangeValue
+        super.mouseDown(with: event)
+        snapAfterNavigation(previous: before)
+    }
+
+    override func scrollRangeToVisible(_ range: NSRange) {
+        if folds.hasHidden, !userNavigating { folds.unfold(intersecting: range) }
+        super.scrollRangeToVisible(range)
+    }
+
+    override func showFindIndicator(for charRange: NSRange) {
+        if folds.hasHidden { folds.unfold(intersecting: charRange) }
+        super.showFindIndicator(for: charRange)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard folds.hasHidden, let lm = layoutManager, let tc = textContainer else { return }
+        let glyphs = lm.glyphRange(forBoundingRect: visibleRect, in: tc)
+        let chars = lm.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        for h in folds.hiddenRanges(overlapping: chars) {
+            if let r = folds.chipRect(for: h) { addCursorRect(r, cursor: .pointingHand) }
+        }
+    }
+
+    /// Draws the placeholder chip of every visible folded range.
+    private func drawFoldChips(in rect: NSRect) {
+        guard folds.hasHidden, let lm = layoutManager, let tc = textContainer else { return }
+        let origin = textContainerOrigin
+        let local = NSRect(x: rect.minX - origin.x, y: rect.minY - origin.y, width: rect.width, height: rect.height)
+        let glyphs = lm.glyphRange(forBoundingRect: local, in: tc)
+        let chars = lm.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        let dark = Theme.isDark
+        for h in folds.hiddenRanges(overlapping: chars) {
+            guard let r = folds.chipRect(for: h), r.intersects(rect) else { continue }
+            let fill = Theme.foreground.withAlphaComponent(dark ? 0.14 : 0.09)
+            let stroke = Theme.foreground.withAlphaComponent(dark ? 0.22 : 0.16)
+            let path = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 3, yRadius: 3)
+            fill.setFill(); path.fill()
+            stroke.setStroke(); path.lineWidth = 1; path.stroke()
+            let font = folds.chipFont(at: h.start)
+            let label = h.placeholder as NSString
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.foreground.withAlphaComponent(dark ? 0.75 : 0.6)]
+            let size = label.size(withAttributes: attrs)
+            label.draw(at: NSPoint(x: r.minX + (r.width - size.width) / 2, y: r.minY + (r.height - size.height) / 2), withAttributes: attrs)
+        }
+    }
+
+    /// Called by the fold engine after folds or regions changed.
+    func foldsDidChange() {
+        onFoldsChange?()
+        NotificationCenter.default.post(name: Self.foldsDidChangeNotification, object: self)
+    }
+
+    override func deleteForward(_ sender: Any?) {
+        let sel = selectedRange()
+        if selectedRanges.count == 1, sel.length == 0, let h = folds.hiddenRange(startingAt: sel.location) {
+            folds.unfold(intersecting: NSRange(location: h.start + 1, length: 0)); return     // Delete at a fold's edge expands it
+        }
+        super.deleteForward(sender)
+    }
+
     override func deleteBackward(_ sender: Any?) {
         let sel = selectedRange()
         let s = ns
+        if selectedRanges.count == 1, sel.length == 0, let h = folds.hidden.first(where: { $0.end == sel.location }) {
+            folds.unfold(intersecting: NSRange(location: h.start + 1, length: 0)); return
+        }
         if selectedRanges.count == 1, sel.length == 0, sel.location > 0, sel.location < s.length, !hasMarkedText(),
            let close = Self.pairs[s.character(at: sel.location - 1)], s.character(at: sel.location) == close {
             let r = NSRange(location: sel.location - 1, length: 2)

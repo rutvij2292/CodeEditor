@@ -8,30 +8,56 @@ struct GutterMarker: Equatable {
     var kind: Kind
 }
 
-/// Line numbers as a plain sibling view of the scroll view (NSRulerView overlays content on recent macOS).
+/// Line numbers, fold chevrons and change bars as a plain sibling view of the scroll view (NSRulerView overlays content on recent macOS).
 final class GutterView: NSView {
     private weak var textView: NSTextView?
-    private static let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-    private static let boldFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
-    private static let digitWidth = ("0" as NSString).size(withAttributes: [.font: font]).width
+    private var codeView: CodeTextView? { textView as? CodeTextView }
     private static let barWidth: CGFloat = 3
-    private static let rightPad: CGFloat = 10      // text right edge -> gutter right edge (room for the bars)
+    private static let barZone: CGFloat = 10       // right edge strip reserved for the change bars
+    private static let chevronZone: CGFloat = 14   // fold chevron column left of the bars
     private static let leftPad: CGFloat = 8
+    private static let numberGap: CGFloat = 4
     override var isFlipped: Bool { true }
 
     /// Change markers (git etc.). Setting redraws.
     var markers: [GutterMarker] = [] { didSet { if markers != oldValue { needsDisplay = true } } }
     /// Click on a marker bar; the rect is the marker's extent in this view's coordinates.
     var onMarkerClick: ((GutterMarker, NSRect) -> Void)?
-    /// Called with the preferred width when the number of digits changes.
+    /// Called with the preferred width when the number of digits (or the font / prefs) changes.
     var onWidthChange: ((CGFloat) -> Void)?
 
-    private(set) var preferredWidth: CGFloat = GutterView.width(forDigits: 3)
+    private(set) var preferredWidth: CGFloat = 40
     private var lineCount = 1
-    private var lineInfos: [(line: Int, y0: CGFloat, y1: CGFloat)] = []
+    /// One entry per visual row: the first logical line, the last one folded into the row, and its y extent.
+    private struct Row { var line: Int; var endLine: Int; var y0: CGFloat; var y1: CGFloat; var firstHeight: CGFloat }
+    private var rows: [Row] = []
+    private var hoverY: CGFloat?
+    private var trackingArea: NSTrackingArea?
 
-    private static func width(forDigits d: Int) -> CGFloat {
-        ceil(CGFloat(max(3, d)) * digitWidth) + leftPad + rightPad
+    // Fonts follow the editor (Settings changes them live).
+    private var fontKey = ""
+    private var numberFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    private var boldNumberFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
+    private var digitWidth: CGFloat = 7.2
+
+    private var showsNumbers: Bool { Prefs.showLineNumbers }
+    private var showsChevrons: Bool { Prefs.foldingEnabled }
+    private var rightPad: CGFloat { Self.barZone + (showsChevrons ? Self.chevronZone : 0) }
+
+    private func refreshFonts() {
+        let base = textView?.font ?? Theme.font
+        let key = "\(base.fontName)-\(base.pointSize)"
+        guard key != fontKey else { return }
+        fontKey = key
+        numberFont = base.withSize(max(9, (base.pointSize - 1).rounded()))
+        boldNumberFont = NSFontManager.shared.convert(numberFont, toHaveTrait: .boldFontMask)
+        digitWidth = ("0" as NSString).size(withAttributes: [.font: numberFont]).width
+    }
+
+    private func width(forDigits d: Int) -> CGFloat {
+        refreshFonts()
+        let numbers = showsNumbers ? ceil(CGFloat(max(3, d)) * digitWidth) + Self.leftPad + Self.numberGap : 4
+        return numbers + rightPad
     }
 
     init(textView: NSTextView, scrollView: NSScrollView) {
@@ -46,91 +72,136 @@ final class GutterView: NSView {
         textView.postsFrameChangedNotifications = true
         nc.addObserver(self, selector: #selector(refresh), name: NSView.frameDidChangeNotification, object: textView)
         nc.addObserver(self, selector: #selector(refresh), name: Theme.didChange, object: nil)
+        nc.addObserver(self, selector: #selector(prefsChanged), name: Prefs.didChange, object: nil)
+        nc.addObserver(self, selector: #selector(refresh), name: CodeTextView.foldsDidChangeNotification, object: textView)
         updateLineCount()
+        preferredWidth = width(forDigits: String(lineCount).count)
         DispatchQueue.main.async { [weak self] in self?.updateLineCount(); self?.needsDisplay = true }
     }
     required init?(coder: NSCoder) { fatalError() }
 
     @objc private func refresh() { needsDisplay = true }
     @objc private func textChanged() { updateLineCount(); needsDisplay = true }
+    @objc private func prefsChanged() { fontKey = ""; updateLineCount(); needsDisplay = true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = trackingArea { removeTrackingArea(t) }
+        let t = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(t)
+        trackingArea = t
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        hoverY = convert(event.locationInWindow, from: nil).y
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) { hoverY = nil; needsDisplay = true }
 
     private func updateLineCount() {
-        guard let s = textView?.string as NSString? else { return }
-        var n = 1, pos = 0
-        let len = s.length
-        var buf = [unichar](repeating: 0, count: 8192)
-        while pos < len {
-            let chunk = min(buf.count, len - pos)
-            s.getCharacters(&buf, range: NSRange(location: pos, length: chunk))
-            for i in 0..<chunk where buf[i] == 10 { n += 1 }
-            pos += chunk
+        guard let tv = textView else { return }
+        if let cv = codeView { lineCount = cv.folds.lineCount }
+        else {
+            let s = tv.string as NSString
+            var n = 1, pos = 0
+            let len = s.length
+            var buf = [unichar](repeating: 0, count: 8192)
+            while pos < len {
+                let chunk = min(buf.count, len - pos)
+                s.getCharacters(&buf, range: NSRange(location: pos, length: chunk))
+                for i in 0..<chunk where buf[i] == 10 { n += 1 }
+                pos += chunk
+            }
+            lineCount = n
         }
-        lineCount = n
-        let w = Self.width(forDigits: String(n).count)
+        let w = width(forDigits: String(lineCount).count)
         if w != preferredWidth {
             preferredWidth = w
             onWidthChange?(w)
         }
     }
 
-    /// Y extent (view coordinates) of the given logical line from the last draw, if visible.
+    /// Y extent (view coordinates) of the given logical line from the last draw, if visible. A folded line maps to its row.
     private func extent(ofLine line: Int) -> (CGFloat, CGFloat)? {
-        guard let first = lineInfos.first, line >= first.line, line - first.line < lineInfos.count else { return nil }
-        let i = lineInfos[line - first.line]
-        return (i.y0, i.y1)
+        var lo = 0, hi = rows.count - 1
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if line < rows[mid].line { hi = mid - 1 } else if line > rows[mid].endLine { lo = mid + 1 } else { return (rows[mid].y0, rows[mid].y1) }
+        }
+        return nil
     }
 
     override func draw(_ dirtyRect: NSRect) {
         Theme.background.setFill()
         bounds.fill()
-        lineInfos.removeAll(keepingCapacity: true)
+        rows.removeAll(keepingCapacity: true)
         guard let tv = textView,
               let layout = tv.layoutManager, let container = tv.textContainer else { return }
+        refreshFonts()
         let text = tv.string as NSString
         let inset = tv.textContainerInset.height
+        let fc = codeView?.folds
         let visible = layout.glyphRange(forBoundingRect: tv.visibleRect, in: container)
-        let firstChar = layout.characterIndexForGlyph(at: visible.location)
+        var firstChar = text.length == 0 ? 0 : layout.characterIndexForGlyph(at: min(visible.location, max(0, layout.numberOfGlyphs - 1)))
+        if let h = fc?.hiddenRange(containing: firstChar) { firstChar = h.start }     // the visible top is a folded row's tail
 
+        // Number of the first visible line.
         var line = 1
-        var i = 0
-        while i < firstChar {
-            let r = text.range(of: "\n", options: [], range: NSRange(location: i, length: firstChar - i))
-            if r.location == NSNotFound { break }
-            line += 1
-            i = NSMaxRange(r)
+        if let fc { line = fc.lineNumber(at: firstChar) } else {
+            var i = 0
+            while i < firstChar {
+                let r = text.range(of: "\n", options: [], range: NSRange(location: i, length: firstChar - i))
+                if r.location == NSNotFound { break }
+                line += 1
+                i = NSMaxRange(r)
+            }
         }
 
         let caret = min(tv.selectedRange().location, text.length)
-        let plain: [NSAttributedString.Key: Any] = [.font: Self.font, .foregroundColor: Theme.gutter]
-        let active: [NSAttributedString.Key: Any] = [.font: Self.boldFont, .foregroundColor: Theme.foreground]
-        let textRight = bounds.width - Self.rightPad
+        let plain: [NSAttributedString.Key: Any] = [.font: numberFont, .foregroundColor: Theme.gutter]
+        let active: [NSAttributedString.Key: Any] = [.font: boldNumberFont, .foregroundColor: Theme.foreground]
+        let textRight = bounds.width - rightPad
+        let showNumbers = showsNumbers
         func drawLabel(_ n: Int, y0: CGFloat, height: CGFloat, isActive: Bool) {
+            guard showNumbers else { return }
             let label = "\(n)" as NSString
             let attrs = isActive ? active : plain
             let size = label.size(withAttributes: attrs)
             label.draw(at: NSPoint(x: textRight - size.width, y: y0 + (height - size.height) / 2), withAttributes: attrs)
         }
 
-        var glyph = visible.location
         let endGlyph = NSMaxRange(visible)
-        while glyph < endGlyph {
-            let charIdx = layout.characterIndexForGlyph(at: glyph)
-            let lineRange = text.lineRange(for: NSRange(location: charIdx, length: 0))
+        var pos = text.length == 0 ? 0 : text.lineRange(for: NSRange(location: min(firstChar, text.length - 1), length: 0)).location
+        while text.length > 0, pos < text.length {
+            let glyph = layout.glyphIndexForCharacter(at: pos)
+            if glyph >= endGlyph, !rows.isEmpty { break }
+            var st = 0, en = 0, ce = 0
+            text.getLineStart(&st, end: &en, contentsEnd: &ce, for: NSRange(location: pos, length: 0))
             let frag = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
             let y = convert(NSPoint(x: 0, y: frag.minY + inset), from: tv).y
-            let lineGlyphs = layout.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
-            var y1 = y + frag.height
-            if lineGlyphs.length > 1 {
-                let lastFrag = layout.lineFragmentRect(forGlyphAt: NSMaxRange(lineGlyphs) - 1, effectiveRange: nil)
-                y1 = convert(NSPoint(x: 0, y: lastFrag.maxY + inset), from: tv).y
+            var rowEnd = en, lastLineStart = st, endLine = line
+            var isActive = caret >= st && caret <= ce
+            if let fc {
+                var curCE = ce
+                while let h = fc.hiddenRange(startingAt: curCE), h.end > curCE {
+                    var s2 = 0, e2 = 0, c2 = 0
+                    text.getLineStart(&s2, end: &e2, contentsEnd: &c2, for: NSRange(location: min(h.end, text.length), length: 0))
+                    rowEnd = e2; lastLineStart = s2; curCE = c2
+                    if caret > h.start && caret <= c2 { isActive = true }
+                }
+                if rowEnd != en { endLine = fc.lineNumber(at: lastLineStart) }
             }
-            var st = 0, en = 0, ce = 0
-            text.getLineStart(&st, end: &en, contentsEnd: &ce, for: lineRange)
-            let isActive = caret >= st && caret <= ce
+            var y1 = y + frag.height
+            let lastGlyph = layout.glyphIndexForCharacter(at: max(st, rowEnd - 1))
+            if lastGlyph > glyph {
+                let lastFrag = layout.lineFragmentRect(forGlyphAt: lastGlyph, effectiveRange: nil)
+                y1 = max(y1, convert(NSPoint(x: 0, y: lastFrag.maxY + inset), from: tv).y)
+            }
             drawLabel(line, y0: y, height: frag.height, isActive: isActive)
-            lineInfos.append((line, y, y1))
-            glyph = max(NSMaxRange(lineGlyphs), glyph + 1)
-            line += 1
+            rows.append(Row(line: line, endLine: endLine, y0: y, y1: y1, firstHeight: frag.height))
+            pos = rowEnd
+            line = endLine + 1
         }
         // A trailing empty line (file ends with \n, or empty file) has no glyph; number it explicitly.
         if text.length == 0 || (text.character(at: text.length - 1) == 10 && endGlyph >= layout.numberOfGlyphs) {
@@ -138,11 +209,50 @@ final class GutterView: NSView {
             if extra.height > 0 {
                 let y = convert(NSPoint(x: 0, y: extra.minY + inset), from: tv).y
                 drawLabel(line, y0: y, height: extra.height, isActive: caret == text.length)
-                lineInfos.append((line, y, y + extra.height))
+                rows.append(Row(line: line, endLine: line, y0: y, y1: y + extra.height, firstHeight: extra.height))
             }
         }
+        drawChevrons(caret: caret)
         drawMarkers()
     }
+
+    // MARK: fold chevrons
+
+    private var chevronMidX: CGFloat { bounds.width - Self.barZone - Self.chevronZone / 2 }
+
+    private func drawChevrons(caret: Int) {
+        guard showsChevrons, let cv = codeView else { return }
+        let caretLine = cv.folds.lineNumber(at: caret)
+        let hovering = hoverY != nil
+        let midX = chevronMidX
+        for row in rows {
+            guard let control = cv.foldControl(forLine: row.line) else { continue }
+            let onCaretRow = caretLine >= row.line && caretLine <= row.endLine
+            guard control.collapsed || onCaretRow || hovering else { continue }
+            let midY = row.y0 + row.firstHeight / 2
+            let isHot = hoverY.map { $0 >= row.y0 && $0 < row.y1 } ?? false
+            let color = control.collapsed ? Theme.foreground.withAlphaComponent(isHot ? 0.95 : 0.7)
+                                          : Theme.gutter.withAlphaComponent(isHot ? 1 : 0.8)
+            color.setStroke()
+            let p = NSBezierPath()
+            p.lineWidth = 1.4
+            p.lineCapStyle = .round
+            p.lineJoinStyle = .round
+            if control.collapsed {            // right-pointing
+                p.move(to: NSPoint(x: midX - 2, y: midY - 3.5))
+                p.line(to: NSPoint(x: midX + 2.5, y: midY))
+                p.line(to: NSPoint(x: midX - 2, y: midY + 3.5))
+            } else {                          // down-pointing
+                p.move(to: NSPoint(x: midX - 3.5, y: midY - 2))
+                p.line(to: NSPoint(x: midX, y: midY + 2.5))
+                p.line(to: NSPoint(x: midX + 3.5, y: midY - 2))
+            }
+            p.stroke()
+        }
+    }
+
+    /// The first logical line of the row under a y position of the last draw (test hook / click handling).
+    func rowLine(atY y: CGFloat) -> Int? { rows.first { y >= $0.y0 && y < $0.y1 }?.line }
 
     // MARK: markers
 
@@ -161,7 +271,7 @@ final class GutterView: NSView {
     }
 
     private func drawMarkers() {
-        guard !markers.isEmpty, let first = lineInfos.first?.line, let last = lineInfos.last?.line else { return }
+        guard !markers.isEmpty, let first = rows.first?.line, let last = rows.last?.endLine else { return }
         let x = bounds.width - Self.barWidth - 1
         for m in markers {
             Self.color(for: m.kind).setFill()
@@ -189,8 +299,8 @@ final class GutterView: NSView {
                 guard let y = wedgeY(before: m.lines.lowerBound), abs(p.y - y) <= 5 else { continue }
                 return (m, NSRect(x: bounds.width - 8, y: y - 5, width: 8, height: 10))
             }
-            guard let top = extent(ofLine: max(m.lines.lowerBound, lineInfos.first?.line ?? 0))?.0,
-                  let bottom = extent(ofLine: min(m.lines.upperBound - 1, lineInfos.last?.line ?? 0))?.1,
+            guard let top = extent(ofLine: max(m.lines.lowerBound, rows.first?.line ?? 0))?.0,
+                  let bottom = extent(ofLine: min(m.lines.upperBound - 1, rows.last?.endLine ?? 0))?.1,
                   p.y >= top, p.y < bottom else { continue }
             return (m, NSRect(x: bounds.width - Self.barWidth - 1, y: top, width: Self.barWidth, height: bottom - top))
         }
@@ -199,15 +309,23 @@ final class GutterView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        if p.x >= bounds.width - Self.rightPad, let (m, r) = marker(at: p) {
+        if p.x >= bounds.width - Self.barZone, let (m, r) = marker(at: p) {
             onMarkerClick?(m, r)
+            return
+        }
+        if showsChevrons, let cv = codeView, p.x >= bounds.width - Self.barZone - Self.chevronZone, p.x < bounds.width - Self.barZone + 2,
+           let line = rowLine(atY: p.y), cv.foldControl(forLine: line) != nil {
+            cv.toggleFold(atLine: line, recursive: event.modifierFlags.contains(.option))
+            needsDisplay = true
             return
         }
         super.mouseDown(with: event)
     }
 
-    /// Test hook: layout of the last draw (line number, y0, y1).
-    var drawnLines: [(line: Int, y0: CGFloat, y1: CGFloat)] { lineInfos }
+    /// Test hook: layout of the last draw (first line of each row, y0, y1).
+    var drawnLines: [(line: Int, y0: CGFloat, y1: CGFloat)] { rows.map { ($0.line, $0.y0, $0.y1) } }
+    /// Test hook: rows including the last logical line folded into each.
+    var drawnRows: [(line: Int, endLine: Int, y0: CGFloat, y1: CGFloat)] { rows.map { ($0.line, $0.endLine, $0.y0, $0.y1) } }
 }
 
 /// Gutter + scroll view side by side.
