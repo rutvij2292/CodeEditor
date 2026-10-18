@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         LanguageServers.openLocation = { [weak self] url, line, _ in self?.active?.open(url, line: line) }
         BracketColorizer.start()
         GitGutter.start()
+        Formatter.start()
         Self.installLanguageHandlers()
         NSApp.mainMenu = MainMenu.build(app: self)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
@@ -193,6 +194,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func renameSymbol(_ sender: Any?) { active.map { Self.renameHandler?($0) } }
     @objc func formatDocument(_ sender: Any?) { active.map { Self.formatHandler?($0) } }
     @objc func toggleReopenWindows(_ sender: Any?) { SessionStore.reopenOnLaunch.toggle() }
+    @objc func toggleFormatOnSave(_ sender: Any?) { Formatter.formatOnSave.toggle() }
+
+    /// Cmd-Opt-L: the project's real formatter (Pint / Prettier / LSP); if none applies, the editor's safe re-indent.
+    @objc func reformatCode(_ sender: Any?) {
+        guard let tab = active?.current else { return }
+        let fallback = { tab.textView.reformatCode(nil) }
+        let hasSelection = tab.textView.selectedRange().length > 0
+        let finish: (Formatter.Result) -> Void = { result in
+            switch result {
+            case .unavailable, .failed: fallback()
+            default: break
+            }
+        }
+        if hasSelection { Formatter.formatSelection(tab, completion: finish) } else { Formatter.format(tab, completion: finish) }
+    }
+
     @objc func toggleIncludeVendor(_ sender: Any?) {
         ProjectIndex.includeVendor.toggle()
         windows.forEach { $0.reindex() }
@@ -202,6 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         switch item.action {
         case #selector(toggleReopenWindows(_:)): item.state = SessionStore.reopenOnLaunch ? .on : .off
         case #selector(toggleIncludeVendor(_:)): item.state = ProjectIndex.includeVendor ? .on : .off
+        case #selector(toggleFormatOnSave(_:)): item.state = Formatter.formatOnSave ? .on : .off
         default: break
         }
         return true
@@ -262,8 +280,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         formatHandler = { w in
             guard let tab = w.current else { return }
-            if !LanguageServers.formatDocument(in: tab, completion: nil) {
-                unavailable(w, "Format Document isn’t available", "No formatter is available for this file. Use Reformat Code (⌥⌘L) to re-indent safely.")
+            Formatter.format(tab) { result in
+                switch result {
+                case .formatted, .unchanged: break
+                case .unavailable(let reason): unavailable(w, "Format Document isn’t available", reason + "\nUse Reformat Code (⌥⌘L) to re-indent safely.")
+                case .failed(let tool, let message): unavailable(w, "\(tool) could not format this file", message)
+                }
             }
         }
     }
