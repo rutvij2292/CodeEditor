@@ -48,6 +48,7 @@ enum MainMenu {
         main.addItem(menu("File", [
             item("Open Project…", #selector(AppDelegate.openProjectPanel(_:)), "o", [.command, .control], target: a),
             recent,
+            item("Open Project in New Instance…", #selector(AppDelegate.openProjectInNewInstancePanel(_:)), target: a),
             item("Recent Projects…", #selector(AppDelegate.showRecentProjects(_:)), "p", [.command, .shift], target: a),
             item("Reopen Windows on Launch", #selector(AppDelegate.toggleReopenWindows(_:)), target: a),
             sep,

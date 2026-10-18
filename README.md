@@ -38,6 +38,11 @@ Enter a PR number (or URL), resolve the conflicts in a 3-way merge, then commit 
 ```
 Requires the Swift toolchain (`swift build --build-system native` is used). On another Mac, the first launch of an ad-hoc signed app needs right-click → Open.
 
+## One instance or many
+By default every project opens as a window in one process, which shares the Swift runtime, themes and caches, so it uses the least RAM. For crash and language-server isolation (one project's Intelephense or Volar can't slow or take down another), use File ▸ Open Project in New Instance, hold ⌥ in File ▸ Open Recent, or set Settings ▸ Projects ▸ Open projects in ▸ New instance. Each extra instance is a separate process and costs roughly 60–90 MB more, plus its own language servers.
+
+A project open in another instance is focused instead of being opened twice (`~/Library/Application Support/CodeEditor/instances`, PID-checked, stale entries from crashes are ignored). The first instance owns window restore; instances started with `--project <path>` (what "new instance" runs: `open -n -a Kode.app --args --project <path>`) open only that folder and never overwrite the restore list.
+
 ## Checks
 `CE_SELFTEST=1 dist/Kode.app/Contents/MacOS/Kode` runs the logic self-tests, and `CE_SNAPSHOT=1` renders headless screenshots (the images above come from it, using a throwaway sample project).
 

@@ -84,6 +84,7 @@ enum SelfTest {
                     try? fm.removeItem(at: LocalHistory.root)
                     SelfTestBranches.run()
                     SelfTestPR.run()
+                    SelfTestInstances.run()
                     viewerChecks(app: app, w: w) {
                         SelfTestPrettierReal.run(w: w) {
                             SelfTestPerf.run(app: app)

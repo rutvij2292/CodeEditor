@@ -122,6 +122,9 @@ final class GeneralPane: SettingsPane {
 
         section("Projects")
         checkbox("Restore windows on launch", label: "Startup", get: { SessionStore.reopenOnLaunch }, set: { SessionStore.reopenOnLaunch = $0 })
+        popup("Open projects in", ["Same instance", "New instance"],
+              help: "New instance starts a separate Kode process per project: a crash or heavy language server in one project can't affect the others, at roughly 60–90 MB of extra memory each. A project already open in another instance is focused instead.",
+              get: { Prefs.openProjectsIn == "new" ? 1 : 0 }, set: { Prefs.openProjectsIn = $0 == 1 ? "new" : "same" })
         checkbox("Include vendor in Go to File", label: "Search",
                  help: "Lists files inside vendor/ in Go to File (slower indexing on large projects).",
                  get: { ProjectIndex.includeVendor },
