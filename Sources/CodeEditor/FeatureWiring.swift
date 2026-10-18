@@ -19,6 +19,7 @@ extension ProjectWindow {
         installHttpPanel(root: root)
         installTerminalPanel(root: root)
         installChangeReview(root: root)
+        installTestsPanel(root: root)
         installClaudeBridge()
         PlanSupport.start()
         onFindInFiles = { [weak self] in self?.showFind(replace: false) }

@@ -90,12 +90,15 @@ enum SelfTest {
                     viewerChecks(app: app, w: w) {
                         SelfTestHttp.run(w: w) {
                             SelfTestChangeReview.run(w: w) {
-                                SelfTestPrettierReal.run(w: w) {
-                                    SelfTestPlans.run(w: w)
-                                    SelfTestPerf.run(app: app)
-                                    finish()
+                                SelfTestTestRunner.run(w: w) {
+                                    SelfTestPrettierReal.run(w: w) {
+                                        SelfTestPlans.run(w: w)
+                                        SelfTestPerf.run(app: app)
+                                        finish()
+                                    }
                                 }
                             }
+                        }
                         }
                     }
                     }

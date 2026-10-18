@@ -158,6 +158,7 @@ enum MainMenu {
             item("Move Caret to Matching Brace", #selector(BracketColorizer.moveCaretToMatchingBrace(_:)), "m", [.command, .shift], target: BracketColorizer.shared),
         ]))
 
+        main.addItem(TestActions.menuItem())
         main.addItem(menu("Git", [
             item("Commit…", #selector(AppDelegate.commitChanges(_:)), "k", target: a),
             item("Push…", #selector(AppDelegate.pushChanges(_:)), "k", [.command, .shift], target: a),
