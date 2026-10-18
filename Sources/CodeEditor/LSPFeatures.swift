@@ -80,7 +80,7 @@ extension LSPSession {
     // MARK: Find usages
 
     func findUsages() {
-        guard let tv = textView, let inst = instance(supporting: "referencesProvider"), let client = inst.client else { return }
+        guard let tv = textView, let inst = instance(supporting: "referencesProvider") else { return }
         flushChanges()
         let caret = tv.selectedRange().location
         let word = wordRange(at: caret)
@@ -88,7 +88,7 @@ extension LSPSession {
         let params: [String: Any] = ["textDocument": ["uri": uri], "position": LSPLineTable(text as NSString).lspPosition(caret),
                                      "context": ["includeDeclaration": true]]
         let root = inst.root.path
-        client.request("textDocument/references", params, timeout: 30) { [weak self] result in
+        requestChain("referencesProvider", "textDocument/references", params, timeout: 30) { [weak self] result, _ in
             guard let self else { return }
             switch result {
             case .failure(let e): LanguageServers.report(self.failureText(e, action: "Find usages"), session: self)
@@ -140,7 +140,7 @@ extension LSPSession {
     // MARK: Rename
 
     func beginRename(over window: NSWindow) {
-        guard let tv = textView, let inst = instance(supporting: "renameProvider"), let client = inst.client else { return }
+        guard let tv = textView, let inst = instance(supporting: "renameProvider") else { return }
         flushChanges()
         let caret = tv.selectedRange().location
         let snapshot = text
@@ -157,7 +157,9 @@ extension LSPSession {
                                    button: "Rename", window: window, done: go)
         }
         let provider = inst.capabilities["renameProvider"] as? [String: Any]
-        guard (provider?["prepareProvider"] as? Bool) == true else {
+        // With several candidate servers (Vue: Volar + TypeScript) the rename itself walks the chain; skip the prepare step.
+        guard (provider?["prepareProvider"] as? Bool) == true, instances(supporting: "renameProvider").count == 1,
+              let client = inst.client else {
             guard word.length > 0 else { LanguageServers.report("Nothing to rename here", session: self); return }
             prompt((snapshot as NSString).substring(with: word)); return
         }
@@ -183,10 +185,10 @@ extension LSPSession {
 
     func performRename(_ newName: String, position: [String: Int], snapshot: String, over window: NSWindow?,
                        completion: ((LSPApplyResult) -> Void)? = nil) {
-        guard let inst = instance(supporting: "renameProvider"), let client = inst.client else { return }
+        guard instance(supporting: "renameProvider") != nil else { return }
         flushChanges()
         let params: [String: Any] = ["textDocument": ["uri": uri], "position": position, "newName": newName]
-        client.request("textDocument/rename", params, timeout: 60) { [weak self] result in
+        requestChain("renameProvider", "textDocument/rename", params, timeout: 60) { [weak self] result, _ in
             guard let self else { return }
             func fail(_ m: String) { LanguageServers.report(m, session: self); completion?(LSPApplyResult(applied: false, failureReason: m)) }
             switch result {

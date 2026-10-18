@@ -73,17 +73,97 @@ final class LSPSession: NSResponder {
         instances.first { $0.supports(capability) && opened.contains($0.key) }
     }
 
+    /// All initialised servers of this file that advertise `capability`, in priority order.
+    func instances(supporting capability: String) -> [LSPServerInstance] {
+        instances.filter { $0.supports(capability) && opened.contains($0.key) }
+    }
+
+    /// Asks the supporting servers in order until one gives a non-empty answer (e.g. a Vue file: Volar for template
+    /// positions, the TypeScript server for script positions). The last server's answer (or the first error) is
+    /// delivered when nobody has anything.
+    func requestChain(_ capability: String, _ method: String, _ params: [String: Any], timeout: TimeInterval,
+                      accept: @escaping (Any?) -> Bool = { LSPSession.nonEmpty($0) },
+                      completion: @escaping (LSPClient.Result, LSPServerInstance?) -> Void) {
+        let candidates = instances(supporting: capability)
+        func step(_ i: Int, _ firstError: LSPError?) {
+            guard i < candidates.count, let client = candidates[i].client else {
+                completion(firstError.map { .failure($0) } ?? .failure(.notRunning), candidates.last); return
+            }
+            let last = i == candidates.count - 1
+            client.request(method, params, timeout: timeout) { result in
+                switch result {
+                case .success(let v):
+                    if last || accept(v) { completion(result, candidates[i]) } else { step(i + 1, firstError) }
+                case .failure(let e):
+                    if last { completion(firstError.map { .failure($0) } ?? result, candidates[i]) } else { step(i + 1, firstError ?? e) }
+                }
+            }
+        }
+        step(0, nil)
+    }
+
+    static func nonEmpty(_ v: Any?) -> Bool {
+        guard let v, !(v is NSNull) else { return false }
+        if let a = v as? [Any] { return !a.isEmpty }
+        if let d = v as? [String: Any] { return !d.isEmpty }
+        return true
+    }
+
     func didOpen(in inst: LSPServerInstance) {
         guard let client = inst.client, !opened.contains(inst.key) else { return }
         opened.insert(inst.key)
         if inst.syncKind == 2 { resetShadow() }
-        let ext = url.pathExtension.lowercased()
         client.notify("textDocument/didOpen", ["textDocument": [
-            "uri": uri, "languageId": inst.config.languageId(forExtension: ext), "version": version, "text": text,
+            "uri": uri, "languageId": inst.config.languageId(for: url), "version": version, "text": text,
         ]])
+        requestDiagnostics(from: inst, delay: 0.05)
     }
 
-    func instanceRestarting(_ inst: LSPServerInstance) { opened.remove(inst.key); updateShadowNeed() }
+    func instanceRestarting(_ inst: LSPServerInstance) {
+        opened.remove(inst.key)
+        pullWork[inst.key]?.cancel(); pullWork[inst.key] = nil
+        updateShadowNeed()
+    }
+
+    /// Drops every server attachment (servers stopped or re-evaluated); `attach` rebuilds them.
+    func resetAttachments() {
+        for inst in instances where opened.contains(inst.key) { inst.client?.notify("textDocument/didClose", ["textDocument": ["uri": uri]]) }
+        opened.removeAll()
+        instances.removeAll()
+        pullWork.values.forEach { $0.cancel() }
+        pullWork.removeAll()
+        shadow = nil
+        pendingChanges.removeAll()
+        diags.removeAll()
+        manager.clearDiagnostics(forPath: url.standardizedFileURL.path)
+        scheduleApply()
+    }
+
+    // MARK: Pull diagnostics (servers such as native TypeScript only answer `textDocument/diagnostic`)
+
+    private var pullWork: [String: DispatchWorkItem] = [:]
+
+    func requestDiagnostics(from inst: LSPServerInstance, delay: TimeInterval = 0.3) {
+        guard inst.usesPullDiagnostics, opened.contains(inst.key), inst.supports("diagnosticProvider") else { return }
+        pullWork[inst.key]?.cancel()
+        let work = DispatchWorkItem { [weak self, weak inst] in self?.pullNow(inst) }
+        pullWork[inst.key] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func pullNow(_ inst: LSPServerInstance?) {
+        guard let inst, let client = inst.client, opened.contains(inst.key) else { return }
+        flushChanges()
+        let sent = version
+        client.request("textDocument/diagnostic", ["textDocument": ["uri": uri]], timeout: 60) { [weak self, weak inst] result in
+            guard let self, let inst, self.opened.contains(inst.key), case .success(let v) = result,
+                  let d = v as? [String: Any] else { return }
+            if sent != self.version { return }       // edited meanwhile; the edit queued a fresh pull
+            if (d["kind"] as? String) == "unchanged" { inst.endWarmup(); return }
+            self.setDiagnostics((d["items"] as? [[String: Any]]) ?? [], serverId: inst.config.id, version: nil)
+            inst.endWarmup()
+        }
+    }
 
     private func resetShadow() {
         pendingChanges.removeAll()
@@ -127,6 +207,11 @@ final class LSPSession: NSResponder {
         }
         if shadow != nil, shadowStale || !(shadow?.matches(current) ?? false) { shadow = LSPShadow(current); shadowStale = false }
         pendingChanges.removeAll()
+        for inst in instances where inst.usesPullDiagnostics && opened.contains(inst.key) {
+            requestDiagnostics(from: inst)
+            // Other open files of the project may now have (or lose) errors, e.g. after changing an exported type.
+            for other in inst.sessions.values where other !== self { other.requestDiagnostics(from: inst, delay: 1.0) }
+        }
     }
 
     func didSave() {
@@ -134,6 +219,7 @@ final class LSPSession: NSResponder {
         for inst in instances where opened.contains(inst.key) {
             inst.client?.notify("textDocument/didSave", ["textDocument": ["uri": uri]])
             inst.client?.notify("workspace/didChangeWatchedFiles", ["changes": [["uri": uri, "type": 2]]])
+            requestDiagnostics(from: inst, delay: 0.1)
         }
     }
 
@@ -155,7 +241,17 @@ final class LSPSession: NSResponder {
     // MARK: Diagnostics
 
     func diagnostics(for serverId: String) -> [LSPDiagnostic] { diags[serverId] ?? [] }
-    var allDiagnostics: [LSPDiagnostic] { diags.values.flatMap { $0 } }
+    /// Diagnostics of every server, identical ones (same range, severity and text from different servers) merged.
+    var allDiagnostics: [LSPDiagnostic] {
+        var seen = Set<String>()
+        var out: [LSPDiagnostic] = []
+        for key in diags.keys.sorted() {
+            for d in diags[key] ?? [] where seen.insert("\(d.range.location):\(d.range.length):\(d.severity):\(d.message)").inserted {
+                out.append(d)
+            }
+        }
+        return out
+    }
 
     func setDiagnostics(_ raw: [[String: Any]], serverId: String, version published: Int?) {
         LSPLog.log("diagnostics \(url.lastPathComponent) published v\(published.map(String.init) ?? "-") ours v\(version) n=\(raw.count)")
@@ -172,7 +268,8 @@ final class LSPSession: NSResponder {
             var code: String?
             if let c = d["code"] as? String { code = c } else if let c = d["code"] as? NSNumber { code = c.stringValue }
             out.append(LSPDiagnostic(range: range, severity: (d["severity"] as? NSNumber)?.intValue ?? 1,
-                                     message: (d["message"] as? String) ?? "", source: d["source"] as? String, code: code))
+                                     message: (d["message"] as? String) ?? "",
+                                     source: (d["source"] as? String) ?? instance(serverId)?.config.name, code: code))
         }
         diags[serverId] = out
         manager.recordDiagnostics(for: self, serverId: serverId)
