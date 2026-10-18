@@ -31,6 +31,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     private let gitHost = NSView()
     let statusBar = StatusBar()
     private var gitSummary = ""
+    /// Title-bar branch widget, branch popup and branch actions (BranchController.swift).
+    lazy var branches = BranchController(project: self)
     private(set) var statusKinds: [String: VCSKind] = [:]
     let mainSplit = NSSplitViewController()
     let rootSplit = NSSplitViewController()
@@ -92,7 +94,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         contentVC.view = host
         statusBar.onGoToLine = { [weak self] in self?.goToLine() }
         statusBar.onChooseIndent = { [weak self] anchor in self?.chooseIndent(from: anchor) }
-        statusBar.onShowGit = { [weak self] in self?.showCommit() }
+        statusBar.onShowGit = { [weak self] in self?.showBranchPopup() }
         statusBar.onChooseEncoding = { [weak self] anchor in self?.chooseEncoding(from: anchor) }
         statusBar.onToggleTerminal = { [weak self] in self?.toggleTerminal() }
         statusBar.onCycleViewer = { [weak self] in ViewerSystem.cycle(self?.current) }
@@ -462,7 +464,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         if root != nil { refreshGitStatus() }
     }
 
-    private func refreshGitStatus() {
+    func refreshGitStatus() {
         guard let gitRoot else { return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let result = try? GitRepo(root: gitRoot).statusAndBranch()
@@ -482,8 +484,20 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
                                  uniquingKeysWith: { a, _ in a })
         for e in tabs.entries { applyTint(e.id) }
         gitSummary = info.map { StatusBar.gitSummary(branch: $0.name, ahead: $0.ahead, behind: $0.behind, changes: changes.count) } ?? ""
+        branches.apply(info: info, changes: changes.count)
         refreshStatus()
     }
+
+    /// After a branch operation: status, file tree, git panel, and open buffers that the switch changed on disk.
+    func gitStateChanged(reloadEditors: Bool) {
+        refreshGitStatus()
+        git?.reload()
+        guard reloadEditors else { return }
+        tree.refresh()
+        editors.values.forEach { $0.reloadIfChangedOnDisk() }
+    }
+
+    func showBranchPopup() { branches.showPopup() }
 
     private func applyTint(_ id: String) {
         tabs.setTint(statusKinds[VCSKind.canonical(id)]?.color, for: id)

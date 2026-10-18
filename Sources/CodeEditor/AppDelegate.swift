@@ -238,6 +238,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func focusTree(_ sender: Any?) { active?.focusTree() }
     @objc func toggleGit(_ sender: Any?) { active?.toggleGitPanel() }
     @objc func showFileHistory(_ sender: Any?) { active?.showFileHistory() }
+    @objc func showBranches(_ sender: Any?) { active?.showBranchPopup() }
+    @objc func newBranch(_ sender: Any?) { active?.branches.newBranch(from: nil) }
     @objc func commitChanges(_ sender: Any?) { active?.showCommitWindow() }
     @objc func pushChanges(_ sender: Any?) { active?.showCommitWindow { $0.push() } }
     @objc func updateProject(_ sender: Any?) { active?.showCommitWindow { $0.pull() } }

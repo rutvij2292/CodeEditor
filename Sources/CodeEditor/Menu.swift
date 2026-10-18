@@ -151,6 +151,8 @@ enum MainMenu {
             item("Push…", #selector(AppDelegate.pushChanges(_:)), "k", [.command, .shift], target: a),
             item("Update Project (Pull)", #selector(AppDelegate.updateProject(_:)), "t", target: a),
             item("Fetch", #selector(AppDelegate.fetchChanges(_:)), "", target: a),
+            item("Branches…", #selector(AppDelegate.showBranches(_:)), "b", [.command, .option], target: a),
+            item("New Branch…", #selector(AppDelegate.newBranch(_:)), "", target: a),
             item("Show History for File", #selector(AppDelegate.showFileHistory(_:)), "", target: a),
             item("Annotate with Git Blame", #selector(AppDelegate.toggleBlameAnnotations(_:)), "a", [.command, .option], target: a),
             toggleItem("Toggle Inline Blame", "inlineBlame", a),

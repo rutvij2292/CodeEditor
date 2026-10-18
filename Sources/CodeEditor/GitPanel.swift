@@ -257,6 +257,8 @@ private final class GitPanelView: NSView {
 final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
     let view: NSView
     var onStatusChange: (() -> Void)?
+    /// Set by the Commit window: opens the shared branch popup instead of the plain menu below.
+    var onShowBranches: (() -> Void)?
     /// Esc / Shift-Esc pressed while focus is inside the panel and no popover, sheet or search text wants it.
     var onRequestClose: (() -> Void)?
     /// Fired after a successful commit (`andPush`: the push is about to start).
@@ -1558,6 +1560,12 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             i.state = current ? .on : .off
             menu.addItem(i)
         }
+        if onShowBranches != nil {
+            let bp = NSMenuItem(title: "Branches… (⌘⌥B)", action: #selector(openBranchPopup), keyEquivalent: "")
+            bp.target = self
+            menu.addItem(bp)
+            menu.addItem(.separator())
+        }
         let nb = NSMenuItem(title: "New Branch…", action: #selector(newBranch), keyEquivalent: "")
         nb.target = self
         menu.addItem(nb)
@@ -1580,6 +1588,8 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         guard let name = s.representedObject as? String, name != info.name else { return }
         perform { try $0.checkout(name) }
     }
+
+    @objc private func openBranchPopup() { onShowBranches?() }
 
     @objc private func newBranch() {
         let alert = NSAlert()

@@ -56,6 +56,7 @@ final class CommitWindowController: NSObject, NSWindowDelegate {
                 window.setFrameOrigin(NSPoint(x: host.midX - 560, y: host.midY - 390))
             }
         }
+        panel.onShowBranches = { [weak self, weak project] in if let w = self?.window { project?.branches.showPopup(over: w) } }
         panel.onRequestClose = { [weak self] in self?.window.performClose(nil) }
         panel.onCommitted = { [weak self] andPush in if !andPush { self?.window.close() } }
         projectCloseObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: project.window,

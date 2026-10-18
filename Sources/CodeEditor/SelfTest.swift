@@ -82,6 +82,7 @@ enum SelfTest {
                     fastTierChecks()
                     try? fm.removeItem(at: dir)
                     try? fm.removeItem(at: LocalHistory.root)
+                    SelfTestBranches.run()
                     viewerChecks(app: app, w: w) {
                         SelfTestPerf.run(app: app)
                         finish()
