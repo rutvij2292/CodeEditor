@@ -115,9 +115,18 @@ enum MainMenu {
             item("Move Caret to Matching Brace", #selector(BracketColorizer.moveCaretToMatchingBrace(_:)), "m", [.command, .shift], target: BracketColorizer.shared),
         ]))
 
+        main.addItem(menu("Git", [
+            item("Commit…", #selector(AppDelegate.commitChanges(_:)), "k", target: a),
+            item("Push…", #selector(AppDelegate.pushChanges(_:)), "k", [.command, .shift], target: a),
+            item("Update Project (Pull)", #selector(AppDelegate.updateProject(_:)), "t", target: a),
+            item("Fetch", #selector(AppDelegate.fetchChanges(_:)), "", target: a),
+            sep,
+            item("Show Git Panel", #selector(AppDelegate.toggleGit(_:)), "9", target: a),
+        ]))
+
         main.addItem(menu("View", [
             item("Project Tree", #selector(AppDelegate.focusTree(_:)), "1", target: a),
-            item("Git / Commit", #selector(AppDelegate.toggleGit(_:)), "9", target: a),
+            item("Commit Panel", #selector(AppDelegate.commitChanges(_:)), "0", target: a),
             item("Select Opened File", #selector(AppDelegate.selectOpenedFile(_:)), f1, [.option], target: a),
             item("Collapse All in Tree", #selector(AppDelegate.collapseAll(_:)), "-", target: a),
             sep,

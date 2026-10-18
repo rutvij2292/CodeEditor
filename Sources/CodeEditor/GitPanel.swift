@@ -538,6 +538,9 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     // MARK: public
 
     func focusCommitMessage() { panel.window?.makeFirstResponder(messageView) }
+    func fetch() { fetchTapped() }
+    func pull() { pullTapped() }
+    func push() { pushTapped() }
 
     @objc private func appActive() { reload() }
 

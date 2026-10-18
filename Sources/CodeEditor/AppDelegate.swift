@@ -142,6 +142,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func nextTab(_ sender: Any?) { active?.selectTab(offset: 1) }
     @objc func focusTree(_ sender: Any?) { active?.focusTree() }
     @objc func toggleGit(_ sender: Any?) { active?.toggleGitPanel() }
+    @objc func commitChanges(_ sender: Any?) { active?.showCommit() }
+    @objc func pushChanges(_ sender: Any?) { active?.gitPush() }
+    @objc func updateProject(_ sender: Any?) { active?.gitPull() }
+    @objc func fetchChanges(_ sender: Any?) { active?.gitFetch() }
     @objc func selectOpenedFile(_ sender: Any?) { active?.selectOpenedFile() }
     @objc func collapseAll(_ sender: Any?) { active?.collapseTree() }
     @objc func themeSystem(_ sender: Any?) { Theme.setMode(.system) }

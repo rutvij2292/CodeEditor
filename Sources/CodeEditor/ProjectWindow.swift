@@ -17,6 +17,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     private var diskTimer: Timer?
     private var git: GitPanelController?
     private var gitRoot: URL?
+    private let statusBar = StatusBar()
+    private var branchLabel: String?
     private let mainSplit = NSSplitViewController()
     private let rootSplit = NSSplitViewController()
     private let gitContainer = NSViewController()
@@ -40,7 +42,21 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         tree.onEscape = { [weak self] in self?.focusEditor() }
 
         let sidebarVC = NSViewController(); sidebarVC.view = tree.scrollView
-        let contentVC = NSViewController(); contentVC.view = tabs
+        let contentVC = NSViewController()
+        let host = NSView()
+        tabs.translatesAutoresizingMaskIntoConstraints = false
+        statusBar.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(tabs); host.addSubview(statusBar)
+        NSLayoutConstraint.activate([
+            tabs.topAnchor.constraint(equalTo: host.topAnchor), tabs.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            tabs.trailingAnchor.constraint(equalTo: host.trailingAnchor), tabs.bottomAnchor.constraint(equalTo: statusBar.topAnchor),
+            statusBar.leadingAnchor.constraint(equalTo: host.leadingAnchor), statusBar.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            statusBar.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+        ])
+        contentVC.view = host
+        statusBar.onGoToLine = { [weak self] in self?.goToLine() }
+        statusBar.onChooseIndent = { [weak self] anchor in self?.chooseIndent(from: anchor) }
+        statusBar.onShowGit = { [weak self] in self?.showCommit() }
         let sidebarItem = NSSplitViewItem(viewController: sidebarVC)
         sidebarItem.minimumThickness = 180
         sidebarItem.maximumThickness = 500
@@ -71,6 +87,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         }
         NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive),
                                                name: NSApplication.didBecomeActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(selectionChanged(_:)),
+                                               name: NSTextView.didChangeSelectionNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(languageServerStatusChanged),
                                                name: LanguageServers.statusDidChange, object: nil)
     }
@@ -110,9 +128,47 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     }
 
     /// Shows the language server's state and memory cost under the window title.
-    @objc private func languageServerStatusChanged() {
-        guard let root else { return }
-        window.subtitle = LanguageServers.statusText(forRoot: root)
+    @objc private func languageServerStatusChanged() { refreshStatus() }
+
+    @objc private func selectionChanged(_ note: Notification) {
+        if (note.object as? NSTextView) === current?.textView { refreshStatus() }
+    }
+
+    private static func languageName(_ url: URL) -> String {
+        let names = ["php": "PHP", "js": "JavaScript", "jsx": "JSX", "mjs": "JavaScript", "ts": "TypeScript", "tsx": "TSX",
+                     "vue": "Vue", "html": "HTML", "htm": "HTML", "css": "CSS", "scss": "SCSS", "json": "JSON", "md": "Markdown",
+                     "yml": "YAML", "yaml": "YAML", "sh": "Shell", "sql": "SQL", "xml": "XML", "env": "Env"]
+        if url.lastPathComponent.hasSuffix(".blade.php") { return "Blade" }
+        return names[url.pathExtension.lowercased()] ?? "Plain Text"
+    }
+
+    func refreshStatus() {
+        let editor = current
+        let caret = editor?.textView.lineAndColumn
+        statusBar.update(line: caret?.line, column: caret?.column, selected: editor?.textView.selectedRange().length ?? 0,
+                         indent: editor?.indent.label, language: editor.map { Self.languageName($0.url) },
+                         lineEnding: editor?.lineEnding, branch: branchLabel,
+                         server: root.map { LanguageServers.statusText(forRoot: $0) } ?? "")
+    }
+
+    private func chooseIndent(from anchor: NSView) {
+        guard current != nil else { return }
+        let menu = NSMenu()
+        for (title, tabs, size) in [("2 spaces", false, 2), ("4 spaces", false, 4), ("8 spaces", false, 8),
+                                    ("Tabs (width 4)", true, 4), ("Tabs (width 8)", true, 8)] {
+            let item = NSMenuItem(title: title, action: #selector(indentPicked(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = IndentSettings(useTabs: tabs, size: size)
+            item.state = current?.indent == IndentSettings(useTabs: tabs, size: size) ? .on : .off
+            menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 4), in: anchor)
+    }
+
+    @objc private func indentPicked(_ item: NSMenuItem) {
+        guard let settings = item.representedObject as? IndentSettings else { return }
+        current?.applyIndent(settings)
+        refreshStatus()
     }
 
     @objc private func appBecameActive() {
@@ -123,8 +179,18 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     private func refreshGitStatus() {
         guard let gitRoot else { return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let map = (try? GitRepo(root: gitRoot).statusMap()) ?? [:]
-            DispatchQueue.main.async { self?.tree.setStatus(map, repoRoot: gitRoot) }
+            let result = try? GitRepo(root: gitRoot).statusAndBranch()
+            let map = Dictionary((result?.changes ?? []).map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+            var label = result.map { $0.info.name }
+            if let info = result?.info, label != nil {
+                if info.ahead > 0 { label! += " ↑\(info.ahead)" }
+                if info.behind > 0 { label! += " ↓\(info.behind)" }
+            }
+            DispatchQueue.main.async {
+                self?.tree.setStatus(map, repoRoot: gitRoot)
+                self?.branchLabel = label
+                self?.refreshStatus()
+            }
         }
     }
 
@@ -166,6 +232,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             historyIndex = history.count - 1
         }
         updateTitle()
+        refreshStatus()
     }
 
     private func updateTitle() {
@@ -191,6 +258,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         history.removeAll { $0 == id }
         historyIndex = min(historyIndex, history.count - 1)
         updateTitle()
+        refreshStatus()
     }
 
     private func confirmDiscard(_ editor: EditorTab) -> Bool {
@@ -377,6 +445,19 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     }
 
     // MARK: Git panel
+
+    /// Cmd-K: show the Commit/Changes panel (never hides it) and put the caret in the commit message.
+    func showCommit() {
+        guard root != nil else { return }
+        ensureGitPanel()
+        if gitItem.isCollapsed { toggleGitPanel(); return }
+        git?.reload()
+        git?.focusCommitMessage()
+    }
+
+    func gitPush() { showCommit(); git?.push() }
+    func gitPull() { showCommit(); git?.pull() }
+    func gitFetch() { showCommit(); git?.fetch() }
 
     func toggleGitPanel() {
         guard root != nil else { return }

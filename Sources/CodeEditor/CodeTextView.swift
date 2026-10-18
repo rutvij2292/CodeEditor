@@ -6,6 +6,8 @@ final class CodeTextView: NSTextView {
 
     var commentStyle: CommentStyle = .line("//")
     var indentUnit = "    "
+    var useTabs = false
+    var tabColumns = 4
 
     // Hooks for language features (completion popup, LSP actions). Set through EditorEvents.onOpen.
     /// Called first for every key press; return true to swallow the event (e.g. the completion popup's arrows/Return/Tab/Esc).
@@ -602,7 +604,7 @@ final class CodeTextView: NSTextView {
         let s = ns
         let sel = selectedRange()
         let t = touchedLines(sel)
-        let n = max(1, indentUnit.utf16.count)
+        let n = max(1, tabColumns)
         if sel.length > 0, splitLineCount(t) > 1 {
             var edits: [LineEdit] = []
             forEachLine(in: t) { st, ce, _ in if ce > st { edits.append((st, 0, indentUnit)) } }
@@ -611,7 +613,7 @@ final class CodeTextView: NSTextView {
         }
         let ls = s.lineRange(for: NSRange(location: sel.location, length: 0)).location
         let col = sel.location - ls
-        let pad = String(repeating: " ", count: n - col % n)
+        let pad = useTabs ? "\t" : String(repeating: " ", count: n - col % n)
         grouped {
             if replace(sel, with: pad) { setSelectedRange(NSRange(location: sel.location + pad.utf16.count, length: 0)) }
         }
@@ -621,7 +623,7 @@ final class CodeTextView: NSTextView {
         let s = ns
         let sel = selectedRange()
         let t = touchedLines(sel)
-        let n = indentUnit.utf16.count
+        let n = max(1, tabColumns)
         var edits: [LineEdit] = []
         forEachLine(in: t) { st, ce, _ in
             if st < ce, s.character(at: st) == 9 { edits.append((st, 1, "")); return }

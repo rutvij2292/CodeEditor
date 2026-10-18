@@ -103,6 +103,39 @@ enum SelfTest {
         check("Move Line Up is Opt-Shift-Up", shortcut("Move Line Up") == "⌥⇧↑")
         check("File Structure is Cmd-F12", shortcut("File Structure") == "⌘F12")
 
+        check("Commit is Cmd-K", shortcut("Commit…") == "⌘K")
+        check("Push is Cmd-Shift-K", shortcut("Push…") == "⇧⌘K")
+
+        // Indentation: detection, .editorconfig precedence, tab-stop width.
+        let four = "<?php\nclass A\n{\n    function a()\n    {\n        return 1;\n    }\n    function b()\n    {\n        return 2;\n    }\n}\n"
+        let two = "{\n  \"a\": {\n    \"b\": {\n      \"c\": 1\n    },\n    \"d\": {\n      \"e\": 2\n    }\n  }\n}\n"
+        let tabbed = "<?php\nclass A\n{\n\tfunction a()\n\t{\n\t\treturn 1;\n\t}\n}\n"
+        check("detects 4 spaces", IndentSettings.detect(four) == IndentSettings(useTabs: false, size: 4))
+        check("detects 2 spaces", IndentSettings.detect(two) == IndentSettings(useTabs: false, size: 2))
+        check("detects tabs", IndentSettings.detect(tabbed)?.useTabs == true)
+        check("flat file has no detection", IndentSettings.detect("a\nb\nc\n") == nil)
+        let cfgDir = dir.appendingPathComponent("cfg")
+        try? FileManager.default.createDirectory(at: cfgDir, withIntermediateDirectories: true)
+        try? "root = true\n[*]\nindent_style = space\nindent_size = 2\n[*.php]\nindent_size = 4\n[*.{js,ts}]\nindent_style = tab\ntab_width = 8\n"
+            .write(to: cfgDir.appendingPathComponent(".editorconfig"), atomically: true, encoding: .utf8)
+        check("editorconfig php=4 spaces", IndentSettings.resolve(for: cfgDir.appendingPathComponent("a.php"), text: two) == IndentSettings(useTabs: false, size: 4))
+        check("editorconfig default=2 spaces", IndentSettings.resolve(for: cfgDir.appendingPathComponent("a.css"), text: four) == IndentSettings(useTabs: false, size: 2))
+        check("editorconfig js=tabs width 8", IndentSettings.resolve(for: cfgDir.appendingPathComponent("x.js"), text: four) == IndentSettings(useTabs: true, size: 8))
+        check("no config + no signal = 4 spaces", IndentSettings.resolve(for: dir.appendingPathComponent("zz.php"), text: "x\n") == .standard)
+
+        let tabFile = dir.appendingPathComponent("tabbed.php")
+        try? tabbed.write(to: tabFile, atomically: true, encoding: .utf8)
+        w.open(tabFile)
+        if let tabEditor = w.current {
+            let column = ("0" as NSString).size(withAttributes: [.font: Theme.font]).width
+            let interval = tabEditor.textView.defaultParagraphStyle?.defaultTabInterval ?? 0
+            check("tab file uses tabs", tabEditor.indent.useTabs && tabEditor.textView.indentUnit == "\t")
+            check("tab stop = 4 columns wide", abs(interval - 4 * column) < 0.01)
+            tabEditor.applyIndent(IndentSettings(useTabs: false, size: 2))
+            check("switching to 2 spaces updates unit and tab stop",
+                  tabEditor.textView.indentUnit == "  " && abs((tabEditor.textView.defaultParagraphStyle?.defaultTabInterval ?? 0) - 2 * column) < 0.01)
+        } else { check("tab file opened", false) }
+
         RecentFiles.add(a, in: dir)
         check("recent projects not persisted in headless mode", !RecentProjects.all.contains(dir))
     }

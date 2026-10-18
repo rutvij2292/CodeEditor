@@ -12,6 +12,8 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
     var onDirtyChange: (() -> Void)?
     var onSave: (() -> Void)?
     private var diskDate: Date?
+    private(set) var indent = IndentSettings.standard
+    private var paragraph: NSParagraphStyle = .default
 
     init?(url: URL) {
         self.url = url
@@ -40,7 +42,13 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         textView.textColor = Theme.foreground
         textView.backgroundColor = Theme.background
         textView.insertionPointColor = Theme.foreground
-        textView.typingAttributes = [.font: Theme.font, .foregroundColor: Theme.foreground]
+        indent = IndentSettings.resolve(for: url, text: text)
+        paragraph = Self.paragraphStyle(for: indent)
+        textView.indentUnit = indent.unit
+        textView.useTabs = indent.useTabs
+        textView.tabColumns = indent.size
+        textView.defaultParagraphStyle = paragraph
+        textView.typingAttributes = [.font: Theme.font, .foregroundColor: Theme.foreground, .paragraphStyle: paragraph]
         textView.textContainerInset = NSSize(width: 6, height: 6)
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
@@ -67,6 +75,29 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         EditorEvents.notifyOpened(self)
     }
 
+    /// Tab characters in the file render exactly `size` columns wide (AppKit's default is ~3.6 columns).
+    private static func paragraphStyle(for indent: IndentSettings) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        let column = ("0" as NSString).size(withAttributes: [.font: Theme.font]).width
+        style.tabStops = []
+        style.defaultTabInterval = column * CGFloat(indent.size)
+        return style
+    }
+
+    func applyIndent(_ new: IndentSettings) {
+        indent = new
+        paragraph = Self.paragraphStyle(for: new)
+        textView.indentUnit = new.unit
+        textView.useTabs = new.useTabs
+        textView.tabColumns = new.size
+        textView.defaultParagraphStyle = paragraph
+        textView.typingAttributes[.paragraphStyle] = paragraph
+        textView.textStorage?.addAttribute(.paragraphStyle, value: paragraph,
+                                           range: NSRange(location: 0, length: textView.textStorage?.length ?? 0))
+    }
+
+    var lineEnding: String { textView.string.contains("\r\n") ? "CRLF" : "LF" }
+
     func textDidChange(_ notification: Notification) {
         if !isDirty { isDirty = true; onDirtyChange?() }
     }
@@ -87,7 +118,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         textView.textColor = Theme.foreground
         textView.backgroundColor = Theme.background
         textView.insertionPointColor = Theme.foreground
-        textView.typingAttributes = [.font: Theme.font, .foregroundColor: Theme.foreground]
+        textView.typingAttributes = [.font: Theme.font, .foregroundColor: Theme.foreground, .paragraphStyle: paragraph]
         textView.textStorage?.addAttribute(.foregroundColor, value: Theme.foreground,
                                            range: NSRange(location: 0, length: textView.textStorage?.length ?? 0))
         scrollView.backgroundColor = Theme.background
