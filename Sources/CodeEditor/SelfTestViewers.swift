@@ -475,6 +475,7 @@ extension SelfTest {
             guard let m = mc.markdown else { return false }
             return m.frame.width > 1 && abs(m.frame.width - pane.frame.width / 2) < 2
         }())
+        scrollChecks(w: w, mdTab: mdTab, mc: mc, pane: pane) {
         mc.setMode(.source, persist: true)
 
         ViewerSystem.alwaysNativeJSON = true
@@ -520,6 +521,84 @@ extension SelfTest {
                 ViewerSystem.alwaysNativeJSON = false
                 try? fm.removeItem(at: dir)
                 done()
+            }
+        }
+        }
+    }
+
+    /// Scrolling in the real window hierarchy: hit-testing, text view growth, wheel events, re-render stability, and two-way sync.
+    private static func scrollChecks(w: ProjectWindow, mdTab: EditorTab, mc: ViewerController, pane: EditorPane, then done: @escaping () -> Void) {
+        var doc = ""
+        for i in 1...300 { doc += "## Section \(i)\n\nParagraph \(i) lorem ipsum dolor sit amet.\n\n" }
+        mdTab.textView.string = doc
+        mdTab.textView.didChangeText()
+        mc.setMode(.split, persist: false)
+        mc.refreshNow()
+        pane.layoutSubtreeIfNeeded()
+        if let lm = mdTab.textView.layoutManager, let tc = mdTab.textView.textContainer { lm.ensureLayout(for: tc) }   // exact editor line Y (no estimates settling mid-test)
+        guard let m = mc.markdown, let root = w.window.contentView else { check("scroll: preview exists", false); done(); return }
+        let tv = m.textView, sv = m.scroll
+        let probe = root.convert(NSPoint(x: tv.bounds.midX, y: 100), from: tv)
+        check("scroll: hit-test inside the preview lands on its text view", root.hitTest(probe) === tv)
+        check("scroll: preview text view grows taller than the viewport for a long doc (maxSize not pinned)",
+              tv.frame.height > sv.contentSize.height * 3 && tv.maxSize.height > 1e6)
+        func wheel(_ dy: Int32) {
+            if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: dy, wheel2: 0, wheel3: 0), let ev = NSEvent(cgEvent: cg) { sv.scrollWheel(with: ev) }
+        }
+        let y0 = m.scrollY
+        if w.window.isVisible {
+            wheel(-150)
+            check("scroll: synthetic wheel event scrolls the preview (\(y0) -> \(m.scrollY))", m.scrollY > y0 + 10)
+        } else {
+            // AppKit ignores wheel events for a window that is not on screen; CE_PROBE=1 CE_SNAPSHOT=1 covers it (see ViewerSystem.probe).
+            check("scroll: wheel preconditions (vertical scroller, document taller than viewport)", sv.hasVerticalScroller && tv.frame.height > sv.contentSize.height)
+        }
+
+        // Inverse mapping round trip (unclamped region).
+        var worst = 0.0
+        for line in [30.0, 101.5, 333.25, 640.0, 900.75] {
+            m.scroll(toSourceLine: line)
+            worst = max(worst, abs(m.sourceLine(atScrollY: m.scrollY) - line))
+        }
+        check("scroll: preview Y -> source line round-trips within one line (worst \(String(format: "%.2f", worst)))", worst <= 1.0)
+        check("scroll: top of the preview maps to line 0", m.sourceLine(atScrollY: 0) == 0)
+
+        // Re-render of unchanged text keeps the place.
+        m.scroll(toSourceLine: 500)
+        mc.setMode(.preview, persist: false)
+        m.scroll(toSourceLine: 500)
+        let keep2 = m.scrollY
+        mc.refreshNow()
+        check("scroll: re-render of unchanged text keeps scrollY (preview only)", keep2 > 100 && abs(m.scrollY - keep2) < 1)
+        mc.setMode(.split, persist: false)
+        let eclip = mdTab.scrollView.contentView
+        eclip.scroll(to: NSPoint(x: 0, y: 3000)); mdTab.scrollView.reflectScrolledClipView(eclip)
+        mc.syncScroll()
+        let keepSplit = m.scrollY
+        mc.refreshNow()
+        check("scroll: re-render keeps the place in split mode (\(keepSplit) -> \(m.scrollY))", keepSplit > 100 && abs(m.scrollY - keepSplit) < 2)
+
+        // Two-way sync, loop stability, coalescing.
+        let clip = mdTab.scrollView.contentView
+        mc.resetSyncStats()
+        clip.scroll(to: NSPoint(x: 0, y: 4000)); mdTab.scrollView.reflectScrolledClipView(clip)
+        wait({ mc.syncStats.toPreview > 0 }) {
+            let line = mc.editorTopLine()
+            let settledEditor = clip.bounds.minY, settledPreview = m.scrollY
+            check("sync: editor scroll moves the preview to the matching line", abs(m.sourceLine(atScrollY: m.scrollY) - line) <= 1.5 && settledPreview > 100)
+            wait({ false }, timeout: 0.15) {
+                check("sync: editor -> preview is stable (no feedback, no drift, one update)", abs(clip.bounds.minY - settledEditor) < 1 && abs(m.scrollY - settledPreview) < 1 && mc.syncStats.toPreview == 1 && mc.syncStats.toEditor == 0)
+                mc.resetSyncStats()
+                m.scroll.contentView.scroll(to: NSPoint(x: 0, y: 9000)); m.scroll.reflectScrolledClipView(m.scroll.contentView)
+                wait({ mc.syncStats.toEditor > 0 }) {
+                    let pl = m.sourceLine(atScrollY: m.scrollY), el = mc.editorTopLine()
+                    check("sync: preview scroll moves the editor to the matching source line", abs(pl - el) <= 1.5 && clip.bounds.minY != settledEditor)
+                    let e1 = clip.bounds.minY, p1 = m.scrollY
+                    wait({ false }, timeout: 0.15) {
+                        check("sync: preview -> editor is stable (A->B->A no drift, no echo)", abs(clip.bounds.minY - e1) < 1 && abs(m.scrollY - p1) < 1 && mc.syncStats.toEditor == 1 && mc.syncStats.toPreview == 0)
+                        done()
+                    }
+                }
             }
         }
     }
