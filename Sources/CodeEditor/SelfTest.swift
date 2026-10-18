@@ -85,8 +85,10 @@ enum SelfTest {
                     SelfTestBranches.run()
                     SelfTestPR.run()
                     viewerChecks(app: app, w: w) {
-                        SelfTestPerf.run(app: app)
-                        finish()
+                        SelfTestPrettierReal.run(w: w) {
+                            SelfTestPerf.run(app: app)
+                            finish()
+                        }
                     }
                 }
             }
