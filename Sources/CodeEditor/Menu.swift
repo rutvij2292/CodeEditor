@@ -90,6 +90,11 @@ enum MainMenu {
             item("Select All Occurrences", Selector(("selectAllOccurrences:")), "g", [.control, .command]),
             sep,
             item("Reformat Code", Selector(("reformatCode:")), "l", [.command, .option]),
+            sep,
+            item("Basic Completion", Selector(("triggerCompletion:")), " ", [.control]),
+            item("Parameter Info", Selector(("showParameterInfo:")), "p"),
+            item("Quick Documentation", Selector(("showQuickDocumentation:")), "j", [.control]),
+            item("Go to Declaration", Selector(("goToDefinition:")), "b"),
         ]))
 
         main.addItem(menu("Navigate", [

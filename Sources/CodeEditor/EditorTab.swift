@@ -62,6 +62,7 @@ final class EditorTab: NSObject, NSTextViewDelegate {
         view = EditorContainer(scrollView: scrollView, gutter: GutterView(textView: textView, scrollView: scrollView))
 
         highlighter = Highlighter(textView: textView, extension: url.pathExtension)
+        EditorEvents.notifyOpened(self)
     }
 
     func textDidChange(_ notification: Notification) {
@@ -113,6 +114,7 @@ final class EditorTab: NSObject, NSTextViewDelegate {
             diskDate = Self.modificationDate(url)
             onDirtyChange?()
             onSave?()
+            EditorEvents.notifySaved(self)
         } catch {
             NSAlert(error: error).runModal()
         }

@@ -176,6 +176,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         guard let editor = editors[id], confirmDiscard(editor) else { return }
         tabs.remove(id)
         editors[id] = nil
+        EditorEvents.notifyClosed(editor)
         mru.removeAll { $0 == id }
         history.removeAll { $0 == id }
         historyIndex = min(historyIndex, history.count - 1)
@@ -205,6 +206,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         diskTimer?.invalidate()
         watcher = nil
+        editors.values.forEach { EditorEvents.notifyClosed($0) }
         QuickPicker.dismiss()
         onClose?(self)
     }

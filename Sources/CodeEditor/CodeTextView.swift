@@ -7,6 +7,24 @@ final class CodeTextView: NSTextView {
     var commentStyle: CommentStyle = .line("//")
     var indentUnit = "    "
 
+    // Hooks for language features (completion popup, LSP actions). Set through EditorEvents.onOpen.
+    /// Called first for every key press; return true to swallow the event (e.g. the completion popup's arrows/Return/Tab/Esc).
+    var keyInterceptor: ((NSEvent) -> Bool)?
+    var onTriggerCompletion: (() -> Void)?
+    var onGoToDefinition: (() -> Void)?
+    var onQuickDocumentation: (() -> Void)?
+    var onParameterInfo: (() -> Void)?
+
+    @objc func triggerCompletion(_ sender: Any?) { onTriggerCompletion?() }
+    @objc func goToDefinition(_ sender: Any?) { onGoToDefinition?() }
+    @objc func showQuickDocumentation(_ sender: Any?) { onQuickDocumentation?() }
+    @objc func showParameterInfo(_ sender: Any?) { onParameterInfo?() }
+
+    override func keyDown(with event: NSEvent) {
+        if keyInterceptor?(event) == true { return }
+        super.keyDown(with: event)
+    }
+
     private typealias LineEdit = (loc: Int, len: Int, text: String)
     private var extendHistory: [NSRange] = []
     private var extendTarget: NSRange?

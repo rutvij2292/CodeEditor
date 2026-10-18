@@ -10,6 +10,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Theme.start()
+        CompletionSystem.start()
+        LanguageServers.start()
+        BracketColorizer.start()
         NSApp.mainMenu = MainMenu.build(app: self)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
             self?.trackDoubleShift(event)
