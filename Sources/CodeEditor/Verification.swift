@@ -17,6 +17,7 @@ enum Verification {
             guard let w = app.active else { return }
             if let m = AppEnv.value("CE_VIEWER") { ViewerSystem.decorate(w, mode: m) }
             switch picker {
+            case "plans", "plan-diff": PlanSupport.decorate(w, picker!, shot: shot)
             case "files": w.showGoToFile()
             case "recent": w.showRecentFiles()
             case "actions": w.showFindAction()

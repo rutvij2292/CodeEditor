@@ -404,6 +404,7 @@ final class ViewerController: NSObject {
             let m = MarkdownPreviewView()
             m.fileURL = tab?.url
             m.onOpenFile = { url in (NSApp.delegate as? AppDelegate)?.active?.open(url) }
+            if let tab { PlanSupport.attach(m, tab: tab) }
             markdown = m; side = m
         } else {
             let t = StructureTreeView()

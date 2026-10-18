@@ -217,6 +217,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     /// FSEvents callback: filters out skipped/build directories and coalesces bursts into one `processChanges`.
     func filesChanged(_ paths: [String]) {
         guard let root else { return }
+        PlanStore.shared.noteChanges(paths, root: root)
         coalescer.add(paths.filter { $0.contains("/.git/") || !ProjectIndex.isSkipped(path: $0, under: root) })
     }
 
