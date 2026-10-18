@@ -459,7 +459,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         if root != nil { refreshGitStatus() }
     }
 
-    private func refreshGitStatus() {
+    func refreshGitStatus() {
         guard let gitRoot else { return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let result = try? GitRepo(root: gitRoot).statusAndBranch()

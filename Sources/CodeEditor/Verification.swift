@@ -24,6 +24,7 @@ enum Verification {
             case "git": w.toggleGitPanel()
             case "terminal": w.showTerminal()
             case "commit": w.showCommitWindow()
+            case "pr-prompt", "pr-resolver", "pr-success": PRSnapshots.render(picker!, to: shot)
             case "problems": w.showToolPanel("problems")
             case "find":
                 w.showToolPanel("find") { w.findPanel?.show(seed: AppEnv.value("CE_FIND_QUERY") ?? "function", replaceMode: AppEnv.value("CE_FIND_REPLACE") != nil) }
