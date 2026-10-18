@@ -123,6 +123,19 @@ final class BottomPanel: NSObject {
         installCloseRequest? { [weak self] in self?.requestClose() }
     }
 
+    /// Removes a tool tab (e.g. the terminal moving to the right dock). Its view is detached; selection falls back to the first tool.
+    func unregister(_ id: String) {
+        guard let i = tools.firstIndex(where: { $0.id == id }) else { return }
+        let tool = tools.remove(at: i)
+        if tool.view.superview === view.content { tool.view.removeFromSuperview() }
+        if let b = buttons.removeValue(forKey: id) { view.strip.removeArrangedSubview(b); b.removeFromSuperview() }
+        if selectedID == id {
+            selectedID = nil
+            if let first = tools.first { select(first.id, notify: false) } else { hide() }
+        }
+        restyleButtons()
+    }
+
     func has(_ id: String) -> Bool { tools.contains { $0.id == id } }
 
     func badge(for id: String) -> String? { tools.first { $0.id == id }?.badge }

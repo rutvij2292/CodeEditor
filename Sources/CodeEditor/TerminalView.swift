@@ -47,7 +47,32 @@ final class CETerminalView: LocalProcessTerminalView {
     var onData: (() -> Void)?
     var onLink: ((String) -> Void)?
     var onRestartKey: (() -> Void)?
+    /// BEL received (agents such as Claude Code ring it when they need attention). No sound is played.
+    var onBell: (() -> Void)?
+    /// Files dropped on the terminal (from the file tree or Finder).
+    var onFileDrop: (([URL]) -> Void)?
     var dead = false
+
+    override func bell(source: Terminal) { onBell?() }
+
+    /// Inserts text as a paste (bracketed when the running program asked for it). Never sends Return.
+    func pasteText(_ text: String) {
+        send(TerminalBridge.pasteBytes(text, bracketed: terminal.bracketedPasteMode))
+    }
+
+    func enableFileDrops() { registerForDraggedTypes([.fileURL]) }
+
+    private func droppedFiles(_ info: NSDraggingInfo) -> [URL] {
+        (info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { droppedFiles(sender).isEmpty ? [] : .copy }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { droppedFiles(sender).isEmpty ? [] : .copy }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = droppedFiles(sender)
+        guard !urls.isEmpty, let h = onFileDrop else { return false }
+        h(urls)
+        return true
+    }
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice)

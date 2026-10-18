@@ -4,21 +4,31 @@ import SwiftTerm
 // MARK: - Tab strip
 
 private final class TerminalTabStrip: NSView {
-    struct Item { var title: String; var unread: Bool; var dead: Bool }
+    struct Item { var title: String; var unread: Bool; var done: Bool; var dead: Bool }
     var items: [Item] = [] { didSet { needsDisplay = true } }
     var selected = 0 { didSet { needsDisplay = true } }
+    /// Label of the Agent button when there is room ("Claude Code"); nil shows "Agent".
+    var agentTitle: String? { didSet { needsDisplay = true } }
     var onSelect: ((Int) -> Void)?
     var onClose: ((Int) -> Void)?
     var onNew: (() -> Void)?
     var onRun: ((NSPoint, NSView) -> Void)?
+    var onAgent: (() -> Void)?
+    var onAgentMenu: ((NSPoint, NSView) -> Void)?
     static let height: CGFloat = 24
     private let btnW: CGFloat = 26
 
     override var isFlipped: Bool { true }
-    private var compactRun: Bool { bounds.width < 300 }
-    private var runW: CGFloat { compactRun ? 30 : 52 }
+    /// 0 = icons only (narrow docks), 1 = short labels, 2 = agent name too.
+    private var mode: Int { bounds.width >= 430 ? 2 : (bounds.width >= 300 ? 1 : 0) }
+    private var runW: CGFloat { mode == 0 ? 30 : 52 }
+    private var agentLabel: String { mode == 0 ? "\u{2726}" : "\u{2726} " + (mode == 2 ? (agentTitle ?? "Agent") : "Agent") + " \u{25BE}" }
+    private var agentW: CGFloat {
+        mode == 0 ? 28 : min(150, ceil((agentLabel as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11)]).width) + 14)
+    }
     private var runRect: NSRect { NSRect(x: bounds.width - runW - 2, y: 2, width: runW, height: bounds.height - 4) }
-    private var plusRect: NSRect { NSRect(x: runRect.minX - btnW, y: 2, width: btnW, height: bounds.height - 4) }
+    private var agentRect: NSRect { NSRect(x: runRect.minX - agentW - 3, y: 2, width: agentW, height: bounds.height - 4) }
+    private var plusRect: NSRect { NSRect(x: agentRect.minX - btnW, y: 2, width: btnW, height: bounds.height - 4) }
 
     private func tabRects() -> [NSRect] {
         guard !items.isEmpty else { return [] }
@@ -44,8 +54,8 @@ private final class TerminalTabStrip: NSView {
             }
             let item = items[i]
             var x = r.minX + 8
-            if item.unread {
-                NSColor.systemOrange.setFill()
+            if item.unread || item.done {
+                (item.done ? NSColor.systemGreen : NSColor.systemOrange).setFill()
                 NSBezierPath(ovalIn: NSRect(x: x, y: r.midY - 3, width: 6, height: 6)).fill()
                 x += 10
             }
@@ -63,18 +73,25 @@ private final class TerminalTabStrip: NSView {
         }
         ("+" as NSString).draw(at: NSPoint(x: plusRect.midX - 4, y: plusRect.midY - 9),
                                withAttributes: [.font: NSFont.systemFont(ofSize: 15), .foregroundColor: fg])
-        let rr = runRect
-        fg.withAlphaComponent(0.10).setFill()
-        NSBezierPath(roundedRect: rr, xRadius: 4, yRadius: 4).fill()
-        let label = compactRun ? "\u{25B6}\u{25BE}" : "Run \u{25BE}"
-        let ls = NSAttributedString(string: label, attributes: [.font: font, .foregroundColor: fg])
-        let sz = ls.size()
-        ls.draw(at: NSPoint(x: rr.midX - sz.width / 2, y: rr.midY - sz.height / 2))
+        func button(_ rect: NSRect, _ label: String, accent: Bool = false) {
+            (accent ? NSColor.controlAccentColor.withAlphaComponent(0.20) : fg.withAlphaComponent(0.10)).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).fill()
+            let ls = NSAttributedString(string: label, attributes: [.font: font, .foregroundColor: fg])
+            let sz = ls.size()
+            ls.draw(at: NSPoint(x: rect.midX - sz.width / 2, y: rect.midY - sz.height / 2))
+        }
+        button(agentRect, agentLabel, accent: true)
+        button(runRect, mode == 0 ? "\u{25B6}\u{25BE}" : "Run \u{25BE}")
     }
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         if runRect.contains(p) { onRun?(NSPoint(x: runRect.minX, y: runRect.maxY), self); return }
+        if agentRect.contains(p) {
+            // Narrow: the whole button is a menu. Otherwise the label starts the last agent and the arrow opens the menu.
+            if mode == 0 || p.x > agentRect.maxX - 16 { onAgentMenu?(NSPoint(x: agentRect.minX, y: agentRect.maxY), self) } else { onAgent?() }
+            return
+        }
         if plusRect.contains(p) { onNew?(); return }
         for (i, r) in tabRects().enumerated() where r.contains(p) {
             if r.width > 70 && p.x > r.maxX - 20 { onClose?(i) } else { onSelect?(i) }
@@ -99,22 +116,25 @@ private final class TerminalContainer: NSView {
 // MARK: - Controller
 
 final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate {
-    // Settings (persisted)
-    static let settingsDidChange = Notification.Name("CodeEditor.terminalSettingsDidChange")
+    // Settings live in `Prefs` (written by the Settings window); changes are applied to open terminals live.
     static var fontSize: CGFloat {
-        get { let v = UserDefaults.standard.double(forKey: "terminal.fontSize"); return v >= 8 ? CGFloat(v) : 12 }
-        set { UserDefaults.standard.set(Double(min(max(newValue, 8), 28)), forKey: "terminal.fontSize")
-              NotificationCenter.default.post(name: settingsDidChange, object: nil) }
+        get { CGFloat(Prefs.terminalFontSize) }
+        set { Prefs.terminalFontSize = Double(newValue) }
     }
     static var cursorStyle: TerminalCursor {
-        get { TerminalCursor(rawValue: UserDefaults.standard.string(forKey: "terminal.cursorStyle") ?? "") ?? .block }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "terminal.cursorStyle")
-              NotificationCenter.default.post(name: settingsDidChange, object: nil) }
+        get { TerminalCursor(rawValue: Prefs.terminalCursorStyle) ?? .block }
+        set { Prefs.terminalCursorStyle = newValue.rawValue }
     }
     static var scrollbackLines: Int {
-        get { let v = UserDefaults.standard.integer(forKey: "terminal.scrollback"); return v > 0 ? v : 5000 }
-        set { UserDefaults.standard.set(newValue, forKey: "terminal.scrollback") }
+        get { Prefs.terminalScrollback }
+        set { Prefs.terminalScrollback = newValue }
     }
+    /// Seconds of silence after output before a background tab counts as "done".
+    static var idleSeconds: TimeInterval = 4
+    /// Wait before typing/pasting into a freshly spawned shell (lets it print its prompt and enable bracketed paste).
+    static var shellReadyDelay: TimeInterval = 0.8
+    /// Is the user looking at this window right now? (tests override)
+    static var isUserLooking: (NSWindow?) -> Bool = { w in NSApp.isActive && (w?.isKeyWindow ?? false) }
     /// Close a tab automatically when its shell exits (default: show "[Process completed]" and restart on key).
     static var closeOnExit: Bool {
         get { UserDefaults.standard.bool(forKey: "terminal.closeOnExit") }
@@ -131,13 +151,22 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
     }
     static var testHooks = TestHooks()
 
+    private static var nextTabID = 1
+
     private final class Tab {
+        let id: Int
         let view: CETerminalView
         var title: String
+        /// Agent tabs keep their name instead of following the shell's window-title escapes.
+        var lockedTitle = false
         var unread = false
+        var done = false
         var exited = false
         var launchedAt = Date()
-        init(view: CETerminalView, title: String) { self.view = view; self.title = title }
+        init(view: CETerminalView, title: String) {
+            id = TerminalPanelController.nextTabID; TerminalPanelController.nextTabID += 1
+            self.view = view; self.title = title
+        }
         var pid: pid_t { view.process?.shellPid ?? 0 }
     }
 
@@ -149,17 +178,31 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
     var onActivity: (() -> Void)?
     /// Absolute path, line, column. Wired by the integrator to ProjectWindow.open.
     var openPath: ((String, Int?, Int?) -> Void)?
+    /// Files dropped on a terminal (from the file tree / Finder): the host pastes their @references.
+    var onFilesDropped: (([URL]) -> Void)?
 
     private let container = TerminalContainer()
     private let strip = TerminalTabStrip()
     private var tabs: [Tab] = []
     private var active = 0
     private var observers: [NSObjectProtocol] = []
+    private var idleTracker = TerminalIdleTracker()
+    private var idleTimer: Timer?
+    /// Clock for the idle detector (tests inject a fake one).
+    var clock: () -> Date = Date.init
+    private var appliedScrollback = TerminalPanelController.scrollbackLines
+    /// Exact bytes of the most recent `paste` (verification).
+    var lastPasteBytes: [UInt8] = []
     private static let live = NSHashTable<TerminalPanelController>.weakObjects()
 
     var tabCount: Int { tabs.count }
     var tabTitles: [String] { tabs.map(\.title) }
     var hasUnreadActivity: Bool { tabs.contains { $0.unread } }
+    /// A background tab (or the app being away) saw output followed by silence, or a BEL.
+    var hasDoneTabs: Bool { tabs.contains { $0.done } }
+    var doneCount: Int { tabs.filter(\.done).count }
+    enum Attention { case none, activity, done }
+    var attention: Attention { hasDoneTabs ? .done : (hasUnreadActivity ? .activity : .none) }
     var activeTitle: String { tabs.indices.contains(active) ? tabs[active].title : "Terminal" }
     /// Shell PIDs of live tabs (verification).
     var shellPIDs: [pid_t] { tabs.map(\.pid).filter { $0 > 0 } }
@@ -170,23 +213,34 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         super.init()
         container.addSubview(strip)
         container.onLayout = { [weak self] in self?.layoutAll() }
-        container.onAttach = { [weak self] in self?.ensureStarted() }
+        container.onAttach = { [weak self] in if self?.container.isHiddenOrHasHiddenAncestor == false { self?.ensureStarted() } }
         strip.onSelect = { [weak self] in self?.select($0) }
         strip.onClose = { [weak self] in self?.closeTab(at: $0) }
         strip.onNew = { [weak self] in self?.newTab() }
         strip.onRun = { [weak self] pt, v in self?.showRunMenu(at: pt, in: v) }
+        strip.onAgent = { [weak self] in self?.startPrimaryAgent() }
+        strip.onAgentMenu = { [weak self] pt, v in self?.agentMenu().popUp(positioning: nil, at: pt, in: v) }
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in self?.applyTheme() })
-        observers.append(nc.addObserver(forName: Self.settingsDidChange, object: nil, queue: .main) { [weak self] _ in self?.applyTheme() })
+        observers.append(nc.addObserver(forName: Prefs.didChange, object: nil, queue: .main) { [weak self] note in
+            if ((note.userInfo?["key"] as? String) ?? "").hasPrefix("terminal") { self?.applyTheme() }
+        })
+        for name in [NSApplication.didBecomeActiveNotification, NSWindow.didBecomeKeyNotification] {
+            observers.append(nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.clearIfWatched() })
+        }
         Self.live.add(self)
     }
 
     deinit {
+        idleTimer?.invalidate()
         observers.forEach(NotificationCenter.default.removeObserver)
         for t in tabs { Self.kill(t, wait: false) }
     }
 
     // MARK: Public API
+
+    /// Starts the first shell if none exists yet (called when the terminal becomes visible).
+    func startIfNeeded() { ensureStarted() }
 
     func focusTerminal() {
         ensureStarted()
@@ -201,13 +255,70 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         guard tabs.indices.contains(active), !command.isEmpty else { return }
         let tab = tabs[active]
         if tab.exited { restart(tab) }
-        let send: () -> Void = { [weak tab] in tab?.view.send(txt: command + "\r") }
+        whenShellReady(tab) { $0.view.send(txt: command + "\r") }
+    }
+
+    private func whenShellReady(_ tab: Tab, _ work: @escaping (Tab) -> Void) {
         let age = Date().timeIntervalSince(tab.launchedAt)
-        if age < 0.8 { DispatchQueue.main.asyncAfter(deadline: .now() + (0.8 - age)) { send() } } else { send() }
+        if age < Self.shellReadyDelay {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (Self.shellReadyDelay - age)) { [weak tab] in if let tab { work(tab) } }
+        } else { work(tab) }
+    }
+
+    /// Inserts `text` into the active tab like a paste (bracketed when the program enabled it) WITHOUT pressing Return.
+    /// Lazily starts the shell; restarts an exited tab first.
+    func paste(_ text: String) {
+        guard !text.isEmpty else { return }
+        ensureStarted()
+        guard tabs.indices.contains(active) else { return }
+        let tab = tabs[active]
+        if tab.exited { restart(tab) }
+        whenShellReady(tab) { [weak self] t in
+            self?.lastPasteBytes = TerminalBridge.pasteBytes(text, bracketed: t.view.terminal.bracketedPasteMode)
+            guard self?.canSpawn == true else { return }
+            t.view.pasteText(text)
+        }
+    }
+
+    /// Opens a NEW tab titled with the agent's name and runs its command in the project root.
+    func startAgent(_ agent: TerminalAgent) {
+        TerminalAgents.lastUsedCommand = agent.command
+        let tab = addTab(title: agent.title)
+        tab.lockedTitle = true
+        select(tabs.count - 1)
+        runCommand(agent.command)
+    }
+
+    /// The Agent button: last used (or first available) agent; the menu when none is installed.
+    func startPrimaryAgent() {
+        if let a = TerminalAgents.primary(in: TerminalAgents.all()) { startAgent(a); focusTerminal() }
+        else if let v = strip.superview { agentMenu().popUp(positioning: nil, at: NSPoint(x: strip.frame.maxX - 120, y: strip.frame.maxY), in: v) }
+    }
+
+    /// All launchable agents (detected CLIs on the login PATH, `Prefs.terminalAgents`, legacy `terminal.agentCommand`).
+    func agentMenu() -> NSMenu {
+        let menu = NSMenu(title: "AI agents")
+        let agents = TerminalAgents.all()
+        if agents.isEmpty {
+            let mi = NSMenuItem(title: "No AI CLI found on PATH", action: nil, keyEquivalent: ""); mi.isEnabled = false
+            menu.addItem(mi)
+        }
+        for a in agents {
+            let mi = NSMenuItem(title: a.title, action: #selector(agentMenuItem(_:)), keyEquivalent: "")
+            mi.target = self; mi.representedObject = AgentBox(a)
+            menu.addItem(mi)
+        }
+        return menu
+    }
+
+    private final class AgentBox: NSObject { let agent: TerminalAgent; init(_ a: TerminalAgent) { agent = a } }
+
+    @objc private func agentMenuItem(_ sender: NSMenuItem) {
+        if let box = sender.representedObject as? AgentBox { startAgent(box.agent); focusTerminal() }
     }
 
     func newTab() {
-        addTab()
+        _ = addTab()
         select(tabs.count - 1)
     }
 
@@ -216,8 +327,10 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
     func closeTab(at index: Int) {
         guard tabs.indices.contains(index) else { return }
         let tab = tabs.remove(at: index)
+        idleTracker.clear(tab.id)
         Self.kill(tab, wait: false)
         tab.view.removeFromSuperview()
+        if tab.done { Self.refreshNotifier(newlyDone: false) }
         if tabs.isEmpty {
             active = 0
             refreshStrip()
@@ -230,10 +343,13 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
 
     /// Kills every shell (process groups) and frees all views. Safe to call repeatedly.
     func terminate() {
-        for t in tabs { Self.kill(t, wait: false); t.view.removeFromSuperview() }
+        let hadDone = hasDoneTabs
+        for t in tabs { Self.kill(t, wait: false); t.view.removeFromSuperview(); idleTracker.clear(t.id) }
         tabs.removeAll()
         active = 0
+        idleTimer?.invalidate(); idleTimer = nil
         refreshStrip()
+        if hadDone { Self.refreshNotifier(newlyDone: false) }
     }
 
     static func terminateAll() {
@@ -254,20 +370,28 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         if let w = tabs[index].view.window { w.makeFirstResponder(tabs[index].view) }
     }
 
-    /// The Run dropdown contents (detected project commands, then AI entries).
+    /// The Run dropdown contents: AI agents section first, then detected project commands.
     func runMenu() -> NSMenu {
         let menu = NSMenu(title: "Run")
-        func add(_ items: [TerminalRunItem]) {
-            guard !items.isEmpty else { return }
-            if !menu.items.isEmpty { menu.addItem(.separator()) }
-            for it in items {
-                let mi = NSMenuItem(title: it.title, action: it.command.isEmpty ? nil : #selector(runMenuItem(_:)), keyEquivalent: "")
-                mi.target = self; mi.representedObject = it.command; mi.isEnabled = !it.command.isEmpty
+        let agents = TerminalAgents.all()
+        if !agents.isEmpty {
+            let header = NSMenuItem(title: "AI agents", action: nil, keyEquivalent: ""); header.isEnabled = false
+            menu.addItem(header)
+            for a in agents {
+                let mi = NSMenuItem(title: a.title, action: #selector(agentMenuItem(_:)), keyEquivalent: "")
+                mi.target = self; mi.representedObject = AgentBox(a); mi.indentationLevel = 1
                 menu.addItem(mi)
             }
         }
-        add(TerminalRunCommands.agentItems())
-        add(TerminalRunCommands.detect(root: root))
+        let items = TerminalRunCommands.detect(root: root)
+        if !items.isEmpty {
+            if !menu.items.isEmpty { menu.addItem(.separator()) }
+            for it in items {
+                let mi = NSMenuItem(title: it.title, action: #selector(runMenuItem(_:)), keyEquivalent: "")
+                mi.target = self; mi.representedObject = it.command
+                menu.addItem(mi)
+            }
+        }
         return menu
     }
 
@@ -283,22 +407,26 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
 
     private func ensureStarted() {
         guard tabs.isEmpty else { return }
-        addTab()
+        _ = addTab()
         select(0)
     }
 
     private var canSpawn: Bool { !AppEnv.headless || Self.testHooks.allowHeadlessShell || Self.testHooks.executable != nil }
 
-    private func addTab() {
+    @discardableResult
+    private func addTab(title: String? = nil) -> Tab {
         let opts = TerminalOptions(cols: 80, rows: 24, cursorStyle: Self.cursorStyle.style, scrollback: Self.scrollbackLines)
         let tv = CETerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 300), font: Self.font(), options: opts)
         tv.processDelegate = self
         tv.optionAsMetaKey = true
-        let shell = Self.testHooks.executable ?? TerminalEnvironment.userShell
-        let tab = Tab(view: tv, title: (shell as NSString).lastPathComponent)
+        let shell = Self.testHooks.executable ?? TerminalEnvironment.resolvedShell
+        let tab = Tab(view: tv, title: title ?? (shell as NSString).lastPathComponent)
         tv.onData = { [weak self, weak tab] in if let self, let tab { self.dataArrived(tab) } }
         tv.onRestartKey = { [weak self, weak tab] in if let self, let tab { self.restart(tab) } }
         tv.onLink = { [weak self] in self?.handleLink($0) }
+        tv.onBell = { [weak self, weak tab] in if let self, let tab { self.bellRang(tab) } }
+        tv.onFileDrop = { [weak self] in self?.onFilesDropped?($0) }
+        tv.enableFileDrops()
         tabs.append(tab)
         container.addSubview(tv)
         TerminalPalette.apply(to: tv, dark: Theme.isDark)
@@ -307,12 +435,13 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         }
         refreshStrip()
         layoutAll()
+        return tab
     }
 
     private func spawn(_ tab: Tab) {
         let hooks = Self.testHooks
         let exe: String, args: [String]
-        if let e = hooks.executable { exe = e; args = hooks.args } else { exe = TerminalEnvironment.userShell; args = ["-l", "-i"] }
+        if let e = hooks.executable { exe = e; args = hooks.args } else { exe = TerminalEnvironment.resolvedShell; args = ["-l", "-i"] }
         let env = TerminalEnvironment.build(base: ProcessInfo.processInfo.environment,
                                             path: TerminalEnvironment.effectivePath(), extra: hooks.extraEnvironment)
         tab.exited = false; tab.view.dead = false; tab.launchedAt = Date()
@@ -328,17 +457,26 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
     }
 
     private static func font() -> NSFont {
-        NSFont(descriptor: Theme.font.fontDescriptor, size: fontSize) ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        let size = fontSize
+        let name = Prefs.terminalFontName.trimmingCharacters(in: .whitespaces)
+        if !name.isEmpty, let f = NSFont(name: name, size: size) { return f }
+        return NSFont(descriptor: Theme.font.fontDescriptor, size: size) ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
+    /// Re-applies theme colours, font, cursor and scrollback to every open tab (called for Theme and terminal-pref changes).
     private func applyTheme() {
+        let font = Self.font()
+        let scrollback = Self.scrollbackLines
         for t in tabs {
             TerminalPalette.apply(to: t.view, dark: Theme.isDark)
-            if t.view.font.pointSize != Self.fontSize { t.view.font = Self.font() }
+            if t.view.font.fontName != font.fontName || t.view.font.pointSize != font.pointSize { t.view.font = font }
             t.view.terminal.setCursorStyle(Self.cursorStyle.style)
+            if scrollback != appliedScrollback { t.view.changeScrollback(scrollback) }
         }
+        appliedScrollback = scrollback
         container.needsDisplay = true
         strip.needsDisplay = true
+        layoutAll()
     }
 
     private func layoutAll() {
@@ -353,24 +491,78 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
     }
 
     private func refreshStrip() {
-        strip.items = tabs.map { .init(title: $0.title, unread: $0.unread, dead: $0.exited) }
+        strip.items = tabs.map { .init(title: $0.title, unread: $0.unread, done: $0.done, dead: $0.exited) }
         strip.selected = active
+        strip.agentTitle = TerminalAgents.primary(in: TerminalAgents.detected())?.title
+    }
+
+    /// Visible, in the key window of an active app: nothing to notify about.
+    private func isWatched(_ tab: Tab) -> Bool {
+        tabs.indices.contains(active) && tabs[active] === tab && tab.view.window != nil
+            && !container.isHiddenOrHasHiddenAncestor && Self.isUserLooking(tab.view.window)
     }
 
     private func dataArrived(_ tab: Tab) {
-        let visible = tabs.indices.contains(active) && tabs[active] === tab && tab.view.window != nil
-            && !container.isHiddenOrHasHiddenAncestor
-        guard !visible, !tab.unread else { return }
+        let watched = isWatched(tab)
+        if Prefs.terminalNotifyOnIdle {
+            idleTracker.idleSeconds = Self.idleSeconds
+            idleTracker.output(tab.id, at: clock(), watched: watched)
+            if idleTracker.anyPending { startIdleTimer() }
+        }
+        guard !watched, !tab.unread else { return }
         tab.unread = true
         refreshStrip()
         onActivity?()
     }
 
-    private func clearUnread(_ i: Int) {
-        guard tabs.indices.contains(i), tabs[i].unread else { return }
-        tabs[i].unread = false
+    private func bellRang(_ tab: Tab) {
+        guard Prefs.terminalNotifyOnIdle else { return }
+        if idleTracker.bell(tab.id, watched: isWatched(tab)) { markDone([tab.id]) }
+    }
+
+    private func markDone(_ ids: [Int]) {
+        for t in tabs where ids.contains(t.id) { t.done = true; t.unread = true }
         refreshStrip()
         onActivity?()
+        Self.refreshNotifier(newlyDone: true)
+    }
+
+    private func startIdleTimer() {
+        guard idleTimer == nil else { return }
+        let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.processIdle(at: self?.clock() ?? Date()) }
+        t.tolerance = 0.5
+        RunLoop.main.add(t, forMode: .common)
+        idleTimer = t
+    }
+
+    /// Advances the idle detector (the 1 s timer calls this; tests call it with a fake time).
+    func processIdle(at now: Date) {
+        let fired = idleTracker.tick(at: now)
+        if !fired.isEmpty { markDone(fired) }
+        if !idleTracker.anyPending { idleTimer?.invalidate(); idleTimer = nil }
+    }
+
+    /// The user came back (app/window activated) while looking at the visible tab: clear its markers.
+    private func clearIfWatched() {
+        guard tabs.indices.contains(active), isWatched(tabs[active]) else { return }
+        clearUnread(active)
+    }
+
+    private func clearUnread(_ i: Int) {
+        guard tabs.indices.contains(i) else { return }
+        let t = tabs[i]
+        idleTracker.clear(t.id)
+        guard t.unread || t.done else { return }
+        let wasDone = t.done
+        t.unread = false; t.done = false
+        refreshStrip()
+        onActivity?()
+        if wasDone { Self.refreshNotifier(newlyDone: false) }
+    }
+
+    /// Dock-tile badge = finished tabs across all windows.
+    private static func refreshNotifier(newlyDone: Bool) {
+        TerminalNotifier.update(doneCount: live.allObjects.reduce(0) { $0 + $1.doneCount }, newlyDone: newlyDone)
     }
 
     private func handleLink(_ text: String) {
@@ -414,7 +606,7 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         DispatchQueue.main.async { [weak self] in
             guard let self, let t = self.tab(for: source) else { return }
             let clean = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
-            guard !clean.isEmpty, clean != t.title else { return }
+            guard !t.lockedTitle, !clean.isEmpty, clean != t.title else { return }
             t.title = clean
             self.refreshStrip()
             if self.tabs.indices.contains(self.active), self.tabs[self.active] === t { self.onTitleChange?(clean) }
@@ -446,5 +638,15 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
     }
     func simulateKey(restartTab i: Int) { if tabs.indices.contains(i) { restart(tabs[i]) } }
     func simulateLink(_ text: String) { handleLink(text) }
+    /// Feeds text straight into the active tab's screen (snapshots, sample content).
+    func feedSample(_ text: String) { if tabs.indices.contains(active) { tabs[active].view.feed(text: text) } }
+    func tabDone(_ i: Int) -> Bool { tabs.indices.contains(i) ? tabs[i].done : false }
+    func tabUnread(_ i: Int) -> Bool { tabs.indices.contains(i) ? tabs[i].unread : false }
+    var activeIndex: Int { active }
+    /// The active terminal view (to prove docks move the very same view).
+    var activeTerminalView: NSView? { tabs.indices.contains(active) ? tabs[active].view : nil }
+    func simulateBell(tab i: Int) { if tabs.indices.contains(i) { bellRang(tabs[i]) } }
+    func simulateOutput(tab i: Int) { if tabs.indices.contains(i) { dataArrived(tabs[i]) } }
+    func simulateDrop(_ urls: [URL]) { onFilesDropped?(urls) }
     func send(_ text: String, tab i: Int? = nil) { let t = tabs[i ?? active]; t.view.send(txt: text) }
 }

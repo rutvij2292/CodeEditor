@@ -18,22 +18,24 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     var findPanel: FindPanelController?
     var problemsPanel: ProblemsPanelController?
     var terminalPanel: TerminalPanelController?
+    /// Right/bottom dock state of the terminal (see TerminalDocking.swift).
+    let termDock = TerminalDockState()
     var problemsObserver: NSObjectProtocol?
     var projectFiles: [String] { index?.files ?? [] }
     private var symbols: SymbolIndex?
     private var watcher: FSWatcher?
     private var fallbackTimer: Timer?
     private var git: GitPanelController?
-    private var gitRoot: URL?
+    var gitRoot: URL?
     private var gitRootResolved = false
     private let gitHost = NSView()
-    private let statusBar = StatusBar()
+    let statusBar = StatusBar()
     private var gitSummary = ""
     private(set) var statusKinds: [String: VCSKind] = [:]
-    private let mainSplit = NSSplitViewController()
-    private let rootSplit = NSSplitViewController()
-    private var bottomItem: NSSplitViewItem!
-    private var restoring = false
+    let mainSplit = NSSplitViewController()
+    let rootSplit = NSSplitViewController()
+    var bottomItem: NSSplitViewItem!
+    var restoring = false
     private var sessionWork: DispatchWorkItem?
     private var diffWindows: [NSWindow] = []
     private var lastSelectedID: String?
@@ -92,16 +94,29 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         statusBar.onChooseIndent = { [weak self] anchor in self?.chooseIndent(from: anchor) }
         statusBar.onShowGit = { [weak self] in self?.showCommit() }
         statusBar.onChooseEncoding = { [weak self] anchor in self?.chooseEncoding(from: anchor) }
+        statusBar.onToggleTerminal = { [weak self] in self?.toggleTerminal() }
         let sidebarItem = NSSplitViewItem(viewController: sidebarVC)
+        sidebarItem.holdingPriority = NSLayoutConstraint.Priority(260)
         sidebarItem.minimumThickness = 180
         sidebarItem.maximumThickness = 500
         sidebarItem.canCollapse = true
         let contentItem = NSSplitViewItem(viewController: contentVC)
-        contentItem.minimumThickness = 300
+        contentItem.minimumThickness = 200     // the 400 pt editor floor is enforced by the terminal auto-collapse
+        let terminalVC = NSViewController()
+        terminalVC.view = termDock.host
+        let terminalItem = NSSplitViewItem(viewController: terminalVC)
+        terminalItem.minimumThickness = TerminalDockMath.minTerminal
+        terminalItem.canCollapse = true
+        terminalItem.isCollapsed = true
+        terminalItem.holdingPriority = NSLayoutConstraint.Priority(261)   // keeps its width on window resize; the editor flexes
         mainSplit.splitView.isVertical = true
         mainSplit.splitView.dividerStyle = .thin
         mainSplit.addSplitViewItem(sidebarItem)
         mainSplit.addSplitViewItem(contentItem)
+        mainSplit.addSplitViewItem(terminalItem)
+        termDock.sidebarItem = sidebarItem
+        termDock.contentItem = contentItem
+        termDock.terminalItem = terminalItem
 
         let bottomVC = NSViewController()
         bottomVC.view = bottom.view
@@ -111,7 +126,9 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         bottomItem.isCollapsed = true
         rootSplit.splitView.isVertical = false
         rootSplit.splitView.dividerStyle = .thin
-        rootSplit.addSplitViewItem(NSSplitViewItem(viewController: mainSplit))
+        let mainItem = NSSplitViewItem(viewController: mainSplit)
+        termDock.mainItem = mainItem
+        rootSplit.addSplitViewItem(mainItem)
         rootSplit.addSplitViewItem(bottomItem)
 
         bottom.onVisibilityChange = { [weak self] visible in self?.applyBottomVisibility(visible) }
@@ -131,6 +148,10 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
                                                name: NSWindow.didResignKeyNotification, object: window)
         NotificationCenter.default.addObserver(self, selector: #selector(selectionChanged(_:)),
                                                name: NSTextView.didChangeSelectionNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(terminalSplitDidResize(_:)),
+                                               name: NSSplitView.didResizeSubviewsNotification, object: mainSplit.splitView)
+        NotificationCenter.default.addObserver(self, selector: #selector(terminalPrefsChanged(_:)),
+                                               name: Prefs.didChange, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(languageServerStatusChanged),
                                                name: LanguageServers.statusDidChange, object: nil)
     }
@@ -762,6 +783,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         let height = bottom.isVisible && bottom.view.bounds.height > 80 ? bottom.view.bounds.height : bottom.height
         s.bottom = .init(visible: bottom.isVisible, selected: bottom.selectedID, height: Double(height))
         s.expanded = tree.expandedPaths()
+        if terminalPanel != nil { s.terminal = captureTerminalState() }
         return s
     }
 
@@ -786,6 +808,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             if b.height > 80 { bottom.height = CGFloat(b.height) }
             if b.visible, let sel = b.selected, bottom.has(sel) { bottom.show(sel) }
         }
+        restoreTerminalState(s.terminal)
     }
 
     func saveSession() {
@@ -793,7 +816,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         SessionStore.save(captureSession(), for: root)
     }
 
-    private func scheduleSessionSave() {
+    func scheduleSessionSave() {
         guard SessionStore.enabled, !restoring, root != nil else { return }
         sessionWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.saveSession() }
