@@ -139,7 +139,7 @@ final class GutterView: NSView {
         guard let tv = textView,
               let layout = tv.layoutManager, let container = tv.textContainer else { return }
         refreshFonts()
-        let text = tv.string as NSString
+        let text = (tv.textStorage?.mutableString ?? (tv.string as NSString)) as NSString   // no per-frame buffer copy
         let inset = tv.textContainerInset.height
         let fc = codeView?.folds
         let visible = layout.glyphRange(forBoundingRect: tv.visibleRect, in: container)
