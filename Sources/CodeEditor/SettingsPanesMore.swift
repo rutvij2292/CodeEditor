@@ -144,6 +144,10 @@ final class TerminalPane: SettingsPane {
         checkbox("Notify when a background terminal finishes", label: "Agents", help: "Badge and dock bounce when a background tab stops producing output.",
                  get: { Prefs.terminalNotifyOnIdle }, set: { Prefs.terminalNotifyOnIdle = $0 })
 
+        section("Claude Code")
+        checkbox("IDE integration", label: "Enable", help: "Lets the claude CLI connect to this window (selection, diffs, diagnostics) over a localhost-only WebSocket with a random token. Applies to terminals started afterwards.",
+                 get: { Prefs.claudeBridgeEnabled }, set: { Prefs.claudeBridgeEnabled = $0 })
+
         section("AI CLI launchers")
         row("Built in", infoLabel { Self.builtInAgents.joined(separator: "\n") })
         let legacy = textField(width: 320, placeholder: "e.g. claude --model opus", label: "Default agent command",

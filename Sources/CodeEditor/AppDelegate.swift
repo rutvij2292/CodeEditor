@@ -127,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     func applicationWillTerminate(_ notification: Notification) {
         TerminalPanelController.terminateAll()
+        ClaudeBridge.removeAllLocksAtExit()
         windows.forEach { $0.saveSession() }
         SessionStore.rememberOpenWindows(windows.compactMap(\.root))
         LanguageServers.stopAll()
@@ -268,6 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func sendFileToTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.sendFileReference?($0) } }
     @objc func sendSelectionReferenceToTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.sendSelectionReference?($0) } }
     @objc func sendSelectionTextToTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.sendSelectionText?($0) } }
+    @objc func sendSelectionToClaude(_ sender: Any?) { active?.sendMentionToClaude() }
     @objc func focusTerminal(_ sender: Any?) {
         guard let w = active else { return }
         if let focus = Self.terminalHandlers.focus { focus(w) } else { w.showTerminal() }
