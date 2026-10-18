@@ -4,7 +4,8 @@ import Foundation
 final class ProjectIndex {
     static let skipNames: Set<String> = ["node_modules", ".git", ".build", "vendor", ".idea", ".DS_Store"]
     let root: URL
-    private(set) var files: [String] = []
+    private(set) var files: [String] = [] { didSet { lower = files.map { $0.lowercased() } } }
+    private var lower: [String] = []
     private var scanning = false
     private var lastScan = Date.distantPast
 
@@ -35,5 +36,21 @@ final class ProjectIndex {
                 completion?()
             }
         }
+    }
+
+    /// Fuzzy file search for Go to File: cheap subsequence prefilter on lowercased paths, full scoring on survivors.
+    func search(_ query: String, limit: Int) -> [(path: String, score: Int)] {
+        let q = Array(query.lowercased().filter { !$0.isWhitespace })
+        guard !q.isEmpty else { return [] }
+        let qBytes = Array(String(q).utf8)
+        var scored: [(path: String, score: Int)] = []
+        for (i, text) in lower.enumerated() {
+            var qi = 0
+            for b in text.utf8 where qi < qBytes.count && b == qBytes[qi] { qi += 1 }
+            guard qi == qBytes.count, let score = Fuzzy.score(q, in: files[i]) else { continue }
+            scored.append((files[i], score))
+        }
+        scored.sort { $0.score > $1.score }
+        return Array(scored.prefix(limit))
     }
 }

@@ -5,6 +5,13 @@ final class TabHost: NSView {
     struct Entry { let id: String; var title: String; let view: NSView }
     private let strip = NSStackView()
     private let content = NSView()
+    private let hint = NSTextField(wrappingLabelWithString: """
+        Go to File          ⌘⇧O
+        Recent Files        ⌘E
+        Search Everywhere   ⇧⇧
+        Find Action         ⌘⇧A
+        Open Project        ⌃⌘O
+        """)
     private(set) var entries: [Entry] = []
     private(set) var selectedID: String?
     var onSelect: ((String) -> Void)?
@@ -13,13 +20,20 @@ final class TabHost: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = Theme.background.cgColor
+        hint.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        hint.alignment = .left
+        hint.translatesAutoresizingMaskIntoConstraints = false
+        restyle()
+        NotificationCenter.default.addObserver(self, selector: #selector(themeChanged), name: Theme.didChange, object: nil)
         strip.orientation = .horizontal
         strip.spacing = 2
         strip.alignment = .centerY
         strip.edgeInsets = NSEdgeInsets(top: 0, left: 6, bottom: 0, right: 6)
         for v in [strip, content] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        content.addSubview(hint)
         NSLayoutConstraint.activate([
+            hint.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            hint.centerYAnchor.constraint(equalTo: content.centerYAnchor),
             strip.topAnchor.constraint(equalTo: topAnchor),
             strip.leadingAnchor.constraint(equalTo: leadingAnchor),
             strip.heightAnchor.constraint(equalToConstant: 28),
@@ -32,8 +46,16 @@ final class TabHost: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    @objc private func themeChanged() { restyle(); rebuildStrip() }
+
+    private func restyle() {
+        layer?.backgroundColor = Theme.background.cgColor
+        hint.textColor = Theme.gutter
+    }
+
     func add(id: String, title: String, view: NSView) {
         entries.append(Entry(id: id, title: title, view: view))
+        hint.isHidden = true
         select(id)
     }
 
@@ -49,7 +71,8 @@ final class TabHost: NSView {
         if selectedID == id {
             selectedID = nil
             if let next = entries.indices.contains(i) ? entries[i] : entries.last { select(next.id) } else {
-                content.subviews.forEach { $0.removeFromSuperview() }
+                content.subviews.filter { $0 !== hint }.forEach { $0.removeFromSuperview() }
+                hint.isHidden = false
                 rebuildStrip()
             }
         } else { rebuildStrip() }
@@ -58,7 +81,7 @@ final class TabHost: NSView {
     func select(_ id: String) {
         guard let entry = entries.first(where: { $0.id == id }) else { return }
         selectedID = id
-        content.subviews.forEach { $0.removeFromSuperview() }
+        content.subviews.filter { $0 !== hint }.forEach { $0.removeFromSuperview() }
         entry.view.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(entry.view)
         NSLayoutConstraint.activate([
@@ -80,7 +103,7 @@ final class TabHost: NSView {
             label.isBordered = false
             label.attributedTitle = NSAttributedString(string: e.title, attributes: [
                 .font: NSFont.systemFont(ofSize: 12, weight: selected ? .semibold : .regular),
-                .foregroundColor: selected ? NSColor.white : Theme.gutter,
+                .foregroundColor: selected ? Theme.foreground : Theme.gutter,
             ])
             let close = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close")!,
                                  target: self, action: #selector(closeClicked(_:)))
@@ -93,7 +116,7 @@ final class TabHost: NSView {
             pair.spacing = 2
             pair.wantsLayer = true
             pair.layer?.cornerRadius = 5
-            pair.layer?.backgroundColor = selected ? NSColor.white.withAlphaComponent(0.1).cgColor : nil
+            pair.layer?.backgroundColor = selected ? Theme.palette.tabSelected.cgColor : nil
             pair.edgeInsets = NSEdgeInsets(top: 3, left: 8, bottom: 3, right: 6)
             strip.addArrangedSubview(pair)
         }

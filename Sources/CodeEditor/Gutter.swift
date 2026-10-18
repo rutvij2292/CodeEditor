@@ -3,10 +3,9 @@ import AppKit
 /// Line numbers as a plain sibling view of the scroll view (NSRulerView overlays content on recent macOS).
 final class GutterView: NSView {
     private weak var textView: NSTextView?
-    private let attrs: [NSAttributedString.Key: Any] = [
-        .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
-        .foregroundColor: Theme.gutter,
-    ]
+    private var attrs: [NSAttributedString.Key: Any] {
+        [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: Theme.gutter]
+    }
     override var isFlipped: Bool { true }
 
     init(textView: NSTextView, scrollView: NSScrollView) {
@@ -19,6 +18,7 @@ final class GutterView: NSView {
         // Layout finishes after init; the text view growing is our cue to redraw.
         textView.postsFrameChangedNotifications = true
         nc.addObserver(self, selector: #selector(refresh), name: NSView.frameDidChangeNotification, object: textView)
+        nc.addObserver(self, selector: #selector(refresh), name: Theme.didChange, object: nil)
         DispatchQueue.main.async { [weak self] in self?.needsDisplay = true }
     }
     required init?(coder: NSCoder) { fatalError() }

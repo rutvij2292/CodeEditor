@@ -12,4 +12,5 @@ final class QuickPicker {
                         provider: ((String) -> [PickerItem])? = nil) {}
     /// Renders the currently presented picker's content view to a PNG (headless verification).
     static func snapshot(to path: String) {}
+    static func dismiss() {}
 }

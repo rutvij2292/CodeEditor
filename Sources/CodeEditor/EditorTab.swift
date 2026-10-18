@@ -5,11 +5,13 @@ final class EditorTab: NSObject, NSTextViewDelegate {
     let url: URL
     let scrollView = NSScrollView()
     private(set) var view: NSView!
-    let textView: NSTextView
+    let textView: CodeTextView
     private var highlighter: Highlighter?
     private var reparseWork: DispatchWorkItem?
     private(set) var isDirty = false
     var onDirtyChange: (() -> Void)?
+    var onSave: (() -> Void)?
+    private var diskDate: Date?
 
     init?(url: URL) {
         self.url = url
@@ -22,7 +24,7 @@ final class EditorTab: NSObject, NSTextViewDelegate {
                                                      height: CGFloat.greatestFiniteMagnitude))
         storage.addLayoutManager(layout)
         layout.addTextContainer(container)
-        textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
+        textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
         super.init()
 
         textView.isRichText = false
@@ -48,6 +50,9 @@ final class EditorTab: NSObject, NSTextViewDelegate {
         textView.textStorage?.setAttributes(textView.typingAttributes,
                                             range: NSRange(location: 0, length: (text as NSString).length))
         textView.delegate = self
+        textView.commentStyle = CodeTextView.commentStyle(forExtension: url.pathExtension)
+        diskDate = Self.modificationDate(url)
+        NotificationCenter.default.addObserver(self, selector: #selector(themeChanged), name: Theme.didChange, object: nil)
 
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
@@ -67,11 +72,46 @@ final class EditorTab: NSObject, NSTextViewDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
 
+    private static func modificationDate(_ url: URL) -> Date? {
+        (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    }
+
+    @objc private func themeChanged() {
+        textView.textColor = Theme.foreground
+        textView.backgroundColor = Theme.background
+        textView.insertionPointColor = Theme.foreground
+        textView.typingAttributes = [.font: Theme.font, .foregroundColor: Theme.foreground]
+        textView.textStorage?.addAttribute(.foregroundColor, value: Theme.foreground,
+                                           range: NSRange(location: 0, length: textView.textStorage?.length ?? 0))
+        scrollView.backgroundColor = Theme.background
+        highlighter?.apply()
+    }
+
+    /// Picks up edits made outside the app (agents, git). Clean buffers reload in place; dirty ones are left alone.
+    func reloadIfChangedOnDisk() {
+        guard !isDirty, let date = Self.modificationDate(url), date != diskDate,
+              let data = try? Data(contentsOf: url), data.count < 5_000_000,
+              let text = String(data: data, encoding: .utf8) else { return }
+        diskDate = date
+        guard text != textView.string else { return }
+        let selection = textView.selectedRange()
+        let origin = scrollView.contentView.bounds.origin
+        textView.string = text
+        textView.textStorage?.setAttributes(textView.typingAttributes,
+                                            range: NSRange(location: 0, length: (text as NSString).length))
+        textView.setSelectedRange(NSRange(location: min(selection.location, (text as NSString).length), length: 0))
+        scrollView.contentView.scroll(to: origin)
+        highlighter?.reparse()
+        textView.undoManager?.removeAllActions()
+    }
+
     func save() {
         do {
             try textView.string.write(to: url, atomically: true, encoding: .utf8)
             isDirty = false
+            diskDate = Self.modificationDate(url)
             onDirtyChange?()
+            onSave?()
         } catch {
             NSAlert(error: error).runModal()
         }
