@@ -15,6 +15,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     private var historyIndex = -1
     private var navigating = false
     private var index: ProjectIndex?
+    var findPanel: FindPanelController?
+    var projectFiles: [String] { index?.files ?? [] }
     private var symbols: SymbolIndex?
     private var watcher: FSWatcher?
     private var fallbackTimer: Timer?
@@ -158,6 +160,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             if self.bottom.isVisible, self.bottom.selectedID == "git" { self.ensureGitPanel() }
             self.refreshGitStatus()
         }
+        installFeaturePanels()
         if let session = SessionStore.load(for: url) { restoreSession(session) }
     }
 
@@ -253,6 +256,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     func applyGitStatus(changes: [GitChange], info: GitRepo.BranchInfo?, repoRoot: URL) {
         let map = Dictionary(changes.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
         tree.setStatus(map, repoRoot: repoRoot)
+        NotificationCenter.default.post(name: GitGutter.statusChanged, object: nil)
         statusKinds = Dictionary(VCSKind.kinds(for: map, repoRoot: repoRoot).map { (VCSKind.canonical($0.key), $0.value) },
                                  uniquingKeysWith: { a, _ in a })
         for e in tabs.entries { applyTint(e.id) }

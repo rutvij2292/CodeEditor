@@ -22,6 +22,8 @@ enum Verification {
             case "everywhere": w.showSearchEverywhere()
             case "projects": app.showRecentProjects(nil)
             case "git": w.toggleGitPanel()
+            case "find":
+                w.showToolPanel("find") { w.findPanel?.show(seed: AppEnv.value("CE_FIND_QUERY") ?? "function", replaceMode: AppEnv.value("CE_FIND_REPLACE") != nil) }
             case "bottom": decorateBottom(w)
             case "tabs": decorateTabs(w)
             case "completion":
@@ -32,7 +34,7 @@ enum Verification {
             default: break
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (picker == "git" ? 3.5 : picker == "completion" ? 2.2 : 1.6)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + ((picker == "git" || picker == "find") ? 3.5 : picker == "completion" ? 2.2 : 1.6)) {
             if let w = app.active?.window.contentView { render(w, to: shot) }
             if picker == "completion", let w = app.active, let tab = w.current {
                 let popupPath = shot.replacingOccurrences(of: ".png", with: "_popup.png")

@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         LanguageServers.start()
         LanguageServers.openLocation = { [weak self] url, line, _ in self?.active?.open(url, line: line) }
         BracketColorizer.start()
+        GitGutter.start()
         NSApp.mainMenu = MainMenu.build(app: self)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
             self?.trackDoubleShift(event)
