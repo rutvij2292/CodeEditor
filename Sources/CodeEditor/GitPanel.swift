@@ -103,6 +103,15 @@ private final class GitRowCell: NSTableCellView {
     private let buttons = NSStackView()
     var onToggle: ((Bool) -> Void)?
     var onAccept: ((Int) -> Void)?
+    private var nameToButtons: NSLayoutConstraint!, dirToButtons: NSLayoutConstraint!
+    private var nameToEdge: NSLayoutConstraint!, dirToEdge: NSLayoutConstraint!
+
+    /// A hidden stack view still reserves its width, which clipped file names to half the row: only constrain against the buttons while they show.
+    private func showButtons(_ on: Bool) {
+        buttons.isHidden = !on
+        nameToButtons.isActive = on; dirToButtons.isActive = on
+        nameToEdge.isActive = !on; dirToEdge.isActive = !on
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -111,7 +120,7 @@ private final class GitRowCell: NSTableCellView {
         badge.font = .monospacedSystemFont(ofSize: 11, weight: .bold)
         badge.alignment = .center
         name.font = .systemFont(ofSize: 12)
-        name.lineBreakMode = .byTruncatingMiddle
+        name.lineBreakMode = .byTruncatingTail
         dir.font = .systemFont(ofSize: 11)
         dir.lineBreakMode = .byTruncatingHead
         for (i, title) in ["Accept Yours", "Accept Theirs", "Merge…"].enumerated() {
@@ -127,11 +136,13 @@ private final class GitRowCell: NSTableCellView {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
-        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        name.setContentCompressionResistancePriority(.init(500), for: .horizontal)
         dir.setContentCompressionResistancePriority(.init(100), for: .horizontal)
         buttons.setContentCompressionResistancePriority(.required, for: .horizontal)
-        let nameToButtons = name.trailingAnchor.constraint(lessThanOrEqualTo: buttons.leadingAnchor, constant: -6)
-        let dirToButtons = dir.trailingAnchor.constraint(lessThanOrEqualTo: buttons.leadingAnchor, constant: -6)
+        nameToButtons = name.trailingAnchor.constraint(lessThanOrEqualTo: buttons.leadingAnchor, constant: -6)
+        dirToButtons = dir.trailingAnchor.constraint(lessThanOrEqualTo: buttons.leadingAnchor, constant: -6)
+        nameToEdge = name.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -6)
+        dirToEdge = dir.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -6)
         NSLayoutConstraint.activate([
             check.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
             check.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -146,6 +157,7 @@ private final class GitRowCell: NSTableCellView {
             buttons.centerYAnchor.constraint(equalTo: centerYAnchor),
             nameToButtons, dirToButtons,
         ])
+        showButtons(false)
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -174,7 +186,7 @@ private final class GitRowCell: NSTableCellView {
         name.textColor = Theme.foreground
         dir.stringValue = "\(group.rows.count) file\(group.rows.count == 1 ? "" : "s")"
         dir.textColor = Theme.gutter
-        buttons.isHidden = true
+        showButtons(false)
     }
 
     func configureRow(_ row: GitRow, state: NSControl.StateValue) {
@@ -189,7 +201,7 @@ private final class GitRowCell: NSTableCellView {
         name.textColor = color
         dir.stringValue = path.deletingLastPathComponent
         dir.textColor = Theme.gutter
-        buttons.isHidden = row.kind != .conflicts
+        showButtons(row.kind == .conflicts)
     }
 }
 
