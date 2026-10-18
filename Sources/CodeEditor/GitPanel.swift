@@ -59,11 +59,20 @@ private final class GitOutline: NSOutlineView {
     var onSpace: (() -> Void)?
     var onReturn: (() -> Void)?
     override func keyDown(with event: NSEvent) {
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         switch event.keyCode {
-        case 49: onSpace?()
-        case 36, 76: onReturn?()
+        case 49 where mods.isEmpty: onSpace?()
+        case 36 where mods.isEmpty, 76 where mods.isEmpty: onReturn?()
         default: super.keyDown(with: event)
         }
+    }
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods == .command, event.charactersIgnoringModifiers == "a", window?.firstResponder === self {
+            selectAll(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 }
 
@@ -189,6 +198,32 @@ private final class GitPanelView: NSView {
     let right = NSSplitView()
     let bannerLabel = NSTextField(wrappingLabelWithString: "")
     var positioned = false
+    var onCommit: (() -> Void)?
+    var onCommitPush: (() -> Void)?
+    var onRollback: (() -> Void)?
+    var onEscape: (() -> Void)?
+    /// True while a popover, sheet or search text should get Esc instead of the panel.
+    var escapeIsBusy: () -> Bool = { false }
+
+    private func focusInside() -> Bool {
+        guard let r = window?.firstResponder as? NSView else { return false }
+        return r.isDescendant(of: self)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard focusInside() else { return super.performKeyEquivalent(with: event) }
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods == .command, event.keyCode == 36 || event.keyCode == 76 { onCommit?(); return true }
+        if mods == [.command, .option], event.keyCode == 40 { onCommitPush?(); return true }            // K
+        if mods == [.command, .option], event.keyCode == 6, window?.firstResponder is NSOutlineView {    // Z
+            onRollback?(); return true
+        }
+        if event.keyCode == 53, mods.isEmpty || mods == .shift, window?.attachedSheet == nil, !escapeIsBusy() {
+            onEscape?()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 
     override func layout() {
         super.layout()
@@ -210,6 +245,11 @@ private final class GitPanelView: NSView {
 final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
     let view: NSView
     var onStatusChange: (() -> Void)?
+    /// Esc / Shift-Esc pressed while focus is inside the panel and no popover, sheet or search text wants it.
+    var onRequestClose: (() -> Void)?
+    /// Fired after every successful reload of the repository state.
+    var onSummaryChange: ((GitSummary) -> Void)?
+    private(set) var summary = GitSummary.empty
 
     private let panel = GitPanelView()
     private var bannerLabel: NSTextField { panel.bannerLabel }
@@ -222,8 +262,26 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private let fetchButton = NSButton()
     private let pullButton = NSButton()
     private let pushButton = NSButton()
+    private let rollbackButton = NSButton()
+    private let stashButton = NSButton()
+    private let modeControl = NSSegmentedControl(labels: ["Changes", "Log"], trackingMode: .selectOne, target: nil, action: nil)
     private let spinner = NSProgressIndicator()
     private let banner = NSView()
+    private let opBanner = NSView()
+    private let opLabel = NSTextField(labelWithString: "")
+    private let opContinue = NSButton(title: "Continue", target: nil, action: nil)
+    private let opAbort = NSButton(title: "Abort", target: nil, action: nil)
+    private lazy var logView = GitLogView(repo: repo)
+    private var stashPopover: NSPopover?
+    private var stashes: [GitStash] = []
+    private var currentOp: GitOperation?
+    private var bannerIsNote = false
+    private var capNoteShown = false
+    private var reloading = false
+    private var reloadQueued = false
+    private enum Mode { case changes, log }
+    private var mode = Mode.changes
+    private static let maxUntrackedShown = 2000
     private let outline = GitOutline()
     private let diffHost = NSView()
     private let diffView = SideBySideDiffView()
@@ -298,6 +356,14 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         tool(fetchButton, "Fetch", "arrow.triangle.2.circlepath", #selector(fetchTapped))
         tool(pullButton, "Pull", "arrow.down.to.line", #selector(pullTapped))
         tool(pushButton, "Push", "arrow.up.to.line", #selector(pushTapped))
+        tool(rollbackButton, "Rollback", "arrow.uturn.backward", #selector(rollbackTapped))
+        tool(stashButton, "Stash", "tray.and.arrow.down", #selector(stashTapped))
+        rollbackButton.toolTip = "Roll back selected changes (⌥⌘Z)"
+        pushButton.toolTip = "Push (hold ⌥ to always preview)"
+        modeControl.controlSize = .small
+        modeControl.selectedSegment = 0
+        modeControl.target = self
+        modeControl.action = #selector(modeChanged)
         branchButton.controlSize = .small
         branchButton.font = .systemFont(ofSize: 12)
         branchButton.bezelStyle = .texturedRounded
@@ -306,7 +372,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         spinner.isDisplayedWhenStopped = false
         spinner.isIndeterminate = true
 
-        let toolbar = NSStackView(views: [branchButton, fetchButton, pullButton, pushButton, spinner])
+        let toolbar = NSStackView(views: [branchButton, modeControl, fetchButton, pullButton, pushButton, rollbackButton, stashButton, spinner])
         toolbar.orientation = .horizontal
         toolbar.spacing = 6
         toolbar.alignment = .centerY
@@ -316,7 +382,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         // banner
         bannerLabel.font = .systemFont(ofSize: 12)
         bannerLabel.isSelectable = true
-        bannerLabel.maximumNumberOfLines = 5
+        bannerLabel.maximumNumberOfLines = 9
         bannerLabel.lineBreakMode = .byTruncatingTail
         bannerLabel.textColor = GitColors.conflict
         let close = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "Dismiss")!, target: self, action: #selector(dismissBanner))
@@ -333,6 +399,30 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             close.trailingAnchor.constraint(equalTo: banner.trailingAnchor, constant: -8),
             close.topAnchor.constraint(equalTo: banner.topAnchor, constant: 6),
             close.widthAnchor.constraint(equalToConstant: 12), close.heightAnchor.constraint(equalToConstant: 12),
+        ])
+
+        // operation-in-progress banner (merge / rebase / cherry-pick / revert)
+        opLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        for b in [opContinue, opAbort] {
+            b.bezelStyle = .rounded
+            b.controlSize = .small
+            b.font = .systemFont(ofSize: 11)
+            b.target = self
+        }
+        opContinue.action = #selector(opContinueTapped)
+        opAbort.action = #selector(opAbortTapped)
+        opBanner.wantsLayer = true
+        opBanner.isHidden = true
+        for v in [opLabel, opContinue, opAbort] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; opBanner.addSubview(v) }
+        NSLayoutConstraint.activate([
+            opLabel.leadingAnchor.constraint(equalTo: opBanner.leadingAnchor, constant: 10),
+            opLabel.centerYAnchor.constraint(equalTo: opBanner.centerYAnchor),
+            opAbort.trailingAnchor.constraint(equalTo: opBanner.trailingAnchor, constant: -8),
+            opContinue.trailingAnchor.constraint(equalTo: opAbort.leadingAnchor, constant: -6),
+            opAbort.centerYAnchor.constraint(equalTo: opBanner.centerYAnchor),
+            opContinue.centerYAnchor.constraint(equalTo: opBanner.centerYAnchor),
+            opLabel.trailingAnchor.constraint(lessThanOrEqualTo: opContinue.leadingAnchor, constant: -8),
+            opBanner.heightAnchor.constraint(equalToConstant: 30),
         ])
 
         // outline
@@ -493,7 +583,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
         let separator = NSBox()
         separator.boxType = .separator
-        let stack = NSStackView(views: [toolbar, separator, banner])
+        let stack = NSStackView(views: [toolbar, separator, banner, opBanner])
         stack.orientation = .vertical
         stack.spacing = 0
         stack.alignment = .leading
@@ -504,6 +594,24 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         panel.split.translatesAutoresizingMaskIntoConstraints = false
         panel.addSubview(stack)
         panel.addSubview(panel.split)
+        logView.translatesAutoresizingMaskIntoConstraints = false
+        logView.isHidden = true
+        panel.addSubview(logView)
+        panel.onCommit = { [weak self] in self?.commitTapped() }
+        panel.onCommitPush = { [weak self] in self?.commitPushTapped() }
+        panel.onRollback = { [weak self] in self?.rollbackTapped() }
+        panel.onEscape = { [weak self] in self?.onRequestClose?() }
+        panel.escapeIsBusy = { [weak self] in
+            guard let self else { return false }
+            return self.stashPopover?.isShown == true || (self.mode == .log && self.logView.searchIsEditing)
+        }
+        logView.onAction = { [weak self] a, c in self?.logAction(a, c) }
+        NSLayoutConstraint.activate([
+            logView.topAnchor.constraint(equalTo: stack.bottomAnchor),
+            logView.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+            logView.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            logView.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+        ])
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: panel.topAnchor),
             stack.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
@@ -511,6 +619,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             toolbar.widthAnchor.constraint(equalTo: stack.widthAnchor),
             separator.widthAnchor.constraint(equalTo: stack.widthAnchor),
             banner.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            opBanner.widthAnchor.constraint(equalTo: stack.widthAnchor),
             panel.split.topAnchor.constraint(equalTo: stack.bottomAnchor),
             panel.split.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
             panel.split.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
@@ -522,7 +631,9 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     @objc private func applyTheme() {
         panel.layer?.backgroundColor = Theme.background.cgColor
-        banner.layer?.backgroundColor = GitColors.conflict.withAlphaComponent(0.14).cgColor
+        styleBanner()
+        opBanner.layer?.backgroundColor = GitColors.modified.withAlphaComponent(0.16).cgColor
+        opLabel.textColor = Theme.foreground
         outline.backgroundColor = Theme.background
         messageView.backgroundColor = Theme.background
         messageView.textColor = Theme.foreground
@@ -544,27 +655,89 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     @objc private func appActive() { reload() }
 
+    private struct Snapshot {
+        var changes: [GitChange]; var info: GitRepo.BranchInfo; var branches: (local: [String], remote: [String])
+        var merging: Bool; var op: GitOperation?; var stashes: [GitStash]; var hiddenUntracked: Int
+    }
+
+    /// Refreshes status, branches, stashes and the in-progress operation off the main thread. Calls made while a
+    /// refresh is running are coalesced into one follow-up refresh. Never changes the first responder.
     func reload() {
+        if reloading { reloadQueued = true; return }
+        reloading = true
         reloadGen += 1
         let gen = reloadGen
         reader.async { [repo] in
-            let result: Result<(changes: [GitChange], info: GitRepo.BranchInfo, branches: (local: [String], remote: [String]), merging: Bool), Error>
+            let result: Result<Snapshot, Error>
             do {
-                let s = try repo.statusAndBranch()
+                let s = try repo.statusCapped(maxUntracked: Self.maxUntrackedShown)
                 let b = (try? repo.branches()) ?? ([], [])
-                result = .success((s.changes, s.info, b, repo.isMerging))
+                result = .success(Snapshot(changes: s.changes, info: s.info, branches: b, merging: repo.isMerging,
+                                           op: repo.operationInProgress(), stashes: (try? repo.stashList()) ?? [],
+                                           hiddenUntracked: s.hiddenUntracked))
             } catch { result = .failure(error) }
             DispatchQueue.main.async { [weak self] in
-                guard let self, gen == self.reloadGen else { return }
-                switch result {
-                case .success(let r):
-                    self.info = r.info
-                    self.branches = r.branches
-                    self.merging = r.merging
-                    self.apply(changes: r.changes)
-                case .failure(let e): self.showError(e)
+                guard let self else { return }
+                self.reloading = false
+                if gen == self.reloadGen {
+                    switch result {
+                    case .success(let r):
+                        self.info = r.info
+                        self.branches = r.branches
+                        self.merging = r.merging
+                        self.currentOp = r.op
+                        self.stashes = r.stashes
+                        self.apply(changes: r.changes)
+                        self.updateOpBanner()
+                        self.updateCapNote(hidden: r.hiddenUntracked)
+                        self.publishSummary()
+                        if self.mode == .log { self.logView.reload() }
+                    case .failure(let e): self.showError(e)
+                    }
                 }
+                if self.reloadQueued { self.reloadQueued = false; self.reload() }
             }
+        }
+    }
+
+    private func publishSummary() {
+        let paths = Set(changes.map(\.path))
+        summary = GitSummary(branch: info.name, ahead: info.ahead, behind: info.behind, changes: paths.count,
+                             conflicts: changes.filter(\.isConflict).count, staged: changes.filter { $0.isStaged }.count)
+        onSummaryChange?(summary)
+    }
+
+    private func updateCapNote(hidden: Int) {
+        if hidden > 0 {
+            if banner.isHidden || capNoteShown {
+                showNote("\(hidden) more untracked files are not shown (first \(Self.maxUntrackedShown) listed). Ignore generated folders in .gitignore.")
+                capNoteShown = true
+            }
+        } else if capNoteShown {
+            banner.isHidden = true
+            capNoteShown = false
+        }
+    }
+
+    private func updateOpBanner() {
+        guard let op = currentOp else { opBanner.isHidden = true; return }
+        let conflicts = groups.contains { $0.kind == .conflicts }
+        opLabel.stringValue = "\(op.title) in progress" + (conflicts ? " — resolve conflicts, then continue" : "")
+        opBanner.isHidden = false
+    }
+
+    @objc private func opContinueTapped() {
+        guard let op = currentOp else { return }
+        perform({ try $0.continueOperation(op) }, resets: true)
+    }
+
+    @objc private func opAbortTapped() {
+        guard let op = currentOp else { return }
+        let a = GitDialogs.confirmAlert(title: "Abort \(op.title.lowercased())?", info: "The \(op.title.lowercased()) is cancelled and its partial results are discarded.",
+                                        button: "Abort", destructive: true)
+        present(a) { [weak self] r in
+            guard r == .alertFirstButtonReturn else { return }
+            self?.perform({ try $0.abortOperation(op) }, resets: true)
         }
     }
 
@@ -757,7 +930,12 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         menu.addItem(.separator())
         if rows.contains(where: { $0.kind == .changes || $0.kind == .untracked }) { add("Stage", #selector(menuStage)) }
         if rows.contains(where: { $0.kind == .staged }) { add("Unstage", #selector(menuUnstage)) }
-        if rows.contains(where: { $0.kind != .conflicts }) { menu.addItem(.separator()); add("Discard Changes…", #selector(menuDiscard)) }
+        if rows.contains(where: { $0.kind != .conflicts }) {
+            menu.addItem(.separator())
+            add("Rollback…", #selector(rollbackTapped))
+            menu.items.last?.keyEquivalent = "z"
+            menu.items.last?.keyEquivalentModifierMask = [.command, .option]
+        }
     }
 
     private func menuRows() -> [GitRow] { selectedItems().compactMap { $0 as? GitRow } }
@@ -770,17 +948,149 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         let paths = menuRows().filter { $0.kind == .staged }.flatMap { [$0.change.path] + ($0.change.origPath.map { [$0] } ?? []) }
         perform({ try $0.unstage(paths) }, resets: true)
     }
-    @objc private func menuDiscard() {
-        let paths = menuRows().filter { $0.kind != .conflicts }.map(\.change.path)
-        guard !paths.isEmpty else { return }
-        let alert = NSAlert()
-        alert.messageText = "Discard changes to \(paths.count) file\(paths.count == 1 ? "" : "s")?"
-        alert.informativeText = "This cannot be undone. Untracked files are deleted."
-        alert.addButton(withTitle: "Discard")
-        alert.addButton(withTitle: "Cancel")
-        alert.buttons[0].hasDestructiveAction = true
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        perform({ try $0.discard(paths) }, resets: true)
+    // MARK: rollback
+
+    /// Selected files (groups expand to their rows); falls back to the checked files when nothing is selected.
+    private func rollbackTargets() -> (tracked: [String], untracked: [String]) {
+        var rows = selectedItems().flatMap { item -> [GitRow] in
+            (item as? GitGroup)?.rows ?? (item as? GitRow).map { [$0] } ?? []
+        }
+        if rows.isEmpty { rows = groups.flatMap(\.rows).filter { checked.contains($0.change.path) } }
+        var seen = Set<String>(), tracked: [String] = [], untracked: [String] = []
+        for r in rows where r.kind != .conflicts && seen.insert(r.change.path).inserted {
+            if r.change.isUntracked { untracked.append(r.change.path) } else { tracked.append(r.change.path) }
+        }
+        return (tracked, untracked)
+    }
+
+    func makeRollbackAlert() -> NSAlert? {
+        let t = rollbackTargets()
+        return t.tracked.isEmpty && t.untracked.isEmpty ? nil : GitDialogs.rollbackAlert(tracked: t.tracked, untracked: t.untracked)
+    }
+
+    @objc private func rollbackTapped() {
+        guard busy == 0 else { return }
+        let t = rollbackTargets()
+        let paths = t.tracked + t.untracked
+        guard !paths.isEmpty else { NSSound.beep(); return }
+        present(GitDialogs.rollbackAlert(tracked: t.tracked, untracked: t.untracked)) { [weak self] r in
+            guard r == .alertFirstButtonReturn else { return }
+            self?.perform({ try $0.rollback(paths) }, resets: true)
+        }
+    }
+
+    // MARK: stash
+
+    func makeStashView() -> GitStashView {
+        let v = GitStashView()
+        v.onStash = { [weak self] in self?.stashPopover?.close(); self?.stashChanges() }
+        v.onApply = { [weak self] s in self?.stashPopover?.close(); self?.perform({ try $0.stashApply(index: s.index) }, resets: true) }
+        v.onPop = { [weak self] s in self?.stashPopover?.close(); self?.perform({ try $0.stashPop(index: s.index) }, resets: true) }
+        v.onDrop = { [weak self] s in
+            self?.stashPopover?.close()
+            let a = GitDialogs.confirmAlert(title: "Drop stash?", info: "\(s.message)\n\nThis cannot be undone.", button: "Drop", destructive: true)
+            self?.present(a) { r in
+                guard r == .alertFirstButtonReturn else { return }
+                self?.perform({ try $0.stashDrop(index: s.index) })
+            }
+        }
+        v.show(stashes: stashes)
+        return v
+    }
+
+    @objc private func stashTapped() {
+        if let p = stashPopover, p.isShown { p.close(); return }
+        reader.async { [repo] in
+            let list = (try? repo.stashList()) ?? []
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.stashes = list
+                let pop = NSPopover()
+                pop.behavior = .transient
+                let vc = NSViewController()
+                vc.view = self.makeStashView()
+                pop.contentViewController = vc
+                pop.contentSize = vc.view.frame.size
+                self.stashPopover = pop
+                pop.show(relativeTo: self.stashButton.bounds, of: self.stashButton, preferredEdge: .maxY)
+            }
+        }
+    }
+
+    private func stashChanges() {
+        let (alert, field, untracked) = GitDialogs.stashAlert()
+        present(alert) { [weak self] r in
+            guard r == .alertFirstButtonReturn else { return }
+            let msg = field.stringValue, inc = untracked.state == .on
+            self?.perform({ try $0.stashPush(message: msg, includeUntracked: inc) }, resets: true)
+        }
+    }
+
+    // MARK: log tab
+
+    @objc private func modeChanged() { setMode(modeControl.selectedSegment == 1 ? .log : .changes) }
+
+    private func setMode(_ m: Mode, reloadLog: Bool = true) {
+        mode = m
+        modeControl.selectedSegment = m == .log ? 1 : 0
+        panel.split.isHidden = m == .log
+        logView.isHidden = m == .changes
+        if m == .log, reloadLog { logView.reload() }
+    }
+
+    func showLog() { setMode(.log) }
+    func showChanges() { setMode(.changes) }
+
+    /// Switches to the Log tab listing the history of one file (`git log --follow`).
+    func showHistory(for url: URL) {
+        let root = repo.root.resolvingSymlinksInPath().path
+        let path = url.resolvingSymlinksInPath().path
+        guard path.hasPrefix(root + "/") else { NSSound.beep(); return }
+        setMode(.log, reloadLog: false)
+        logView.showHistory(path: String(path.dropFirst(root.count + 1)))
+    }
+
+    private func logAction(_ action: GitLogAction, _ c: GitCommit) {
+        switch action {
+        case .copyHash:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(c.hash, forType: .string)
+        case .checkout:
+            let a = GitDialogs.confirmAlert(title: "Checkout \(c.shortHash)?", info: "HEAD will be detached at “\(c.subject)”. Create a branch to keep new commits.", button: "Checkout")
+            present(a) { [weak self] r in
+                guard r == .alertFirstButtonReturn else { return }
+                self?.perform({ try $0.checkoutRevision(c.hash) }, resets: true)
+            }
+        case .createBranch:
+            let (a, field) = GitDialogs.textAlert(title: "New Branch", info: "Create and check out a branch at \(c.shortHash).", placeholder: "branch-name", button: "Create")
+            present(a) { [weak self] r in
+                let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+                guard r == .alertFirstButtonReturn, !name.isEmpty else { return }
+                self?.perform({ try $0.createBranch(name, at: c.hash, checkout: true) }, resets: true)
+            }
+        case .cherryPick: perform({ try $0.cherryPick(c.hash) }, resets: true)
+        case .revert: perform({ try $0.revertCommit(c.hash) }, resets: true)
+        case .reset(let mode):
+            if mode == .hard {
+                let (a, field) = GitDialogs.textAlert(
+                    title: "Hard reset to \(c.shortHash)?",
+                    info: "The current branch moves to “\(c.subject)” and ALL uncommitted changes (\(changes.count) file\(changes.count == 1 ? "" : "s")) and later commits are discarded. Type RESET to confirm.",
+                    placeholder: "RESET", button: "Hard Reset")
+                a.buttons[0].hasDestructiveAction = true
+                present(a) { [weak self] r in
+                    guard r == .alertFirstButtonReturn, field.stringValue == "RESET" else { return }
+                    self?.perform({ try $0.reset(to: c.hash, mode: .hard) }, resets: true)
+                }
+            } else {
+                let a = GitDialogs.confirmAlert(title: "Reset current branch to \(c.shortHash)?",
+                                                info: mode == .soft ? "Later commits are removed; their changes stay staged." : "Later commits are removed; their changes stay in the working tree, unstaged.",
+                                                button: "Reset")
+                present(a) { [weak self] r in
+                    guard r == .alertFirstButtonReturn else { return }
+                    self?.perform({ try $0.reset(to: c.hash, mode: mode) }, resets: true)
+                }
+            }
+        }
     }
 
     // MARK: diff
@@ -1050,9 +1360,32 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     // MARK: operations
 
     private func showError(_ e: Error) {
+        bannerIsNote = false
+        capNoteShown = false
+        styleBanner()
         bannerLabel.stringValue = (e as? GitError)?.message ?? e.localizedDescription
         banner.isHidden = false
         panel.needsLayout = true
+    }
+
+    private func showNote(_ text: String) {
+        bannerIsNote = true
+        styleBanner()
+        bannerLabel.stringValue = text
+        banner.isHidden = false
+        panel.needsLayout = true
+    }
+
+    private func styleBanner() {
+        let c = bannerIsNote ? GitColors.modified : GitColors.conflict
+        banner.layer?.backgroundColor = c.withAlphaComponent(0.14).cgColor
+        bannerLabel.textColor = bannerIsNote ? Theme.foreground : GitColors.conflict
+    }
+
+    /// Runs the alert as a sheet on the panel's window (modal fallback when it has none).
+    private func present(_ alert: NSAlert, _ completion: @escaping (NSApplication.ModalResponse) -> Void) {
+        if let w = panel.window, w.isVisible { alert.beginSheetModal(for: w, completionHandler: completion) }
+        else { completion(alert.runModal()) }
     }
 
     @objc private func dismissBanner() { banner.isHidden = true }
@@ -1064,7 +1397,8 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     }
 
     /// Runs `work` serially off the main thread, then refreshes. Errors land in the banner.
-    private func perform(_ work: @escaping (GitRepo) throws -> Void, done: (() -> Void)? = nil, resets: Bool = false) {
+    private func perform(_ work: @escaping (GitRepo) throws -> Void, done: (() -> Void)? = nil,
+                         then: ((Error?) -> Void)? = nil, resets: Bool = false) {
         setBusy(true)
         banner.isHidden = true
         ops.async { [repo] in
@@ -1075,6 +1409,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
                 self.setBusy(false)
                 if let error { self.showError(error) }
                 done?()
+                then?(error)
                 if resets { self.resetSelections() }
                 self.reload()
                 self.onStatusChange?()
@@ -1084,7 +1419,32 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     @objc private func fetchTapped() { perform { try $0.fetch() } }
     @objc private func pullTapped() { perform { try $0.pull() } }
-    @objc private func pushTapped() { perform { try $0.push() } }
+    @objc private func pushTapped() { startPush(forcePreview: NSEvent.modifierFlags.contains(.option)) }
+
+    /// Lists the commits about to be pushed and asks first (unless "Don't ask again" was ticked). Never forces.
+    private func startPush(forcePreview: Bool = false) {
+        guard busy == 0 else { return }
+        setBusy(true)
+        reader.async { [repo] in
+            let r = Result { try repo.pushPreview() }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.setBusy(false)
+                switch r {
+                case .failure(let e): self.showError(e)
+                case .success(let p):
+                    if p.commits.isEmpty, !p.newBranch { self.showNote("Nothing to push: \(p.branch) is up to date with \(p.upstream ?? "its remote")."); return }
+                    if GitDialogs.skipPushPreview, !forcePreview { self.perform({ try $0.push() }); return }
+                    let (alert, dontAsk) = GitDialogs.pushAlert(p)
+                    self.present(alert) { resp in
+                        guard resp == .alertFirstButtonReturn else { return }
+                        if dontAsk.state == .on { GitDialogs.skipPushPreview = true }
+                        self.perform({ try $0.push() })
+                    }
+                }
+            }
+        }
+    }
 
     private func updateButtons() {
         let idle = busy == 0
@@ -1093,6 +1453,8 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         let n = checkedPaths().isEmpty ? 0 : groups.flatMap(\.rows).filter { $0.kind != .conflicts && checked.contains($0.change.path) }
             .reduce(into: Set<String>()) { $0.insert($1.change.path) }.count
         countLabel.stringValue = hasConflicts ? "Resolve conflicts first" : "\(n) file\(n == 1 ? "" : "s") selected"
+        rollbackButton.isEnabled = idle && !groups.isEmpty
+        stashButton.isEnabled = idle
         let can = idle && !hasConflicts && (n > 0 || amendCheck.state == .on || merging)
         commitButton.isEnabled = can
         commitPushButton.isEnabled = can
@@ -1144,15 +1506,17 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             showError(GitError(message: "No files selected to commit"))
             return
         }
+        var notes: [String] = []
         perform({ repo in
-            if usesPartial { try repo.commitPartial(message: message, entries: entries, amend: amend) }
+            if usesPartial { notes = try repo.commitPartial(message: message, entries: entries, amend: amend) }
             else { try repo.commit(message: message, paths: paths.isEmpty ? nil : paths, amend: amend) }
-            if push { try repo.push() }
-        }, done: { [weak self] in
-            guard let self, self.banner.isHidden else { return }
+        }, then: { [weak self] error in
+            guard let self, error == nil else { return }
             self.messageView.string = ""
             self.messageView.needsDisplay = true
             self.amendCheck.state = .off
+            if !notes.isEmpty { self.showNote(notes.joined(separator: "\n")) }
+            if push { self.startPush() }
         }, resets: true)
     }
 
@@ -1161,7 +1525,8 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private func refreshBranchMenu() {
         branchButton.removeAllItems()
         var title = "\u{2387} " + (info.name.isEmpty ? "—" : info.name)
-        if info.detached { title += " (detached)" }
+        if info.detached { title += " (detached HEAD)" }
+        if repo.isLinkedWorktree { title += " [worktree]" }
         if info.ahead > 0 { title += "  \u{2191}\(info.ahead)" }
         if info.behind > 0 { title += "  \u{2193}\(info.behind)" }
         branchButton.addItem(withTitle: title)
@@ -1184,7 +1549,11 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         menu.addItem(.separator())
         header("Local Branches")
         for b in branches.local { branch(b, current: b == info.name && !info.detached) }
-        let remotes = branches.remote.filter { r in !branches.local.contains { r.hasSuffix("/" + $0) } || true }
+        // remote branches that already have a local counterpart are reached through the local entry
+        let remotes = branches.remote.filter { r in
+            guard let slash = r.firstIndex(of: "/") else { return true }
+            return !branches.local.contains(String(r[r.index(after: slash)...]))
+        }
         if !remotes.isEmpty {
             menu.addItem(.separator())
             header("Remote Branches")

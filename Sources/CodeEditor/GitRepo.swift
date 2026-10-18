@@ -38,7 +38,7 @@ final class GitRepo {
     // MARK: process
 
     @discardableResult
-    private static func execute(_ args: [String], in dir: URL, optionalLocks: Bool = false,
+    static func execute(_ args: [String], in dir: URL, optionalLocks: Bool = false,
                                 env extra: [String: String] = [:], input: Data? = nil) throws -> Data {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: gitPath)
@@ -69,18 +69,20 @@ final class GitRepo {
         p.waitUntilExit()
         guard p.terminationStatus == 0 else {
             var msg = String(decoding: errData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            if msg.isEmpty { msg = String(decoding: out, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) }
+            let outMsg = String(decoding: out.prefix(20_000), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            // conflicts and hook output are reported on stdout; keep both streams
+            if msg.isEmpty { msg = outMsg } else if !outMsg.isEmpty, !msg.contains(outMsg) { msg = outMsg + "\n" + msg }
             throw GitError(message: msg.isEmpty ? "git \(args.first ?? "") failed (exit \(p.terminationStatus))" : msg)
         }
         return out
     }
 
     @discardableResult
-    private func git(_ args: [String], optionalLocks: Bool = false, env: [String: String] = [:], input: Data? = nil) throws -> Data {
+    func git(_ args: [String], optionalLocks: Bool = false, env: [String: String] = [:], input: Data? = nil) throws -> Data {
         try Self.execute(args, in: root, optionalLocks: optionalLocks, env: env, input: input)
     }
 
-    private func text(_ args: [String]) throws -> String {
+    func text(_ args: [String]) throws -> String {
         String(decoding: try git(args), as: UTF8.self)
     }
 
@@ -102,6 +104,13 @@ final class GitRepo {
     }
 
     func statusAndBranch() throws -> (changes: [GitChange], info: BranchInfo) {
+        let r = try statusCapped(maxUntracked: nil)
+        return (r.changes, r.info)
+    }
+
+    /// `maxUntracked` bounds the untracked files kept (huge repos); `hiddenUntracked` counts the dropped ones.
+    func statusCapped(maxUntracked: Int?) throws -> (changes: [GitChange], info: BranchInfo, hiddenUntracked: Int) {
+        var hidden = 0, untrackedSeen = 0
         let data = try git(["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all"], optionalLocks: true)
         let tokens = data.split(separator: 0, omittingEmptySubsequences: true).map { String(decoding: $0, as: UTF8.self) }
         var changes: [GitChange] = []
@@ -147,6 +156,8 @@ final class GitRepo {
                 changes.append(GitChange(path: field(t, 10), origPath: nil, index: xy[0], work: xy[1],
                                          isConflict: true, isUntracked: false, isStaged: false))
             case "?":
+                untrackedSeen += 1
+                if let cap = maxUntracked, untrackedSeen > cap { hidden += 1; continue }
                 changes.append(GitChange(path: String(t.dropFirst(2)), origPath: nil, index: "?", work: "?",
                                          isConflict: false, isUntracked: true, isStaged: false))
             default: break
@@ -154,7 +165,7 @@ final class GitRepo {
         }
         let detached = head == "(detached)"
         let name = detached ? String(oid.prefix(8)) : head
-        return (changes, (name, upstream, ahead, behind, detached))
+        return (changes, (name, upstream, ahead, behind, detached), hidden)
     }
 
     // MARK: branches
@@ -204,7 +215,10 @@ final class GitRepo {
         for p in paths {
             guard let c = map[p] else { continue }
             if c.isUntracked {
-                try? FileManager.default.removeItem(at: root.appendingPathComponent(p))
+                // untracked files are recoverable: move them to the Trash instead of deleting
+                let url = root.appendingPathComponent(p)
+                do { try FileManager.default.trashItem(at: url, resultingItemURL: nil) }
+                catch { throw GitError(message: "Cannot move \(p) to the Trash: \(error.localizedDescription)") }
             } else if c.index == "A" || c.index == "R" || c.index == "C" {
                 remove.append(p)
                 if let o = c.origPath, c.index == "R" { restore.append(o) }
@@ -215,9 +229,10 @@ final class GitRepo {
     }
 
     var hasHead: Bool { (try? git(["rev-parse", "--verify", "-q", "HEAD"])) != nil }
+    func rollback(_ paths: [String]) throws { try discard(paths) }
     var isMerging: Bool { FileManager.default.fileExists(atPath: gitDir.appendingPathComponent("MERGE_HEAD").path) }
 
-    private var gitDir: URL {
+    var gitDir: URL {
         let p = (try? text(["rev-parse", "--git-dir"]))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ".git"
         return p.hasPrefix("/") ? URL(fileURLWithPath: p) : root.appendingPathComponent(p)
     }
@@ -287,9 +302,12 @@ final class GitRepo {
 
     /// Commits the given content without touching the working tree: the commit is built in a temporary index,
     /// then the real index is reset for those paths so `status` shows exactly what was left out.
-    func commitPartial(message: String, entries: [CommitEntry], amend: Bool) throws {
-        guard !entries.isEmpty else { try commit(message: message, paths: nil, amend: amend); return }
-        if isMerging { try commit(message: message, paths: entries.map(\.path), amend: amend); return }
+    /// Hooks (`pre-commit`, `commit-msg`) are run with `git hook run` (git >= 2.36); returns notes for hooks that had to be skipped.
+    @discardableResult
+    func commitPartial(message: String, entries: [CommitEntry], amend: Bool) throws -> [String] {
+        guard !entries.isEmpty else { try commit(message: message, paths: nil, amend: amend); return [] }
+        if isMerging { try commit(message: message, paths: entries.map(\.path), amend: amend); return [] }
+        var notes: [String] = []
         let msg = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let head = hasHead
         if amend && !head { throw GitError(message: "Nothing to amend") }
@@ -311,6 +329,7 @@ final class GitRepo {
                             : "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
         if tree == headTree && !amend { throw GitError(message: "Nothing to commit") }
 
+        try runHook("pre-commit", args: [], env: env, notes: &notes)
         var parents: [String] = []
         var commitEnv: [String: String] = [:]
         var message = msg
@@ -324,6 +343,16 @@ final class GitRepo {
                 if message.isEmpty { message = try lastCommitMessage() }
             } else { parents = [oldHead] }
         }
+        if hookExists("commit-msg") {
+            let file = gitDir.appendingPathComponent("CE_COMMIT_EDITMSG")
+            try? (message + "\n").write(to: file, atomically: true, encoding: .utf8)
+            defer { try? FileManager.default.removeItem(at: file) }
+            try runHook("commit-msg", args: [file.path], env: env, notes: &notes)
+            if let edited = try? String(contentsOf: file, encoding: .utf8) {
+                let t = edited.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !t.isEmpty { message = t }
+            }
+        }
         var args = ["commit-tree", tree]
         for p in parents { args += ["-p", p] }
         args += ["-F", "-"]
@@ -334,6 +363,7 @@ final class GitRepo {
         if (try? git(["reset", "-q", "--"] + paths)) == nil {
             for p in paths { try? git(["reset", "-q", "--", p]) }
         }
+        return notes
     }
 
     // MARK: remotes
