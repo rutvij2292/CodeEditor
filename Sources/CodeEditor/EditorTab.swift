@@ -109,17 +109,25 @@ final class EditorPane: NSView {
     private var bannerHeight: NSLayoutConstraint!
     var onDropURLs: (([URL]) -> Void)?
 
-    init(content: NSView) {
+    let breadcrumbBar: BreadcrumbBar
+    private var breadcrumbHeight: NSLayoutConstraint!
+
+    init(content: NSView, breadcrumbs: BreadcrumbBar) {
+        breadcrumbBar = breadcrumbs
         super.init(frame: .zero)
         content.translatesAutoresizingMaskIntoConstraints = false
         banner.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(content); addSubview(banner)
+        breadcrumbs.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content); addSubview(breadcrumbs); addSubview(banner)
         bannerHeight = banner.heightAnchor.constraint(equalToConstant: 0)
+        breadcrumbHeight = breadcrumbs.heightAnchor.constraint(equalToConstant: BreadcrumbBar.height)
         banner.isHidden = true
         NSLayoutConstraint.activate([
             banner.topAnchor.constraint(equalTo: topAnchor), banner.leadingAnchor.constraint(equalTo: leadingAnchor),
             banner.trailingAnchor.constraint(equalTo: trailingAnchor), bannerHeight,
-            content.topAnchor.constraint(equalTo: banner.bottomAnchor), content.leadingAnchor.constraint(equalTo: leadingAnchor),
+            breadcrumbs.topAnchor.constraint(equalTo: banner.bottomAnchor), breadcrumbs.leadingAnchor.constraint(equalTo: leadingAnchor),
+            breadcrumbs.trailingAnchor.constraint(equalTo: trailingAnchor), breadcrumbHeight,
+            content.topAnchor.constraint(equalTo: breadcrumbs.bottomAnchor), content.leadingAnchor.constraint(equalTo: leadingAnchor),
             content.trailingAnchor.constraint(equalTo: trailingAnchor), content.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
         registerForDraggedTypes([.fileURL])
@@ -127,6 +135,13 @@ final class EditorPane: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     var isBannerVisible: Bool { !banner.isHidden }
+
+    /// Shows/hides the breadcrumb bar without leaving a gap.
+    func setBreadcrumbsVisible(_ visible: Bool) {
+        breadcrumbBar.isHidden = !visible
+        breadcrumbHeight.constant = visible ? BreadcrumbBar.height : 0
+    }
+    var breadcrumbsVisible: Bool { !breadcrumbBar.isHidden }
 
     func showBanner(_ message: String, actions: [(String, () -> Void)]) {
         banner.set(message: message, actions: actions)
@@ -193,6 +208,12 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
     private(set) var lastExternalChange: ExternalChange?
     private var flashView: FlashOverlay?
     private var pane: EditorPane!
+    /// Project folder for the breadcrumb path (integrator sets e.g. `{ [unowned window] in window.root }`).
+    /// Without it the nearest ancestor holding .git / composer.json / package.json is used.
+    var projectRoot: (() -> URL?)?
+    /// Opens a file chosen in a breadcrumb dropdown (integrator wires to ProjectWindow.open).
+    var onOpenURL: ((URL) -> Void)?
+    private(set) var breadcrumbs: BreadcrumbController!
     private(set) var indent = IndentSettings.standard
     private var paragraph: NSParagraphStyle = .default
 
@@ -276,7 +297,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.font = Theme.font
+        textView.font = Self.currentFont()
         textView.textColor = Theme.foreground
         textView.backgroundColor = Theme.background
         textView.insertionPointColor = Theme.foreground
@@ -286,7 +307,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         textView.useTabs = indent.useTabs
         textView.tabColumns = indent.size
         textView.defaultParagraphStyle = paragraph
-        textView.typingAttributes = [.font: Theme.font, .foregroundColor: Theme.foreground, .paragraphStyle: paragraph]
+        textView.typingAttributes = [.font: Self.currentFont(), .foregroundColor: Theme.foreground, .paragraphStyle: paragraph]
         textView.textContainerInset = NSSize(width: 6, height: 6)
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
@@ -304,14 +325,19 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         textView.commentStyle = CodeTextView.commentStyle(forExtension: url.pathExtension)
         diskStamp = FileIO.stamp(url)
         NotificationCenter.default.addObserver(self, selector: #selector(themeChanged), name: Theme.didChange, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(prefsChanged(_:)), name: Prefs.didChange, object: nil)
+        breadcrumbs = BreadcrumbController(tab: self)
+        NotificationCenter.default.addObserver(self, selector: #selector(selectionChanged), name: NSTextView.didChangeSelectionNotification, object: textView)
 
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.drawsBackground = true
         scrollView.backgroundColor = Theme.background
-        pane = EditorPane(content: EditorContainer(scrollView: scrollView, gutter: GutterView(textView: textView, scrollView: scrollView)))
+        pane = EditorPane(content: EditorContainer(scrollView: scrollView, gutter: GutterView(textView: textView, scrollView: scrollView)),
+                          breadcrumbs: breadcrumbs.bar)
         view = pane
+        pane.setBreadcrumbsVisible(Prefs.showBreadcrumbs)
         if isReadOnly {
             showLargeFileBanner()
         } else if isLargeFile {
@@ -321,14 +347,29 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         storage.delegate = self
         if !isLargeFile { highlighter = Highlighter(textView: textView, fileName: url.lastPathComponent) }
         EditorEvents.notifyOpened(self)
+        if Prefs.showBreadcrumbs { breadcrumbs.schedule() }
     }
 
-    /// Tab characters in the file render exactly `size` columns wide (AppKit's default is ~3.6 columns).
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    /// The editor font from the shared preferences (`Prefs.editorFontName` / `editorFontSize`; system monospaced when the
+    /// family is empty or unknown). Mirrors what the settings package's dynamic `Theme.font` returns: once that lands on main
+    /// the integrator can replace the body with `Theme.font` so there is a single source of truth.
+    static func currentFont() -> NSFont {
+        let size = CGFloat(Prefs.editorFontSize)
+        let name = Prefs.editorFontName
+        if !name.isEmpty, let font = NSFont(name: name, size: size) { return font }
+        if !name.isEmpty, let font = NSFontManager.shared.font(withFamily: name, traits: [], weight: 5, size: size) { return font }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+
+    /// Tab characters render exactly `size` columns wide (AppKit's default is ~3.6) and the line height follows the preference.
     private static func paragraphStyle(for indent: IndentSettings) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        let column = ("0" as NSString).size(withAttributes: [.font: Theme.font]).width
+        let column = ("0" as NSString).size(withAttributes: [.font: currentFont()]).width
         style.tabStops = []
         style.defaultTabInterval = column * CGFloat(indent.size)
+        style.lineHeightMultiple = CGFloat(Prefs.lineHeightMultiple)
         return style
     }
 
@@ -349,6 +390,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
     func textDidChange(_ notification: Notification) {
         if !isDirty { isDirty = true; onDirtyChange?() }
         scheduleIdleSave()
+        breadcrumbs.noteEdit()
     }
 
     /// Per-tab undo stack (the window's shared manager would mix tabs and be absent in headless runs).
@@ -368,16 +410,71 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         highlighter?.textDidEdit(range: editedRange, changeInLength: delta)
     }
 
+    @objc private func selectionChanged() { breadcrumbs.noteSelection() }
+
     @objc private func themeChanged() {
         textView.textColor = Theme.foreground
         textView.backgroundColor = Theme.background
         textView.insertionPointColor = Theme.foreground
-        textView.typingAttributes = [.font: Theme.font, .foregroundColor: Theme.foreground, .paragraphStyle: paragraph]
+        textView.typingAttributes = [.font: Self.currentFont(), .foregroundColor: Theme.foreground, .paragraphStyle: paragraph]
         textView.textStorage?.addAttribute(.foregroundColor, value: Theme.foreground,
                                            range: NSRange(location: 0, length: textView.textStorage?.length ?? 0))
         scrollView.backgroundColor = Theme.background
         pane.banner.restyle()
+        applyTypography()
         highlighter?.apply()
+    }
+
+    @objc private func prefsChanged(_ note: Notification) {
+        switch note.userInfo?["key"] as? String {
+        case "editorFontName", "editorFontSize", "lineHeightMultiple": applyTypography()
+        case "showBreadcrumbs":
+            pane.setBreadcrumbsVisible(Prefs.showBreadcrumbs)
+            if Prefs.showBreadcrumbs { breadcrumbs.refresh() }
+        case "defaultIndentSize", "defaultIndentUsesTabs":
+            let fresh = IndentSettings.resolve(for: url, text: textView.string)
+            if fresh != indent { applyIndent(fresh) }
+        default: break
+        }
+    }
+
+    /// Re-applies font, tab stops and line height to the whole buffer (colours come from the highlighter's temporary
+    /// attributes and are untouched), keeping the selection and scroll position, then repaints the highlighter.
+    func applyTypography() {
+        let font = Self.currentFont()
+        let newParagraph = Self.paragraphStyle(for: indent)
+        let storage = textView.textStorage
+        let full = NSRange(location: 0, length: storage?.length ?? 0)
+        if textView.font == font, paragraph.isEqual(newParagraph) { return }
+        let selection = textView.selectedRanges
+        let origin = scrollView.contentView.bounds.origin
+        paragraph = newParagraph
+        // Attribute-only edit: no text change, so no undo entry, no dirty flag, no highlighter edit.
+        storage?.beginEditing()
+        storage?.addAttributes([.font: font, .paragraphStyle: newParagraph], range: full)
+        storage?.endEditing()
+        textView.font = font
+        textView.defaultParagraphStyle = newParagraph
+        textView.typingAttributes[.font] = font
+        textView.typingAttributes[.paragraphStyle] = newParagraph
+        textView.selectedRanges = selection
+        textView.needsDisplay = true
+        highlighter?.apply()
+        // Relayout (triggered above) can scroll the caret into view: put the viewport back, now and once layout settles.
+        let restore = { [weak self] in
+            guard let self else { return }
+            self.scrollView.contentView.scroll(to: origin)
+            self.scrollView.reflectScrolledClipView(self.scrollView.contentView)
+        }
+        restore()
+        DispatchQueue.main.async(execute: restore)
+    }
+
+    /// Moves keyboard focus to the breadcrumb bar (Cmd-Opt-Up in PhpStorm). Left/Right move, Down/Return open the dropdown, Esc returns.
+    func focusBreadcrumbs() {
+        guard pane.breadcrumbsVisible else { return }
+        breadcrumbs.refresh()
+        breadcrumbs.bar.focusLast()
     }
 
     // MARK: Text comparison and minimal edits
@@ -651,6 +748,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
     func retarget(to newURL: URL) {
         url = newURL
         if let stamp = FileIO.stamp(newURL) { diskStamp = stamp }
+        breadcrumbs.refresh()
     }
 
     var caretLocation: Int { textView.selectedRange().location }
