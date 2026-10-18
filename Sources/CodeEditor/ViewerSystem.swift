@@ -76,9 +76,26 @@ final class ViewerSystem: NSObject, NSMenuItemValidation {
         w.window.setContentSize(NSSize(width: 1400, height: 860))
         c.setMode(ViewerMode(rawValue: mode) ?? .split, persist: false)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            if AppEnv.value("CE_PROBE") != nil { ViewerSystem.probe(w) }
+            if let l = AppEnv.value("CE_VIEWER_LINE").flatMap(Double.init) { c.scrollEditor(toLine: l); c.syncScroll() }
             if let q = AppEnv.value("CE_VIEWER_FILTER") { c.tree?.setFilter(q) }
             else if let sel = AppEnv.value("CE_VIEWER_SELECT") { c.tree?.select(positions: sel.split(separator: ",").compactMap { Int($0) }) }
         }
+    }
+
+    static func probe(_ w: ProjectWindow) {
+        guard let c = controller(for: w.current), let m = c.markdown, let root = w.window.contentView else { return }
+        root.layoutSubtreeIfNeeded()
+        let tv = m.textView, sv = m.scroll
+        fputs("PROBE mode=\(c.mode) preview frame=\(m.frame) scroll=\(sv.frame) contentSize=\(sv.contentSize) doc=\(tv.frame) max=\(tv.maxSize) min=\(tv.minSize) vres=\(tv.isVerticallyResizable) clip=\(sv.contentView.bounds)\n", stderr)
+        let pt = root.convert(NSPoint(x: tv.bounds.midX, y: 100), from: tv)
+        let hit = root.hitTest(pt)
+        fputs("PROBE hit=\(String(describing: hit.map { type(of: $0) })) isTV=\(hit === tv)\n", stderr)
+        let before = m.scrollY
+        if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -120, wheel2: 0, wheel3: 0), let ev = NSEvent(cgEvent: cg) {
+            sv.scrollWheel(with: ev)
+        }
+        fputs("PROBE wheel before=\(before) after=\(m.scrollY)\n", stderr)
     }
 
     static func cycle(_ tab: EditorTab?) { controller(for: tab).map { $0.setMode($0.mode.next) } }
@@ -274,6 +291,15 @@ final class ViewerController: NSObject {
     private var generation = 0
     private var pending = false
     private var syncScheduled = false
+    private var previewSyncScheduled = false
+    /// Which pane the user last scrolled; a queued sync only runs if its source pane is still the driver.
+    private enum Driver { case editor, preview }
+    private var driver = Driver.editor
+    private var editorSuppress = 0
+    /// Scroll syncs actually applied since the last reset (tests: loop / coalescing checks).
+    private(set) var syncStats = (toPreview: 0, toEditor: 0)
+    func resetSyncStats() { syncStats = (0, 0) }
+    private var editorY: CGFloat = 0
     private var revealWork: DispatchWorkItem?
     private var lineStarts: [Int]?
     private var diagItems: [(range: NSRange, severity: Int, message: String)] = []
@@ -420,9 +446,15 @@ final class ViewerController: NSObject {
         let nc = NotificationCenter.default
         if kind == .markdown {
             tab.scrollView.contentView.postsBoundsChangedNotifications = true
-            visibleObservers.append(nc.addObserver(forName: NSView.boundsDidChangeNotification, object: tab.scrollView.contentView, queue: .main) { [weak self] _ in
-                self?.scheduleSync()
+            editorY = tab.scrollView.contentView.bounds.minY
+            // queue: nil delivers synchronously, so `editorSuppress` reliably marks programmatic scrolls.
+            visibleObservers.append(nc.addObserver(forName: NSView.boundsDidChangeNotification, object: tab.scrollView.contentView, queue: nil) { [weak self] _ in
+                guard let self, self.editorSuppress == 0, let y = self.tab?.scrollView.contentView.bounds.minY, abs(y - self.editorY) >= 0.5 else { return }
+                self.editorY = y
+                self.driver = .editor
+                self.scheduleSync()
             })
+            markdown?.onUserScroll = { [weak self] in self?.driver = .preview; self?.scheduleSyncFromPreview() }
         } else {
             visibleObservers.append(nc.addObserver(forName: NSTextView.didChangeSelectionNotification, object: tab.textView, queue: .main) { [weak self] _ in
                 self?.scheduleReveal()
@@ -431,6 +463,7 @@ final class ViewerController: NSObject {
     }
 
     private func removeVisibleObservers() {
+        markdown?.onUserScroll = nil
         visibleObservers.forEach(NotificationCenter.default.removeObserver)
         visibleObservers = []
     }
@@ -507,7 +540,53 @@ final class ViewerController: NSObject {
     private func scheduleSync() {
         guard !syncScheduled else { return }
         syncScheduled = true
-        DispatchQueue.main.async { [weak self] in self?.syncScheduled = false; self?.syncScroll() }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.syncScheduled = false
+            if self.driver == .editor { self.syncStats.toPreview += 1; self.syncScroll() }
+        }
+    }
+
+    private func scheduleSyncFromPreview() {
+        guard !previewSyncScheduled, mode == .split else { return }
+        previewSyncScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.previewSyncScheduled = false
+            if self.driver == .preview { self.syncStats.toEditor += 1; self.syncEditorFromPreview() }
+        }
+    }
+
+    /// Preview -> editor: the inverse of `syncScroll`.
+    func syncEditorFromPreview() {
+        guard kind == .markdown, mode == .split, let m = markdown, !PowerState.windowHidden(pane) else { return }
+        scrollEditor(toLine: m.sourceLine(atScrollY: m.scrollY))
+    }
+
+    /// Scrolls the editor so (fractional) source line `line` is at its top; exact inverse of `editorTopLine`.
+    func scrollEditor(toLine line: Double) {
+        guard let tv = tab?.textView, let clip = tab?.scrollView.contentView, let lm = tv.layoutManager else { return }
+        _ = self.line(of: 0)
+        let starts = lineStarts ?? [0]
+        let li = min(max(0, Int(line.rounded(.down))), starts.count - 1)
+        let frac = min(0.99, max(0, line - Double(li)))
+        var y: CGFloat = 0
+        let len = (tv.string as NSString).length
+        if (li > 0 || frac > 0), len > 0, lm.numberOfGlyphs > 0 {
+            // Lay out up to the target so the Y is exact (estimates would shift later and bounce the sync back); bounded for huge files.
+            let at = min(starts[li], len - 1)
+            lm.ensureLayout(forCharacterRange: NSRange(location: at > 400_000 ? at : 0, length: at > 400_000 ? 1 : at + 1))
+            let glyph = lm.glyphIndexForCharacter(at: at)
+            let rect = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            y = tv.textContainerOrigin.y + rect.minY + CGFloat(frac) * rect.height
+        }
+        y = min(max(0, y), max(0, tv.frame.height - clip.bounds.height))
+        guard abs(y - clip.bounds.minY) >= 0.5 else { return }
+        editorSuppress += 1
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y))
+        tab?.scrollView.reflectScrolledClipView(clip)
+        editorSuppress -= 1
+        editorY = clip.bounds.minY
     }
 
     /// Editor's top visible source line (fractional), via a cached line-start table.
@@ -544,7 +623,7 @@ final class ViewerController: NSObject {
     }
 
     func syncScroll() {
-        guard kind == .markdown, mode == .split, let m = markdown else { return }
+        guard kind == .markdown, mode == .split, let m = markdown, !PowerState.windowHidden(pane) else { return }
         m.scroll(toSourceLine: editorTopLine())
     }
 

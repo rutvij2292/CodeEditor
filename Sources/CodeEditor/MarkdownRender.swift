@@ -413,6 +413,9 @@ final class MarkdownPreviewView: NSView, NSTextViewDelegate {
         textView.isRichText = true
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
+        // init(frame:textContainer:) pins maxSize to the initial frame, which stops the text view growing past the viewport (no scrolling).
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.autoresizingMask = [.width]
         textView.textContainerInset = NSSize(width: 26, height: 20)
         textView.delegate = self
@@ -425,6 +428,7 @@ final class MarkdownPreviewView: NSView, NSTextViewDelegate {
         NSLayoutConstraint.activate([scroll.topAnchor.constraint(equalTo: topAnchor), scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
                                      scroll.leadingAnchor.constraint(equalTo: leadingAnchor), scroll.trailingAnchor.constraint(equalTo: trailingAnchor)])
         restyle()
+        installScrollObserver()
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -445,40 +449,112 @@ final class MarkdownPreviewView: NSView, NSTextViewDelegate {
         lineMap = result.lineMap
         anchors = result.anchors
         imageCount = result.images
+        yTable = nil
+        let keep = scrollY
+        suppress += 1
         textView.textStorage?.setAttributedString(result.text)
+        // Keep the reader's place across a re-render (the clip view clamps / resets while the document is replaced).
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+        textView.sizeToFit()
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: min(keep, max(0, textView.frame.height - scroll.contentView.bounds.height))))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        suppress -= 1
+        lastY = scrollY
         lastRenderMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
     }
 
     func showMessage(_ message: String) {
         restyle()
-        lineMap = []; anchors = [:]
+        lineMap = []; anchors = [:]; yTable = nil
         textView.textStorage?.setAttributedString(NSAttributedString(string: message, attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: Theme.gutter]))
+    }
+
+    /// Top Y (document coordinates) of each lineMap entry; computed once per render (forces layout of the whole document).
+    private var yTable: [CGFloat]?
+    private func ys() -> [CGFloat] {
+        if let t = yTable { return t }
+        guard let lm = textView.layoutManager, let tc = textView.textContainer else { return [] }
+        let len = textView.textStorage?.length ?? 0
+        let oy = textView.textContainerOrigin.y
+        let t = lineMap.map { e -> CGFloat in
+            let g = lm.glyphRange(forCharacterRange: NSRange(location: min(e.loc, max(0, len - 1)), length: 1), actualCharacterRange: nil)
+            return lm.boundingRect(forGlyphRange: g, in: tc).minY + oy
+        }
+        yTable = t
+        return t
+    }
+
+    /// Points of rendered height per source line past the last block (shared by the mapping and its inverse).
+    private static let tailPerLine: CGFloat = 6
+
+    /// Scroll offset (document Y) that puts source line `line` (fractional) at the top, before clamping.
+    private func targetY(forSourceLine line: Double) -> CGFloat {
+        let t = ys()
+        guard !lineMap.isEmpty, t.count == lineMap.count else { return 0 }
+        var lo = 0, hi = lineMap.count - 1
+        while lo < hi { let mid = (lo + hi + 1) / 2; if Double(lineMap[mid].line) <= line { lo = mid } else { hi = mid - 1 } }
+        let a = lineMap[lo]
+        var target = t[lo]
+        if lo + 1 < lineMap.count {
+            let span = Double(lineMap[lo + 1].line - a.line)
+            if span > 0 { target += CGFloat(min(1, max(0, (line - Double(a.line)) / span))) * (t[lo + 1] - target) }
+        } else if line > Double(a.line) {
+            target += CGFloat(line - Double(a.line)) * Self.tailPerLine
+        }
+        return target - 4
+    }
+
+    /// Inverse of the line -> scroll mapping: the (fractional) source line at the top of the preview for scroll offset `y`.
+    func sourceLine(atScrollY y: CGFloat) -> Double {
+        let t = ys()
+        guard !lineMap.isEmpty, t.count == lineMap.count, y > 0 else { return 0 }
+        let Y = y + 4
+        var lo = 0, hi = t.count - 1
+        while lo < hi { let mid = (lo + hi + 1) / 2; if t[mid] <= Y { lo = mid } else { hi = mid - 1 } }
+        let a = lineMap[lo]
+        if lo + 1 < t.count {
+            let dy = t[lo + 1] - t[lo], dl = Double(lineMap[lo + 1].line - a.line)
+            guard dy > 0.01, dl > 0 else { return Double(a.line) }
+            return Double(a.line) + min(1, max(0, Double((Y - t[lo]) / dy))) * dl
+        }
+        return Double(a.line) + Double(max(0, Y - t[lo]) / Self.tailPerLine)
+    }
+
+    /// Every programmatic scroll goes through here so its bounds notification is not mistaken for the user scrolling.
+    private func setScroll(_ y: CGFloat) {
+        suppress += 1
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        suppress -= 1
+        lastY = scrollY
     }
 
     /// Scrolls so the block at (fractional) source line `line` is at the top, interpolating between rendered blocks.
     func scroll(toSourceLine line: Double) {
-        guard let lm = textView.layoutManager, let tc = textView.textContainer, !lineMap.isEmpty else { return }
-        func y(_ loc: Int) -> CGFloat {
-            let len = textView.textStorage?.length ?? 0
-            let g = lm.glyphRange(forCharacterRange: NSRange(location: min(loc, max(0, len - 1)), length: 1), actualCharacterRange: nil)
-            return lm.boundingRect(forGlyphRange: g, in: tc).minY + textView.textContainerOrigin.y
-        }
-        var lo = 0, hi = lineMap.count - 1
-        while lo < hi { let mid = (lo + hi + 1) / 2; if Double(lineMap[mid].line) <= line { lo = mid } else { hi = mid - 1 } }
-        let a = lineMap[lo]
-        var target = y(a.loc)
-        if lo + 1 < lineMap.count {
-            let b = lineMap[lo + 1]
-            let span = Double(b.line - a.line)
-            if span > 0 { target += CGFloat(min(1, max(0, (line - Double(a.line)) / span))) * (y(b.loc) - target) }
-        } else if line > Double(a.line) {
-            target += CGFloat(line - Double(a.line)) * 6
-        }
+        guard !lineMap.isEmpty else { return }
         let maxY = max(0, textView.frame.height - scroll.contentView.bounds.height)
-        let clamp = line <= 0 ? 0 : min(max(0, target - 4), maxY)
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: clamp))
-        scroll.reflectScrolledClipView(scroll.contentView)
+        let clamp = line <= 0 ? 0 : min(max(0, targetY(forSourceLine: line)), maxY)
+        if abs(clamp - scrollY) >= 0.5 { setScroll(clamp) }
     }
+
+    /// Fires (synchronously, on the main thread) when the user, not code, moved the preview.
+    var onUserScroll: (() -> Void)?
+    private var suppress = 0
+    private var lastY: CGFloat = 0
+    private var scrollObserver: NSObjectProtocol?
+
+    private func installScrollObserver() {
+        scroll.contentView.postsBoundsChangedNotifications = true
+        scrollObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: nil) { [weak self] _ in
+            guard let self, self.suppress == 0 else { return }
+            let y = self.scrollY
+            guard abs(y - self.lastY) >= 0.5 else { return }
+            self.lastY = y
+            self.onUserScroll?()
+        }
+    }
+
+    deinit { scrollObserver.map(NotificationCenter.default.removeObserver) }
 
     var scrollY: CGFloat { scroll.contentView.bounds.origin.y }
 
@@ -512,7 +588,7 @@ final class MarkdownPreviewView: NSView, NSTextViewDelegate {
         guard let lm = textView.layoutManager, let tc = textView.textContainer else { return }
         let g = lm.glyphRange(forCharacterRange: NSRange(location: location, length: 1), actualCharacterRange: nil)
         let y = lm.boundingRect(forGlyphRange: g, in: tc).minY + textView.textContainerOrigin.y
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, y - 8)))
-        scroll.reflectScrolledClipView(scroll.contentView)
+        setScroll(max(0, y - 8))
+        onUserScroll?()
     }
 }
