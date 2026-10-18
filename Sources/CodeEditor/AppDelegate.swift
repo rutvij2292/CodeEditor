@@ -38,6 +38,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         BracketColorizer.start()
         GitGutter.start()
         Formatter.start()
+        LaravelNavigator.start()
+        LaravelNavigator.openLocation = { [weak self] url, line, column in
+            guard let w = self?.active else { return }
+            w.open(url, line: line)
+            w.current?.textView.goToLine(line, column: column)
+        }
         Self.installLanguageHandlers()
         NSApp.mainMenu = MainMenu.build(app: self)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
