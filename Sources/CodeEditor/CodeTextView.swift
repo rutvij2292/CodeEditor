@@ -48,6 +48,8 @@ final class CodeTextView: NSTextView {
     private var extendHistory: [NSRange] = []
     private var extendTarget: NSRange?
     private var occurrenceStack: [NSRange] = []
+    /// Multi-caret bookkeeping (see MultiCaretView.swift).
+    let multi = MultiCaretState()
 
     // Keyboard selection state (our own anchor: NSTextView's hidden anchor can go stale after programmatic selections).
     var navAnchor = 0, navHead = 0
@@ -176,7 +178,7 @@ final class CodeTextView: NSTextView {
 
     /// Rect (view coordinates, full visible width) of the caret's logical line, nil unless the selection is a single caret.
     private func caretLineRect() -> NSRect? {
-        guard selectedRanges.count == 1, selectedRange().length == 0,
+        guard selectedRanges.count == 1, !multiCaretActive, selectedRange().length == 0,
               let lm = layoutManager else { return nil }
         let s = ns
         let loc = min(selectedRange().location, s.length)
@@ -204,11 +206,13 @@ final class CodeTextView: NSTextView {
             r = n.rangeValue
         }
         super.setSelectedRange(r, affinity: affinity, stillSelecting: stillSelectingFlag)
+        multiSelectionDidChange()
     }
 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
         var ranges = ranges
-        defer { scheduleOccurrences() }
+        defer { scheduleOccurrences(); multiSelectionDidChange() }
+        if ranges.count > 1 { ranges = MultiCaret.normalize(ranges: ranges.map { $0.rangeValue }).map { NSValue(range: $0) } }   // merge duplicate / overlapping carets
         if folds.hasHidden {
             ranges = folds.normalized(ranges, navigating: userNavigating, previous: selectedRanges.first?.rangeValue)
         }
@@ -237,6 +241,7 @@ final class CodeTextView: NSTextView {
         let auto = Prefs.gpuAssist == "auto"
         let t0 = auto ? CACurrentMediaTime() : 0
         super.draw(dirtyRect)
+        drawExtraCarets(in: dirtyRect)
         drawFoldChips(in: dirtyRect)     // after the text: syntax backgrounds (comments) must not paint over the chips
         guard auto else { return }
         gpuCheck.record(ms: (CACurrentMediaTime() - t0) * 1000, area: Double(dirtyRect.width * dirtyRect.height), async: gpuAssistActive)
@@ -244,7 +249,7 @@ final class CodeTextView: NSTextView {
         if gpuDraws % 16 == 0 || gpuCheck.syncN == GPUAssist.sampleCount { updateGPUAssist() }
     }
 
-    private var charWidth: CGFloat { ("0" as NSString).size(withAttributes: [.font: font ?? Theme.font]).width }
+    var charWidth: CGFloat { ("0" as NSString).size(withAttributes: [.font: font ?? Theme.font]).width }
 
     /// Leading-whitespace width in columns of the line [st, ce); nil for blank lines.
     private func indentColumns(_ s: NSString, _ st: Int, _ ce: Int) -> Int? {
@@ -342,6 +347,7 @@ final class CodeTextView: NSTextView {
     }
 
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        if multiCaretActive { return }      // multiple carets are drawn by drawExtraCarets
         var r = rect
         r.size.width = 2
         super.drawInsertionPoint(in: r, color: color, turnedOn: flag)
@@ -369,7 +375,7 @@ final class CodeTextView: NSTextView {
 
     // MARK: - Helpers
 
-    private var ns: NSString { (textStorage?.mutableString ?? NSMutableString(string: string)) as NSString }
+    var ns: NSString { (textStorage?.mutableString ?? NSMutableString(string: string)) as NSString }
 
     private func isWordUnit(_ c: unichar) -> Bool {
         c == 95 || Unicode.Scalar(UInt32(c)).map { CharacterSet.alphanumerics.contains($0) } ?? false
@@ -415,7 +421,7 @@ final class CodeTextView: NSTextView {
         }
     }
 
-    private func grouped(_ body: () -> Void) {
+    func grouped(_ body: () -> Void) {
         undoManager?.beginUndoGrouping()
         body()
         undoManager?.endUndoGrouping()
@@ -451,15 +457,15 @@ final class CodeTextView: NSTextView {
         grouped { ok = replace(NSRange(location: start, length: end - start), with: out) }
         if ok {
             if mapped.count == 1 { setSelectedRange(mapped[0]) }
-            else { setSelectedRanges(mapped.map { NSValue(range: $0) }, affinity: .downstream, stillSelecting: false) }
+            else { setMultiSels(mapped.map { MultiCaret.Sel($0) }) }
         }
     }
 
     /// Replaces several ascending, non-overlapping ranges in one undo step; `caret` is the new caret offset inside each replacement.
-    private func replaceRanges(_ items: [(range: NSRange, text: String, caret: Int)]) {
+    func replaceRanges(_ items: [(range: NSRange, text: String, caret: Int)]) {
         guard !items.isEmpty else { return }
-        guard shouldChangeText(inRanges: items.map { NSValue(range: $0.range) }, replacementStrings: items.map { $0.text }) else { return }
         grouped {
+            guard shouldChangeText(inRanges: items.map { NSValue(range: $0.range) }, replacementStrings: items.map { $0.text }) else { return }
             textStorage?.beginEditing()
             for it in items.reversed() {
                 textStorage?.replaceCharacters(in: it.range, with: NSAttributedString(string: it.text, attributes: typingAttributes))
@@ -471,7 +477,7 @@ final class CodeTextView: NSTextView {
                 shift += it.text.utf16.count - it.range.length
             }
             didChangeText()
-            setSelectedRanges(carets, affinity: .downstream, stillSelecting: false)
+            setMultiSels(carets.map { MultiCaret.Sel(caret: $0.rangeValue.location) })
         }
     }
 
@@ -755,7 +761,7 @@ final class CodeTextView: NSTextView {
 
     // MARK: - Multi-occurrence
 
-    private var currentRanges: [NSRange] { selectedRanges.map { $0.rangeValue } }
+    var currentRanges: [NSRange] { effectiveRanges }
 
     private func syncStack(_ ranges: [NSRange]) {
         if occurrenceStack.isEmpty || !occurrenceStack.allSatisfy({ ranges.contains($0) }) { occurrenceStack = ranges }
@@ -779,6 +785,7 @@ final class CodeTextView: NSTextView {
             if f.location == NSNotFound { return }
             if !ranges.contains(f) {
                 occurrenceStack.append(f)
+                multi.lastAdded = f
                 setSelectedRanges((ranges + [f]).map { NSValue(range: $0) }, affinity: .downstream, stillSelecting: false)
                 reveal(f)
                 return
@@ -1068,16 +1075,16 @@ final class CodeTextView: NSTextView {
         applyEdits(edits, selections: ranges)
     }
 
-    private static let pairs: [unichar: unichar] = [40: 41, 91: 93, 123: 125, 34: 34, 39: 39, 96: 96]
+    static let pairs: [unichar: unichar] = [40: 41, 91: 93, 123: 125, 34: 34, 39: 39, 96: 96]
 
     override func insertText(_ string: Any, replacementRange: NSRange) {
         let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
         let u = Array(text.utf16)
-        if selectedRanges.count > 1, !hasMarkedText(), replacementRange.location == NSNotFound {
-            insertAtAllRanges(text)
+        if multiCaretActive, replacementRange.location == NSNotFound {
+            multiType(text)
             return
         }
-        guard u.count == 1, selectedRanges.count == 1, !hasMarkedText(), replacementRange.location == NSNotFound else {
+        guard u.count == 1, selectedRanges.count == 1, !multiCaretActive, !hasMarkedText(), replacementRange.location == NSNotFound else {
             super.insertText(string, replacementRange: replacementRange)
             return
         }
@@ -1118,24 +1125,6 @@ final class CodeTextView: NSTextView {
         if replace(sel, with: text + closeStr) { setSelectedRange(NSRange(location: sel.location + 1, length: 0)) }
     }
 
-    private func insertAtAllRanges(_ text: String) {
-        let ranges = currentRanges.sorted { $0.location < $1.location }
-        guard shouldChangeText(inRanges: ranges.map { NSValue(range: $0) },
-                               replacementStrings: Array(repeating: text, count: ranges.count)) else { return }
-        let n = text.utf16.count
-        let attr = NSAttributedString(string: text, attributes: typingAttributes)
-        textStorage?.beginEditing()
-        for r in ranges.reversed() { textStorage?.replaceCharacters(in: r, with: attr) }
-        textStorage?.endEditing()
-        var carets: [NSValue] = [], shift = 0
-        for r in ranges {
-            carets.append(NSValue(range: NSRange(location: r.location + shift + n, length: 0)))
-            shift += n - r.length
-        }
-        didChangeText()
-        setSelectedRanges(carets, affinity: .downstream, stillSelecting: false)
-    }
-
     private func isCloserOnly(_ c: unichar) -> Bool { c == 41 || c == 93 || c == 125 }
 
     // MARK: - Folding hooks
@@ -1146,6 +1135,7 @@ final class CodeTextView: NSTextView {
     }
 
     override func doCommand(by selector: Selector) {
+        if multiCaretActive, handleMultiCommand(selector) { return }
         let was = userNavigating
         userNavigating = true
         defer { userNavigating = was }
@@ -1165,7 +1155,12 @@ final class CodeTextView: NSTextView {
         }
     }
 
+    override func paste(_ sender: Any?) { if !multiPaste() { super.paste(sender) } }
+    override func copy(_ sender: Any?) { if !multiCopy() { super.copy(sender) } }
+    override func cut(_ sender: Any?) { if !multiCut() { super.cut(sender) } }
+
     override func mouseDown(with event: NSEvent) {
+        if handleOptionMouseDown(event) { return }
         if folds.hasHidden, let r = folds.hiddenRange(atChipPoint: convert(event.locationInWindow, from: nil)) {
             folds.expand(r, recursive: event.modifierFlags.contains(.option))
             return
@@ -1229,7 +1224,7 @@ final class CodeTextView: NSTextView {
 
     // MARK: - Line / word navigation (PhpStorm semantics, own anchor tracking)
 
-    private var singleSelection: Bool { selectedRanges.count == 1 && !hasMarkedText() }
+    private var singleSelection: Bool { selectedRanges.count == 1 && !multiCaretActive && !hasMarkedText() }
 
     override func moveToBeginningOfLine(_ sender: Any?) { if singleSelection { navigate(extend: false) { smartHome(from: $0) } } else { super.moveToBeginningOfLine(sender) } }
     override func moveToLeftEndOfLine(_ sender: Any?) { if singleSelection { navigate(extend: false) { smartHome(from: $0) } } else { super.moveToLeftEndOfLine(sender) } }
@@ -1284,6 +1279,7 @@ final class CodeTextView: NSTextView {
 
     override func didChangeText() {
         super.didChangeText()
+        multiTextDidChange()
         navRange = nil
         clearOccurrences()
         scheduleOccurrences()
@@ -1562,7 +1558,7 @@ extension CodeTextView {
 
     func computeOccurrences() {
         let s = string as NSString
-        guard Prefs.highlightOccurrences, s.length > 0, s.length <= 2_000_000, selectedRanges.count == 1 else { clearOccurrences(); return }
+        guard Prefs.highlightOccurrences, s.length > 0, s.length <= 2_000_000, selectedRanges.count == 1, !multiCaretActive else { clearOccurrences(); return }
         let sel = selectedRange()
         let f = wordFlavor
         var token: NSRange?

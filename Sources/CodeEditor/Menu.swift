@@ -110,6 +110,8 @@ enum MainMenu {
             item("Select Next Occurrence", Selector(("selectNextOccurrence:")), "g", [.control]),
             item("Unselect Occurrence", Selector(("unselectPreviousOccurrence:")), "g", [.control, .shift]),
             item("Select All Occurrences", Selector(("selectAllOccurrences:")), "g", [.control, .command]),
+            item("Add Caret Above", Selector(("addCaretAbove:")), ""),
+            item("Add Caret Below", Selector(("addCaretBelow:")), ""),
             sep,
             item("Reformat Code", #selector(AppDelegate.reformatCode(_:)), "l", [.command, .option], target: a),
             item("Format Document", #selector(AppDelegate.formatDocument(_:)), "l", [.command, .option, .shift], target: a),
