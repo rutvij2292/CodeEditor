@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         CompletionSystem.start()
         CompletionSystem.symbolProvider = { [weak self] in self?.active?.symbolEntries ?? [] }
         LanguageServers.start()
+        LanguageServers.openLocation = { [weak self] url, line, _ in self?.active?.open(url, line: line) }
         BracketColorizer.start()
         NSApp.mainMenu = MainMenu.build(app: self)
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
@@ -36,6 +37,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         windows.allSatisfy { $0.confirmCloseAll() } ? .terminateNow : .terminateCancel
     }
+
+    func applicationWillTerminate(_ notification: Notification) { LanguageServers.stopAll() }
 
     func application(_ application: NSApplication, open urls: [URL]) { urls.forEach(openPath) }
 

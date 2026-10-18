@@ -71,6 +71,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         }
         NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive),
                                                name: NSApplication.didBecomeActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(languageServerStatusChanged),
+                                               name: LanguageServers.statusDidChange, object: nil)
     }
 
     deinit { diskTimer?.invalidate() }
@@ -105,6 +107,12 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             editors.values.forEach { $0.reloadIfChangedOnDisk() }
         }
         if content || gitMeta { refreshGitStatus() }
+    }
+
+    /// Shows the language server's state and memory cost under the window title.
+    @objc private func languageServerStatusChanged() {
+        guard let root else { return }
+        window.subtitle = LanguageServers.statusText(forRoot: root)
     }
 
     @objc private func appBecameActive() {
