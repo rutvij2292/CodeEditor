@@ -49,8 +49,11 @@ enum BenchEnergy {
                 }
             case "terminal-idle", "terminal-stream":
                 w.showTerminalPanel(focus: false)
-                bench.pump(1.5)
-                if state == "terminal-stream" { w.terminalPanel?.send("yes 'streaming output line for the energy benchmark' | head -n 3000000\n") }
+                bench.pump(3.0)
+                if state == "terminal-stream" {
+                    if w.terminalPanel == nil { fputs("no terminal panel\n", stderr) }
+                    w.terminalPanel?.send("yes 'streaming output line for the energy benchmark' | head -n 20000000\r")
+                }
             case "fsburst":
                 var round = 0
                 add(2.0) { _ in

@@ -133,7 +133,10 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
 
         bottom.onVisibilityChange = { [weak self] visible in self?.applyBottomVisibility(visible) }
         bottom.onEscape = { [weak self] in self?.focusEditor() }
-        bottom.onWillShow = { [weak self] id in if id == "git" { self?.ensureGitPanel() } }
+        bottom.onWillShow = { [weak self] id in
+            if id == "git" { self?.ensureGitPanel() }
+            if id == "problems" { self?.problemsPanel?.reload() }
+        }
         bottom.register(id: "git", title: "Git", view: gitHost)
 
         window.contentViewController = rootSplit
@@ -572,7 +575,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     private func didSelect(_ id: String) {
         if let previous = lastSelectedID, previous != id { editors[previous]?.autoSave(.tabSwitch) }
         lastSelectedID = id
-        problemsPanel?.reload()
+        // The Problems tree is rebuilt only while it is on screen (it re-expands every row: ~5 ms per tab switch otherwise).
+        if bottom.isVisible, bottom.selectedID == "problems" { problemsPanel?.reload() }
         mru.removeAll { $0 == id }
         mru.insert(id, at: 0)
         if !navigating {

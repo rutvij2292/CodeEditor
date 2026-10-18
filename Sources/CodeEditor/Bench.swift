@@ -308,6 +308,12 @@ final class BenchRunner {
                 pump(0.002)
                 if highlighted(tab) { firstHL = now() }
             }
+            if firstHL == 0, AppEnv.value("CE_BENCH_DEBUGHL") != nil {
+                let lm = tab.textView.layoutManager!
+                var n = 0
+                for i in 0..<min(3000, tab.textView.textStorage!.length) where lm.temporaryAttributes(atCharacterIndex: i, effectiveRange: nil).count > 0 { n += 1 }
+                fputs("  debug: \(n) chars with temp attrs in first 3000; hasHighlighter=\(!tab.isLargeFile)\n", stderr)
+            }
             tabSync.append(ms(t1 - t0)); paint.append(ms(t2 - t0)); hl.append(ms((firstHL > 0 ? firstHL : now()) - t0))
             if r == reps - 1 { kept = tab } else { window.close(id); pump(0.25) }
         }
@@ -443,7 +449,7 @@ final class BenchRunner {
         pump(0.8)
         var xs: [Double] = []
         meter.resetStalls()
-        for i in 0..<40 {
+        for i in 0..<(40 * (Int(AppEnv.value("CE_BENCH_TABREPS") ?? "") ?? 1)) {
             let u = urls[(i * 3) % urls.count]
             let t0 = now()
             window.tabs.select(u.standardizedFileURL.path)

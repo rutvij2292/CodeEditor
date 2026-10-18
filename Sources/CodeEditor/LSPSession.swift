@@ -19,7 +19,9 @@ final class LSPSession: NSResponder {
     private var opened: Set<String> = []
     private var flushWork: DispatchWorkItem?
     private var hasUnsentChanges = false
-    private var diags: [String: [LSPDiagnostic]] = [:]
+    private var diags: [String: [LSPDiagnostic]] = [:] { didSet { diagCache = nil; diagSortedCache = nil } }
+    private var diagCache: [LSPDiagnostic]?
+    private var diagSortedCache: [LSPDiagnostic]?
     private var applyScheduled = false
     private var observers: [NSObjectProtocol] = []
 
@@ -266,6 +268,7 @@ final class LSPSession: NSResponder {
     func diagnostics(for serverId: String) -> [LSPDiagnostic] { diags[serverId] ?? [] }
     /// Diagnostics of every server, identical ones (same range, severity and text from different servers) merged.
     var allDiagnostics: [LSPDiagnostic] {
+        if let diagCache { return diagCache }
         var seen = Set<String>()
         var out: [LSPDiagnostic] = []
         for key in diags.keys.sorted() {
@@ -273,7 +276,16 @@ final class LSPSession: NSResponder {
                 out.append(d)
             }
         }
+        diagCache = out
         return out
+    }
+
+    /// `allDiagnostics` ordered most severe first, cached (the overlay draws on every frame).
+    var sortedDiagnostics: [LSPDiagnostic] {
+        if let diagSortedCache { return diagSortedCache }
+        let sorted = allDiagnostics.sorted { $0.severity > $1.severity }
+        diagSortedCache = sorted
+        return sorted
     }
 
     func setDiagnostics(_ raw: [[String: Any]], serverId: String, version published: Int?) {
@@ -380,7 +392,7 @@ final class LSPDiagnosticOverlay: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let session, let tv = session.textView, let lm = tv.layoutManager, let tc = tv.textContainer else { return }
-        let all = session.allDiagnostics
+        let all = session.sortedDiagnostics
         guard !all.isEmpty else { return }
         let origin = tv.textContainerOrigin
         let length = tv.textStorage?.length ?? 0
@@ -390,7 +402,7 @@ final class LSPDiagnosticOverlay: NSView {
         local.origin.x -= origin.x; local.origin.y -= origin.y
         let visibleGlyphs = lm.glyphRange(forBoundingRect: local, in: tc)
         let visible = lm.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
-        for d in all.sorted(by: { $0.severity > $1.severity }) {
+        for d in all {
             guard NSMaxRange(d.range) >= visible.location, d.range.location <= NSMaxRange(visible) else { continue }
             let cr = NSIntersectionRange(d.range, NSRange(location: 0, length: length))
             guard cr.length > 0 else { continue }

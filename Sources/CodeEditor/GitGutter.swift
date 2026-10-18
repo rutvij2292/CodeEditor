@@ -222,6 +222,7 @@ final class GitGutterController {
 
     private func recomputeImpl() {
         guard let tv = textView, let gutter else { return }
+        if PowerState.deferWhileHidden(tv, { [weak self] in self?.recompute() }) { return }
         guard let head else {
             hunks = []
             gutter.markers = []

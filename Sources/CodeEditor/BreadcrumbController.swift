@@ -60,6 +60,7 @@ final class BreadcrumbController: NSObject, NSMenuDelegate {
 
     private func refreshImpl() {
         debounce?.cancel(); debounce = nil
+        if PowerState.deferWhileHidden(tab?.textView, { [weak self] in self?.refresh() }) { return }
         refreshCount += 1
         guard let tab, Prefs.showBreadcrumbs else { return }
         var segments = pathSegments

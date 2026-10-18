@@ -187,6 +187,7 @@ final class BlameController {
 
     private func recomputeMapImpl() {
         guard let loaded, let tv = textView else { mapValid = false; publish(); return }
+        if PowerState.deferWhileHidden(tv, { [weak self] in self?.recomputeMap() }) { return }
         let rev = textRevision
         let text = tv.string
         let base = loaded.base
@@ -328,6 +329,7 @@ final class BlameController {
 
     private func updateInlineImpl() {
         inlineTimer = nil
+        if PowerState.deferWhileHidden(textView, { [weak self] in self?.updateInline() }) { return }
         guard Prefs.inlineBlame, PowerState.liveBlame, let tab, !tab.isLargeFile, let tv = textView, let loaded, mapValid, !isUnavailable else {
             if chip != nil { hideChip() }
             inlineText = nil

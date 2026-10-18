@@ -90,3 +90,21 @@ final class PowerState {
     static var liveBlame: Bool { !shared.saver }
     static var liveGitDiff: Bool { !shared.saver }
 }
+
+extension PowerState {
+    /// The view's window is occluded, hidden or minimized (never true headless or without a window).
+    static func windowHidden(_ view: NSView?) -> Bool {
+        if AppEnv.headless { return false }
+        guard let w = view?.window else { return false }
+        return !w.occlusionState.contains(.visible) || w.isMiniaturized
+    }
+
+    /// Overlays and debounced schedulers do nothing while their window cannot be seen: if hidden, `work` is retried in
+    /// 1.5 s (a single cheap re-check) and true is returned.
+    @discardableResult
+    static func deferWhileHidden(_ view: NSView?, _ work: @escaping () -> Void) -> Bool {
+        guard windowHidden(view) else { return false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: DispatchWorkItem(block: work))
+        return true
+    }
+}

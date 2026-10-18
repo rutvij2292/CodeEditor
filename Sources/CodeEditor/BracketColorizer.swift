@@ -199,6 +199,7 @@ final class TabBracketState: NSObject, NSLayoutManagerDelegate {
 
     private func snapshotAndScanImpl() {
         guard let tv = textView else { return }
+        if PowerState.deferWhileHidden(tv, { [weak self] in self?.snapshotAndScan() }) { return }
         let ns = tv.string as NSString
         var units = [UInt16](repeating: 0, count: ns.length)
         units.withUnsafeMutableBufferPointer { ns.getCharacters($0.baseAddress!, range: NSRange(location: 0, length: ns.length)) }
