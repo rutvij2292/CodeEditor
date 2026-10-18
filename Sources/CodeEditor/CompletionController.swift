@@ -113,7 +113,7 @@ final class CompletionController: NSObject {
         let typed = pendingTyped
         pendingTyped = false
         defer { lastLength = len; lastCaret = caret }
-        guard textView.selectedRanges.count == 1, sel.length == 0 else { close(); return }
+        guard textView.selectedRanges.count == 1, !textView.multiCaretActive, sel.length == 0 else { close(); return }
         let grew = len > lastLength
         let ns = textView.string as NSString
         if isOpen {
@@ -204,7 +204,7 @@ final class CompletionController: NSObject {
         providers.forEach { $0.cancel() }
         CompletionLex.resetCache()
         let sel = textView.selectedRange()
-        guard sel.length == 0, textView.selectedRanges.count == 1 else { return }
+        guard sel.length == 0, textView.selectedRanges.count == 1, !textView.multiCaretActive else { return }
         let text = textView.string
         let ns = text as NSString
         let caret = min(sel.location, ns.length)

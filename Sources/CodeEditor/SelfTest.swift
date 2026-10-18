@@ -79,6 +79,7 @@ enum SelfTest {
             humpSearchChecks(in: fm.temporaryDirectory.appendingPathComponent("ce-hump-\(getpid())")) {
                 laterChecks(w: w, a: a, dir: dir)
                 projectChecks(app: app, w: w, dir: dir) {
+                    multiCaretChecks(w: w, dir: fm.temporaryDirectory)
                     fastTierChecks()
                     try? fm.removeItem(at: dir)
                     try? fm.removeItem(at: LocalHistory.root)
