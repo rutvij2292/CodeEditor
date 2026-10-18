@@ -22,6 +22,7 @@ enum Verification {
             case "everywhere": w.showSearchEverywhere()
             case "projects": app.showRecentProjects(nil)
             case "git": w.toggleGitPanel()
+            case "commit": w.showCommitWindow()
             case "problems": w.showToolPanel("problems")
             case "find":
                 w.showToolPanel("find") { w.findPanel?.show(seed: AppEnv.value("CE_FIND_QUERY") ?? "function", replaceMode: AppEnv.value("CE_FIND_REPLACE") != nil) }
@@ -35,14 +36,17 @@ enum Verification {
             default: break
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + ((picker == "git" || picker == "find" || picker == "problems") ? 3.5 : picker == "completion" ? 2.2 : 1.6)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + ((picker == "git" || picker == "find" || picker == "problems" || picker == "commit") ? 3.5 : picker == "completion" ? 2.2 : 1.6)) {
             if let w = app.active?.window.contentView { render(w, to: shot) }
             if picker == "completion", let w = app.active, let tab = w.current {
                 let popupPath = shot.replacingOccurrences(of: ".png", with: "_popup.png")
                 CompletionPopup.shared.snapshot(to: popupPath)
                 composeCompletion(window: w.window, tab: tab, baseShot: shot, popupShot: popupPath)
             }
-            if picker != nil, !["git", "completion", "bottom", "tabs"].contains(picker!) { QuickPicker.snapshot(to: shot.replacingOccurrences(of: ".png", with: "_picker.png")) }
+            if picker == "commit", let w = app.active, let c = CommitWindowController.existing(for: w), let v = c.window.contentView {
+                render(v, to: shot.replacingOccurrences(of: ".png", with: "_commit.png"))
+            }
+            if picker != nil, !["git", "completion", "bottom", "tabs", "commit"].contains(picker!) { QuickPicker.snapshot(to: shot.replacingOccurrences(of: ".png", with: "_picker.png")) }
             fputs("snapshot done\n", stderr)
             NSApp.terminate(nil)
         }

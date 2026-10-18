@@ -247,6 +247,8 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     var onStatusChange: (() -> Void)?
     /// Esc / Shift-Esc pressed while focus is inside the panel and no popover, sheet or search text wants it.
     var onRequestClose: (() -> Void)?
+    /// Fired after a successful commit (`andPush`: the push is about to start).
+    var onCommitted: ((_ andPush: Bool) -> Void)?
     /// Fired after every successful reload of the repository state.
     var onSummaryChange: ((GitSummary) -> Void)?
     private(set) var summary = GitSummary.empty
@@ -1516,6 +1518,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             self.messageView.needsDisplay = true
             self.amendCheck.state = .off
             if !notes.isEmpty { self.showNote(notes.joined(separator: "\n")) }
+            self.onCommitted?(push)
             if push { self.startPush() }
         }, resets: true)
     }

@@ -176,10 +176,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func focusTree(_ sender: Any?) { active?.focusTree() }
     @objc func toggleGit(_ sender: Any?) { active?.toggleGitPanel() }
     @objc func showFileHistory(_ sender: Any?) { active?.showFileHistory() }
-    @objc func commitChanges(_ sender: Any?) { active?.showCommit() }
-    @objc func pushChanges(_ sender: Any?) { active?.gitPush() }
-    @objc func updateProject(_ sender: Any?) { active?.gitPull() }
-    @objc func fetchChanges(_ sender: Any?) { active?.gitFetch() }
+    @objc func commitChanges(_ sender: Any?) { active?.showCommitWindow() }
+    @objc func pushChanges(_ sender: Any?) { active?.showCommitWindow { $0.push() } }
+    @objc func updateProject(_ sender: Any?) { active?.showCommitWindow { $0.pull() } }
+    @objc func fetchChanges(_ sender: Any?) { active?.showCommitWindow { $0.fetch() } }
     @objc func selectOpenedFile(_ sender: Any?) { active?.selectOpenedFile() }
     @objc func collapseAll(_ sender: Any?) { active?.collapseTree() }
     @objc func showFindTool(_ sender: Any?) { active?.showToolPanel("find") }
