@@ -170,6 +170,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         symbols = symbolIndex
         projectIndex.refresh(force: true) { symbolIndex.rebuild() }
         RecentProjects.add(url)
+        if !AppEnv.headless { FastTier.warm(root: url) }
         git = nil
         gitRoot = nil
         gitRootResolved = false
@@ -212,7 +213,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             VendorIndex.invalidate(root: root)
         }
         if content {
-            if let root { LaravelNavigator.invalidate(root: root) }
+            if let root { LaravelNavigator.invalidate(root: root); FastTier.invalidate(root: root) }
             tree.refresh()
             index?.refresh(force: true) { [weak self] in self?.symbols?.rebuild() }
             editors.values.forEach { $0.reloadIfChangedOnDisk() }
