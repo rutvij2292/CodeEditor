@@ -76,7 +76,7 @@ enum TerminalEnvironment {
         env["COLORTERM"] = "truecolor"
         env["LANG"] = "en_US.UTF-8"
         env["CODEEDITOR"] = "1"
-        env["TERM_PROGRAM"] = "CodeEditor"
+        env["TERM_PROGRAM"] = Brand.name
         env["PATH"] = path
         for (k, v) in extra { env[k] = v }
         return env.map { "\($0.key)=\($0.value)" }.sorted()

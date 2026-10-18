@@ -131,7 +131,7 @@ final class KeymapPane: SettingsPane, NSTableViewDataSource, NSTableViewDelegate
 // MARK: - About
 
 final class AboutPane: SettingsPane {
-    static let repoURL = "https://github.com/rutvij2292/CodeEditor"
+    static let repoURL = Brand.repoURL
     private var timer: Timer?
     private var historySize: UInt64?
     private var cacheSize: UInt64?
@@ -142,7 +142,7 @@ final class AboutPane: SettingsPane {
         let info = Bundle.main.infoDictionary
         let version = (info?["CFBundleShortVersionString"] as? String) ?? "development build"
         let build = (info?["CFBundleVersion"] as? String).map { " (\($0))" } ?? ""
-        section("CodeEditor")
+        section(Brand.name)
         row("Version", infoLabel { version + build })
         row("Source", infoLabel { Self.repoURL })
 

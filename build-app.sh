@@ -1,15 +1,19 @@
 #!/bin/bash
-# Builds a release CodeEditor.app in ./dist (grammar query bundles go in Contents/Resources).
+# Builds a release Linnet.app in ./dist (grammar query bundles, fonts and the icon go in Contents/Resources).
 set -euo pipefail
 cd "$(dirname "$0")"
 
 swift build -c release --build-system native
 BIN_DIR=$(swift build -c release --build-system native --show-bin-path)
 
-APP=dist/CodeEditor.app
-rm -rf "$APP"
+NAME=Linnet
+APP="dist/$NAME.app"
+VERSION="0.$(git rev-list --count HEAD 2>/dev/null || echo 1)"
+rm -rf dist/CodeEditor.app "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN_DIR/CodeEditor" "$APP/Contents/MacOS/CodeEditor"
+cp "$BIN_DIR/CodeEditor" "$APP/Contents/MacOS/$NAME"
+[ -f Branding/AppIcon.icns ] || ./scripts/make-icns.sh
+cp Branding/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp -R "$BIN_DIR"/*.bundle "$APP/Contents/Resources/"
 mkdir -p "$APP/Contents/Resources/Fonts"
 cp Fonts/*.ttf Fonts/OFL.txt "$APP/Contents/Resources/Fonts/"
@@ -19,12 +23,16 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleExecutable</key><string>CodeEditor</string>
+    <key>CFBundleExecutable</key><string>$NAME</string>
     <key>CFBundleIdentifier</key><string>com.teccel.CodeEditor</string>
-    <key>CFBundleName</key><string>CodeEditor</string>
+    <key>CFBundleName</key><string>$NAME</string>
+    <key>CFBundleDisplayName</key><string>$NAME</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
+    <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Teccel Software. Bundled font: JetBrains Mono (SIL OFL 1.1).</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>$VERSION</string>
+    <key>CFBundleVersion</key><string>$VERSION</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>

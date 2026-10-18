@@ -345,7 +345,7 @@ final class LSPServerInstance {
         }
         let params: [String: Any] = [
             "processId": Int(ProcessInfo.processInfo.processIdentifier),
-            "clientInfo": ["name": "CodeEditor", "version": "1"],
+            "clientInfo": ["name": Brand.name, "version": "1"],
             "rootUri": uri, "rootPath": root.path,
             "workspaceFolders": [folder],
             "initializationOptions": spec.initializationOptions ?? config.initializationOptions(root),

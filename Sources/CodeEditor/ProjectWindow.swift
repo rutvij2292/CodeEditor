@@ -66,7 +66,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         window.tabbingMode = .disallowed
         window.minSize = NSSize(width: 640, height: 400)
         window.delegate = self
-        window.title = "CodeEditor"
+        window.title = Brand.name
 
         tabs.onSelect = { [weak self] id in self?.didSelect(id) }
         tabs.onClose = { [weak self] id in self?.close(id) }
@@ -579,7 +579,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     }
 
     private func updateTitle() {
-        guard let root else { window.title = "CodeEditor"; return }
+        guard let root else { window.title = Brand.name; return }
         if let id = tabs.selectedID, id.hasPrefix(root.path + "/") {
             window.title = "\(root.lastPathComponent) – \(id.dropFirst(root.path.count + 1))"
         } else {

@@ -30,13 +30,15 @@ enum MainMenu {
         let a = app
         let main = NSMenu()
 
-        main.addItem(menu("CodeEditor", [
+        main.addItem(menu(Brand.name, [
+            item("About \(Brand.name)", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), ""),
+            sep,
             item("Settings…", #selector(AppDelegate.showSettings(_:)), ",", target: a),
             sep,
-            item("Hide CodeEditor", #selector(NSApplication.hide(_:)), "h"),
+            item("Hide \(Brand.name)", #selector(NSApplication.hide(_:)), "h"),
             item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
             sep,
-            item("Quit CodeEditor", #selector(NSApplication.terminate(_:)), "q"),
+            item("Quit \(Brand.name)", #selector(NSApplication.terminate(_:)), "q"),
         ]))
 
         let recent = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
