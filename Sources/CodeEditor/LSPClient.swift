@@ -247,25 +247,39 @@ final class LSPClient {
 /// Line table over a snapshot of the text; LSP positions are (line, UTF-16 column) = NSString offsets.
 struct LSPLineTable {
     private(set) var starts: [Int] = [0]
+    /// Content end of each line (before its terminator).
+    private(set) var ends: [Int] = []
     let length: Int
 
+    /// Line terminators follow the LSP spec: "\n", "\r\n" and a lone "\r".
     init(_ text: NSString) {
         length = text.length
         var chunk = [unichar](repeating: 0, count: 4096)
         var pos = 0
+        var pendingCR = false      // previous character (index i-1) was "\r"
         while pos < length {
             let n = min(4096, length - pos)
             text.getCharacters(&chunk, range: NSRange(location: pos, length: n))
-            for i in 0..<n where chunk[i] == 10 { starts.append(pos + i + 1) }
+            for k in 0..<n {
+                let i = pos + k, c = chunk[k]
+                if pendingCR {
+                    pendingCR = false
+                    if c == 10 { starts.append(i + 1); ends.append(i - 1); continue }
+                    starts.append(i); ends.append(i - 1)      // lone "\r" ended the previous line
+                }
+                if c == 10 { starts.append(i + 1); ends.append(i) } else if c == 13 { pendingCR = true }
+            }
             pos += n
         }
+        if pendingCR { starts.append(length); ends.append(length - 1) }
+        ends.append(length)
     }
 
     func offset(line: Int, character: Int) -> Int {
         guard line >= 0 else { return 0 }
         if line >= starts.count { return length }
         let lineStart = starts[line]
-        let lineEnd = line + 1 < starts.count ? starts[line + 1] - 1 : length   // before the newline
+        let lineEnd = ends[line]
         return max(lineStart, min(lineStart + max(0, character), max(lineStart, lineEnd)))
     }
 
