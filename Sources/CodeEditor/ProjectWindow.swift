@@ -95,6 +95,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         statusBar.onShowGit = { [weak self] in self?.showCommit() }
         statusBar.onChooseEncoding = { [weak self] anchor in self?.chooseEncoding(from: anchor) }
         statusBar.onToggleTerminal = { [weak self] in self?.toggleTerminal() }
+        statusBar.onCycleViewer = { [weak self] in ViewerSystem.cycle(self?.current) }
         let sidebarItem = NSSplitViewItem(viewController: sidebarVC)
         sidebarItem.holdingPriority = NSLayoutConstraint.Priority(260)
         sidebarItem.minimumThickness = 180
@@ -258,6 +259,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
                          indent: editor?.indent.label, language: editor.map { Self.languageName($0.url) },
                          lineEnding: editor?.lineEnding, branch: gitSummary,
                          server: root.map { LanguageServers.statusText(forRoot: $0) } ?? "", encoding: editor?.encodingName)
+        let viewer = ViewerSystem.statusInfo(for: editor)
+        statusBar.setViewer(visible: viewer.visible, text: viewer.text)
     }
 
     var statusBarBranchText: String { statusBar.branchText }

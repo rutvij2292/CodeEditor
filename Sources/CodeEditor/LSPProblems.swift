@@ -44,6 +44,7 @@ extension LanguageServers {
             }
             out.append(FileProblems(url: s.url.standardizedFileURL, diagnostics: ds))
         }
+        out += NativeProblems.problems(forRoot: root, excluding: seen)     // JSON / YAML syntax checks (ViewerSystem.swift)
         return out.sorted { $0.url.path < $1.url.path }
     }
 
