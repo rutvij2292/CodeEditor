@@ -24,7 +24,9 @@ enum LaravelFS {
 
     // Small LRU of recently read file contents (bounded) so repeated hover resolves do not re-read.
     private static var cache: [(path: String, stamp: Int64, text: NSString)] = []
+    private static let cacheLock = NSLock()   // the fast completion tier reads files from a background queue
     static func text(_ path: String) -> NSString? {
+        cacheLock.lock(); defer { cacheLock.unlock() }
         let stamp = mtime(path)
         if stamp == 0 { return nil }
         if let i = cache.firstIndex(where: { $0.path == path && $0.stamp == stamp }) {
@@ -38,7 +40,7 @@ enum LaravelFS {
         while cache.count > 12 || total > 3_000_000, cache.count > 1 { total -= cache.removeFirst().text.length }
         return ns
     }
-    static func dropTextCache() { cache.removeAll() }
+    static func dropTextCache() { cacheLock.lock(); cache.removeAll(); cacheLock.unlock() }
 
     /// 1-based (line, column) of a UTF-16 offset.
     static func lineCol(_ ns: NSString, _ offset: Int) -> (Int, Int) {
