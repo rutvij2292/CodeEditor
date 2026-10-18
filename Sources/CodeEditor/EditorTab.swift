@@ -73,7 +73,8 @@ final class EditorTab: NSObject, NSTextViewDelegate {
     }
 
     private static func modificationDate(_ url: URL) -> Date? {
-        (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        // URL caches resource values, so ask the file system directly.
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
 
     @objc private func themeChanged() {

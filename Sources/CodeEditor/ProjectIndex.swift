@@ -18,12 +18,16 @@ final class ProjectIndex {
         let root = self.root
         DispatchQueue.global(qos: .userInitiated).async {
             var found: [String] = []
-            let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+            // The enumerator may report symlink-resolved paths (/var -> /private/var), so accept either spelling.
+            var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+            let real = realpath(root.path, &buffer) != nil ? String(cString: buffer) : root.path
+            let prefixes = Set([root.path, real]).map { $0.hasSuffix("/") ? $0 : $0 + "/" }
             if let en = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey],
                                                        options: [], errorHandler: { _, _ in true }) {
                 for case let url as URL in en {
                     if Self.skipNames.contains(url.lastPathComponent) { en.skipDescendants(); continue }
                     if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true { continue }
+                    guard let prefix = prefixes.first(where: { url.path.hasPrefix($0) }) else { continue }
                     found.append(String(url.path.dropFirst(prefix.count)))
                     if found.count >= 100_000 { break }
                 }
