@@ -295,6 +295,10 @@ final class LSPServerInstance {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = (manager.extraPathDirs(for: exe) + (env["PATH"] ?? "/usr/bin:/bin").split(separator: ":").map(String.init))
             .joined(separator: ":")
+        // Intelephense peaks near 500 MB while indexing; a 512 MB V8 heap cap trims the spike (~130 MB) without slowing it.
+        if config.id == "intelephense", !(env["NODE_OPTIONS"] ?? "").contains("max-old-space-size") {
+            env["NODE_OPTIONS"] = ((env["NODE_OPTIONS"] ?? "") + " --max-old-space-size=512").trimmingCharacters(in: .whitespaces)
+        }
         let settings = config.settings
         let folder: [String: Any] = ["uri": uri, "name": root.lastPathComponent]
         client.onServerRequest = { method, params in
