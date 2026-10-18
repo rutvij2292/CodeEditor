@@ -225,6 +225,7 @@ final class MarkdownRenderer {
             var rest = item.blocks[...]
             if case .paragraph(let text, _)? = rest.first {
                 let s = NSMutableAttributedString(string: marker + "\t", attributes: [.font: style.body, .foregroundColor: markerColor])
+                if item.task != nil { s.addAttribute(.mdTaskLine, value: item.line, range: NSRange(location: 0, length: marker.utf16.count)) }
                 let content = NSMutableAttributedString(attributedString: inline(text, font: style.body, color: ctx.color))
                 if item.task == true { content.addAttributes([.foregroundColor: style.dim, .strikethroughStyle: NSUnderlineStyle.single.rawValue], range: NSRange(location: 0, length: content.length)) }
                 s.append(content)
@@ -392,6 +393,8 @@ final class MarkdownPreviewView: NSView, NSTextViewDelegate {
     let scroll = NSScrollView()
     let textView: NSTextView
     var fileURL: URL?
+    /// Project root: file references in the text that exist under it (or next to the document) become Cmd-clickable.
+    var projectRoot: URL?
     /// Relative links to other files (Markdown or any text file) open here.
     var onOpenFile: ((URL) -> Void)?
     private(set) var lineMap: [(line: Int, loc: Int)] = []
@@ -406,7 +409,7 @@ final class MarkdownPreviewView: NSView, NSTextViewDelegate {
         tc.widthTracksTextView = true
         storage.addLayoutManager(lm)
         lm.addTextContainer(tc)
-        textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 400), textContainer: tc)
+        textView = PlanTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 400), textContainer: tc)
         super.init(frame: frame)
         textView.isEditable = false
         textView.isSelectable = true
@@ -452,7 +455,11 @@ final class MarkdownPreviewView: NSView, NSTextViewDelegate {
         yTable = nil
         let keep = scrollY
         suppress += 1
-        textView.textStorage?.setAttributedString(result.text)
+        if projectRoot != nil {
+            let marked = NSMutableAttributedString(attributedString: result.text)
+            PlanPaths.annotate(marked, root: projectRoot, base: fileURL)
+            textView.textStorage?.setAttributedString(marked)
+        } else { textView.textStorage?.setAttributedString(result.text) }
         // Keep the reader's place across a re-render (the clip view clamps / resets while the document is replaced).
         textView.layoutManager?.ensureLayout(for: textView.textContainer!)
         textView.sizeToFit()

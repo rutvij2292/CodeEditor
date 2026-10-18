@@ -21,6 +21,7 @@ enum FileStructure {
     /// Items in source order; the row of the symbol enclosing `currentLine` is preselected.
     static func items(text: String, fileExtension: String, currentLine: Int,
                       goTo: @escaping (Int) -> Void) -> (items: [PickerItem], preselect: Int) {
+        if PlanOutline.handles(fileExtension) { return PlanOutline.items(text: text, currentLine: currentLine, goTo: goTo) }
         let symbols = SymbolExtractor.symbols(in: text, fileExtension: fileExtension)
             .enumerated().sorted { ($0.element.line, $0.offset) < ($1.element.line, $1.offset) }.map(\.element)
         var preselect = 0

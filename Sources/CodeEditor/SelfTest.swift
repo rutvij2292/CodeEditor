@@ -91,6 +91,7 @@ enum SelfTest {
                         SelfTestHttp.run(w: w) {
                             SelfTestChangeReview.run(w: w) {
                                 SelfTestPrettierReal.run(w: w) {
+                                    SelfTestPlans.run(w: w)
                                     SelfTestPerf.run(app: app)
                                     finish()
                                 }

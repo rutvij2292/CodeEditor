@@ -20,6 +20,7 @@ extension ProjectWindow {
         installTerminalPanel(root: root)
         installChangeReview(root: root)
         installClaudeBridge()
+        PlanSupport.start()
         onFindInFiles = { [weak self] in self?.showFind(replace: false) }
         onReplaceInFiles = { [weak self] in self?.showFind(replace: true) }
     }
