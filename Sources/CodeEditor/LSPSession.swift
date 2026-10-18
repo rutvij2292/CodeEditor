@@ -23,6 +23,15 @@ final class LSPSession: NSResponder {
     private var applyScheduled = false
     private var observers: [NSObjectProtocol] = []
 
+    // Incremental sync (see LSPSync.swift). `shadow` exists only while some attached server wants incremental changes.
+    var shadow: LSPShadow?
+    private var pendingChanges: [[String: Any]] = []
+    private var shadowStale = false
+    /// Test hook: every didChange payload (uri, contentChanges) right before it is sent.
+    static var didChangeObserver: ((String, [[String: Any]]) -> Void)?
+    private(set) var incrementalSends = 0, fullSends = 0
+    private static let maxPendingChanges = 64
+
     // UI state (LSPUI.swift)
     var hoverToken = 0
     var hoverTimer: Timer?
@@ -67,13 +76,24 @@ final class LSPSession: NSResponder {
     func didOpen(in inst: LSPServerInstance) {
         guard let client = inst.client, !opened.contains(inst.key) else { return }
         opened.insert(inst.key)
+        if inst.syncKind == 2 { resetShadow() }
         let ext = url.pathExtension.lowercased()
         client.notify("textDocument/didOpen", ["textDocument": [
             "uri": uri, "languageId": inst.config.languageId(forExtension: ext), "version": version, "text": text,
         ]])
     }
 
-    func instanceRestarting(_ inst: LSPServerInstance) { opened.remove(inst.key) }
+    func instanceRestarting(_ inst: LSPServerInstance) { opened.remove(inst.key); updateShadowNeed() }
+
+    private func resetShadow() {
+        pendingChanges.removeAll()
+        shadowStale = false
+        shadow = LSPShadow((textView?.string ?? "") as NSString)
+    }
+
+    private func updateShadowNeed() {
+        if !instances.contains(where: { opened.contains($0.key) && $0.syncKind == 2 }) { shadow = nil; pendingChanges.removeAll() }
+    }
 
     @objc private func textChanged(_ n: Notification) {
         hasUnsentChanges = true
@@ -90,11 +110,23 @@ final class LSPSession: NSResponder {
         guard hasUnsentChanges else { return }
         hasUnsentChanges = false
         version += 1
-        let params: [String: Any] = [
-            "textDocument": ["uri": uri, "version": version],
-            "contentChanges": [["text": text]],
-        ]
-        for inst in instances where opened.contains(inst.key) { inst.client?.notify("textDocument/didChange", params) }
+        let current = text as NSString
+        // Incremental changes are only trusted while the mirror still equals the editor text (any edit that
+        // bypassed the storage notification, a gap, or too many queued edits falls back to full sync).
+        var incremental: [[String: Any]]?
+        if let sh = shadow, !shadowStale, sh.matches(current) { incremental = pendingChanges }
+        let fullChanges: [[String: Any]] = [["text": text]]
+        for inst in instances where opened.contains(inst.key) {
+            let useInc = inst.syncKind == 2 && incremental != nil
+            let changes = useInc ? incremental! : fullChanges
+            if useInc { incrementalSends += 1 } else { fullSends += 1 }
+            LSPSession.didChangeObserver?(uri, changes)
+            inst.client?.notify("textDocument/didChange", [
+                "textDocument": ["uri": uri, "version": version], "contentChanges": changes,
+            ] as [String: Any])
+        }
+        if shadow != nil, shadowStale || !(shadow?.matches(current) ?? false) { shadow = LSPShadow(current); shadowStale = false }
+        pendingChanges.removeAll()
     }
 
     func didSave() {
@@ -126,6 +158,7 @@ final class LSPSession: NSResponder {
     var allDiagnostics: [LSPDiagnostic] { diags.values.flatMap { $0 } }
 
     func setDiagnostics(_ raw: [[String: Any]], serverId: String, version published: Int?) {
+        LSPLog.log("diagnostics \(url.lastPathComponent) published v\(published.map(String.init) ?? "-") ours v\(version) n=\(raw.count)")
         if let published, published < version { return }   // computed for text we have already edited past
         let ns = text as NSString
         let table = LSPLineTable(ns)
@@ -147,9 +180,10 @@ final class LSPSession: NSResponder {
     }
 
     @objc private func storageEdited(_ n: Notification) {
-        guard let storage = n.object as? NSTextStorage, storage.editedMask.contains(.editedCharacters),
-              !diags.isEmpty else { return }
+        guard let storage = n.object as? NSTextStorage, storage.editedMask.contains(.editedCharacters) else { return }
         let edited = storage.editedRange, delta = storage.changeInLength
+        trackEdit(storage, edited: edited, delta: delta)
+        guard !diags.isEmpty else { return }
         let oldEnd = edited.location + edited.length - delta
         for (k, list) in diags {
             diags[k] = list.map { d in
@@ -163,6 +197,17 @@ final class LSPSession: NSResponder {
             }
         }
         scheduleApply()
+    }
+
+    /// Records the edit into the shadow (computing the LSP range from the pre-edit mirror).
+    private func trackEdit(_ storage: NSTextStorage, edited: NSRange, delta: Int) {
+        guard shadow != nil, !shadowStale else { return }
+        let oldRange = NSRange(location: edited.location, length: edited.length - delta)
+        guard oldRange.length >= 0, NSMaxRange(edited) <= storage.length,
+              pendingChanges.count < Self.maxPendingChanges else { shadowStale = true; pendingChanges.removeAll(); return }
+        let inserted = (storage.string as NSString).substring(with: edited) as NSString
+        if let change = shadow?.replace(oldRange, with: inserted) { pendingChanges.append(change) }
+        else { shadowStale = true; pendingChanges.removeAll() }
     }
 
     private func scheduleApply() {

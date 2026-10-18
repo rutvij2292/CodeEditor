@@ -57,7 +57,12 @@ struct LanguageServerConfig {
                 if let key = licenceKey() { o["licenceKey"] = key }
                 return o
             },
-            settings: ["intelephense": ["files": ["maxSize": 1_000_000], "telemetry": ["enabled": false]]]),
+            // `files.exclude` is deliberately NOT set: Intelephense's defaults index vendor/ (framework classes must
+            // resolve) and only skip tests/node_modules/VCS dirs. `environment.includePaths` stays unset too.
+            settings: ["intelephense": ["files": ["maxSize": 1_000_000], "telemetry": ["enabled": false],
+                                        "diagnostics": ["enable": true], "format": ["enable": true],
+                                        "completion": ["insertUseDeclaration": true, "triggerParameterHints": true],
+                                        "trace": ["server": "off"]]]),
         LanguageServerConfig(
             id: "volar", name: "Vue (Volar)", extensions: ["vue"], languageIds: ["vue": "vue"],
             executables: ["vue-language-server"],
@@ -108,9 +113,12 @@ struct LanguageServerConfig {
             settings: ["tailwindCSS": ["emmetCompletions": false]] ),
     ]
 
+    /// Extension point for additional servers (user configuration, tests); consulted after `table`.
+    static var extra: [LanguageServerConfig] = []
+
     static func configs(forExtension ext: String) -> [LanguageServerConfig] {
         let e = ext.lowercased()
-        return table.filter { $0.extensions.contains(e) }
+        return (table + extra).filter { $0.extensions.contains(e) }
     }
 }
 
@@ -179,6 +187,16 @@ final class LSPServerInstance {
         return LanguageServerStatus(serverId: config.id, name: config.name, root: root, state: s, rssBytes: rss)
     }
 
+    private static let forceFullSync = ProcessInfo.processInfo.environment["CE_LSP_FULLSYNC"] != nil
+    /// TextDocumentSyncKind the server wants: 0 none, 1 full, 2 incremental.
+    var syncKind: Int {
+        if Self.forceFullSync { return 1 }   // CE_LSP_FULLSYNC=1: debugging aid
+        let v = capabilities["textDocumentSync"]
+        if let n = v as? NSNumber { return n.intValue }
+        if let d = v as? [String: Any], let n = d["change"] as? NSNumber { return n.intValue }
+        return 1
+    }
+
     func supports(_ capability: String) -> Bool {
         guard isInitialized, let v = capabilities[capability] else { return false }
         if let b = v as? Bool { return b }
@@ -222,7 +240,12 @@ final class LSPServerInstance {
                  "workspace/inlayHint/refresh", "workspace/codeLens/refresh", "window/showDocument":
                 return NSNull()
             case "workspace/workspaceFolders": return [folder]
-            case "workspace/applyEdit": return ["applied": false]
+            case "workspace/applyEdit":
+                // Runs on the client queue; edits touch AppKit buffers so hop to main (main never blocks on this queue).
+                var out: [String: Any] = ["applied": false, "failureReason": "editor unavailable"]
+                let work = { out = LSPEdits.handleApplyEdit(params) }
+                if Thread.isMainThread { work() } else { DispatchQueue.main.sync(execute: work) }
+                return out
             case "workspace/configuration":
                 let items = ((params as? [String: Any])?["items"] as? [[String: Any]]) ?? []
                 return items.map { item -> Any in
@@ -281,9 +304,9 @@ final class LSPServerInstance {
         case "textDocument/publishDiagnostics":
             if let p { manager.diagnosticsReceived(from: self, params: p) }
         case "indexingStarted":
-            progress = "indexing…"; manager.statusChanged()
+            progress = "indexing…"; refreshRSS(); manager.statusChanged()
         case "indexingEnded":
-            progress = nil; manager.statusChanged()
+            progress = nil; refreshRSS(); manager.statusChanged()
         case "$/progress":
             guard let v = p?["value"] as? [String: Any], let kind = v["kind"] as? String else { return }
             if kind == "end" { progress = nil }
@@ -292,6 +315,7 @@ final class LSPServerInstance {
                 if let pct = (v["percentage"] as? NSNumber)?.intValue { text += " \(pct)%" }
                 progress = text
             }
+            if progress != nil, Date().timeIntervalSince(lastRSS) > 1.5 { refreshRSS() }
             manager.statusChanged()
         case "tsserver/request":
             // Volar 3 asks the client to forward requests to a tsserver carrying @vue/typescript-plugin.
@@ -305,7 +329,9 @@ final class LSPServerInstance {
         }
     }
 
+    private var lastRSS = Date.distantPast
     func refreshRSS() {
+        lastRSS = Date()
         guard let c = client, c.isRunning else { rss = 0; return }
         rss = LSPProcessInfo.treeResidentBytes(of: c.pid)
     }
@@ -323,7 +349,8 @@ final class LSPServerInstance {
     func killNow() { client?.kill() }
 
     private static let clientCapabilities: [String: Any] = [
-        "workspace": ["workspaceFolders": true, "configuration": true,
+        "workspace": ["workspaceFolders": true, "configuration": true, "applyEdit": true,
+                      "workspaceEdit": ["documentChanges": true],
                       "didChangeWatchedFiles": ["dynamicRegistration": false],
                       "didChangeConfiguration": ["dynamicRegistration": false]],
         "window": ["workDoneProgress": true, "showMessage": ["messageActionItem": ["additionalPropertiesSupport": false]]],
@@ -347,6 +374,10 @@ final class LSPServerInstance {
                                          "activeParameterSupport": true],
             ],
             "definition": ["linkSupport": true],
+            "references": [:] as [String: Any],
+            "rename": ["prepareSupport": true],
+            "formatting": [:] as [String: Any],
+            "rangeFormatting": [:] as [String: Any],
             "publishDiagnostics": ["relatedInformation": false, "versionSupport": true, "tagSupport": ["valueSet": [1, 2]]],
         ],
     ]
@@ -421,7 +452,7 @@ final class LanguageServerManager {
         sessions[ObjectIdentifier(tab)] = nil
         let path = session.url.standardizedFileURL.path
         session.close()
-        diagnostics[path] = nil
+        if diagnostics[path] != nil { diagnostics[path] = nil; problemsChanged() }
         for inst in session.instances {
             inst.sessions[ObjectIdentifier(tab)] = nil
             if inst.sessions.isEmpty { scheduleIdle(inst) }
@@ -532,6 +563,17 @@ final class LanguageServerManager {
 
     // MARK: Diagnostics
 
+    private var problemsPosted = false
+    /// Coalesced `LanguageServers.problemsDidChange` (main thread).
+    func problemsChanged() {
+        guard !problemsPosted else { return }
+        problemsPosted = true
+        DispatchQueue.main.async { [weak self] in
+            self?.problemsPosted = false
+            NotificationCenter.default.post(name: LanguageServers.problemsDidChange, object: nil)
+        }
+    }
+
     func diagnosticsReceived(from inst: LSPServerInstance, params: [String: Any]) {
         guard let uri = params["uri"] as? String, let url = URL(string: uri), url.isFileURL else { return }
         let raw = (params["diagnostics"] as? [[String: Any]]) ?? []
@@ -543,6 +585,7 @@ final class LanguageServerManager {
     func recordDiagnostics(for session: LSPSession, serverId: String) {
         diagnostics[session.url.standardizedFileURL.path, default: [:]][serverId] = session.diagnostics(for: serverId)
         statusChanged()
+        problemsChanged()
     }
 
     /// Cheap file-event forwarding for the integrator (created=1, changed=2, deleted=3).

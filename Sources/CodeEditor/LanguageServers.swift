@@ -8,6 +8,8 @@ enum LanguageServers {
     /// Posted (main thread) whenever any server's state, progress or memory changes.
     static let statusDidChange = LanguageServerManager.statusDidChange
 
+    // problemsDidChange, problems(forRoot:), nextProblem: LSPProblems.swift. findUsages/rename/format: LSPFeatures.swift.
+
     static func start() {
         let mgr = LanguageServerManager.shared
         mgr.start()
