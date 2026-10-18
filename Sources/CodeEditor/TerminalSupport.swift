@@ -82,6 +82,13 @@ enum TerminalEnvironment {
         return env.map { "\($0.key)=\($0.value)" }.sorted()
     }
 
+    /// `Prefs.terminalShell` when it is an executable, else `$SHELL`, else zsh. Used for new tabs and restarts.
+    static var resolvedShell: String {
+        let pref = Prefs.terminalShell.trimmingCharacters(in: .whitespaces)
+        if !pref.isEmpty, FileManager.default.isExecutableFile(atPath: pref) { return pref }
+        return userShell
+    }
+
     static var userShell: String {
         if let s = ProcessInfo.processInfo.environment["SHELL"], FileManager.default.isExecutableFile(atPath: s) { return s }
         return "/bin/zsh"
@@ -214,18 +221,8 @@ enum TerminalRunCommands {
         return items
     }
 
-    /// Claude Code entries (only when `claude` resolves on PATH) plus the configurable agent slot.
-    static func agentItems(path: String? = nil, agentCommand: String? = nil) -> [TerminalRunItem] {
-        var items: [TerminalRunItem] = []
-        if TerminalEnvironment.which("claude", path: path) != nil {
-            items.append(.init(group: "AI", title: "Claude Code", command: "claude"))
-            items.append(.init(group: "AI", title: "Claude Code: resume", command: "claude --resume"))
-            items.append(.init(group: "AI", title: "Claude Code: continue", command: "claude --continue"))
-        }
-        let agent = (agentCommand ?? UserDefaults.standard.string(forKey: "terminal.agentCommand") ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        items.append(.init(group: "AI", title: agent.isEmpty ? "AI agent (set terminal.agentCommand)" : "AI agent: \(agent)",
-                           command: agent))
-        return items
+    /// AI agent launchers as run items (see `TerminalAgents`).
+    static func agentItems(path: String? = nil, custom: String? = nil, legacy: String? = nil) -> [TerminalRunItem] {
+        TerminalAgents.all(path: path, custom: custom, legacy: legacy).map { .init(group: "AI", title: $0.title, command: $0.command) }
     }
 }

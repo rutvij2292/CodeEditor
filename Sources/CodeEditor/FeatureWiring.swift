@@ -55,15 +55,14 @@ extension ProjectWindow {
             self?.open(URL(fileURLWithPath: path), line: line)
             if let line { self?.current?.textView.goToLine(line, column: column ?? 1) }
         }
-        term.onActivity = { [weak self] in self?.setToolPanelBadge("•", for: "terminal") }
+        term.onActivity = { [weak self] in self?.updateTerminalAttention() }
+        term.onClose = { [weak self] in self?.hideTerminal() }
+        term.onFilesDropped = { [weak self] urls in
+            guard let self, let root = self.root else { return }
+            self.sendToTerminal(TerminalBridge.fileReferences(urls, root: root))
+        }
         terminalPanel = term
-        registerToolPanel(id: "terminal", title: "Terminal", view: term.view) { close in term.onClose = close }
-    }
-
-    /// Option-F12: opens the Terminal tab in the bottom panel (lazily starts the shell) and focuses it.
-    func showTerminal() {
-        guard let term = terminalPanel else { return }
-        setToolPanelBadge(nil, for: "terminal")
-        showToolPanel("terminal") { term.focusTerminal() }
+        // Right dock (default): the view is attached lazily on first show. Bottom dock: a tab in the bottom panel.
+        if termDock.side == "bottom" { registerBottomTerminal() }
     }
 }

@@ -45,7 +45,7 @@ extension SelfTest {
                 check("includeVendor adds vendor files back", withVendor.files.contains("vendor/pkg/a.php")
                       && !withVendor.files.contains("node_modules/m/i.js"))
                 ProjectIndex.includeVendor = savedVendor
-                coalescingChecks(w: w, dir: dir, done: done)
+                terminalChecks(app: app, w: w, dir: dir) { coalescingChecks(w: w, dir: dir, done: done) }
             }
         }
         _ = fm

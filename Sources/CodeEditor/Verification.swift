@@ -27,6 +27,7 @@ enum Verification {
             case "problems": w.showToolPanel("problems")
             case "find":
                 w.showToolPanel("find") { w.findPanel?.show(seed: AppEnv.value("CE_FIND_QUERY") ?? "function", replaceMode: AppEnv.value("CE_FIND_REPLACE") != nil) }
+            case "term-right", "term-bottom", "term-max", "term-narrow": decorateTerminal(w, mode: picker!)
             case "bottom": decorateBottom(w)
             case "tabs": decorateTabs(w)
             case "completion":
@@ -47,10 +48,33 @@ enum Verification {
             if picker == "commit", let w = app.active, let c = CommitWindowController.existing(for: w), let v = c.window.contentView {
                 render(v, to: shot.replacingOccurrences(of: ".png", with: "_commit.png"))
             }
-            if picker != nil, !["git", "completion", "bottom", "tabs", "commit"].contains(picker!) { QuickPicker.snapshot(to: shot.replacingOccurrences(of: ".png", with: "_picker.png")) }
+            if picker != nil, !["git", "completion", "bottom", "tabs", "commit", "term-right", "term-bottom", "term-max", "term-narrow"].contains(picker!) { QuickPicker.snapshot(to: shot.replacingOccurrences(of: ".png", with: "_picker.png")) }
             fputs("snapshot done\n", stderr)
             NSApp.terminate(nil)
         }
+    }
+
+    /// CE_PICKER=term-right|term-bottom|term-max|term-narrow: the terminal docked beside / below the editor with a sample
+    /// AI-CLI screen, a finished background tab (green dot) and the status bar toggle.
+    private static func decorateTerminal(_ w: ProjectWindow, mode: String) {
+        guard let term = w.terminalPanel else { return }
+        w.window.setContentSize(NSSize(width: mode == "term-narrow" ? 820 : 1360, height: 820))
+        if mode == "term-bottom" { Prefs.terminalDock = "bottom" }
+        w.showTerminalPanel(focus: false)
+        let e = "\u{1b}["
+        term.feedSample("\(e)1m\(e)38;5;208m\u{2726} Claude Code\(e)0m  \(e)2mv2.1\(e)0m\r\n\(e)2m~/proj  main\(e)0m\r\n\r\n"
+            + "\(e)36m>\(e)0m Refactor @app/Http/Controllers/UserController.php:12-40 to use a form request\r\n\r\n"
+            + "\(e)32m\u{25CF}\(e)0m I'll extract validation into \(e)1mStoreUserRequest\(e)0m.\r\n"
+            + "  \(e)32m+\(e)0m app/Http/Requests/StoreUserRequest.php\r\n"
+            + "  \(e)33m~\(e)0m app/Http/Controllers/UserController.php\r\n\r\n"
+            + "\(e)2m\u{2733} Working\u{2026} (12s \u{00B7} esc to interrupt)\(e)0m\r\n")
+        TerminalPanelController.isUserLooking = { _ in false }
+        term.newTab()
+        term.simulateBell(tab: term.activeIndex)
+        term.select(0)
+        if mode == "term-max" { w.maximizeTerminal() }
+        if mode == "term-narrow" { w.window.contentView?.layoutSubtreeIfNeeded(); w.reevaluateTerminalFit() }
+        w.updateTerminalAttention()
     }
 
     /// CE_PICKER=bottom: the bottom panel with Git / Find / Problems tabs, a badge, and sample tool content.
