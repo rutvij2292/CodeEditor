@@ -20,6 +20,8 @@ enum Verification {
             case "files": w.showGoToFile()
             case "recent": w.showRecentFiles()
             case "actions": w.showFindAction()
+            case "artisan": w.showArtisanPalette()
+            case "routes": w.showRouteBrowser()
             case "everywhere": w.showSearchEverywhere()
             case "projects": app.showRecentProjects(nil)
             case "git": w.toggleGitPanel()

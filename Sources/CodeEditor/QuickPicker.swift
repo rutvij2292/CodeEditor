@@ -93,6 +93,9 @@ final class QuickPicker: NSObject, NSTextFieldDelegate, NSTableViewDataSource, N
 
     static func dismiss() { current?.close(refocus: true) }
 
+    /// Re-runs the provider / filter for the open picker (rows that arrive after it was shown, e.g. artisan output).
+    static func reload() { current?.refilter() }
+
     // Test hooks (headless harness).
     static func type(_ query: String) { current?.field.stringValue = query; current?.refilter() }
     static var shownTitles: [String] { current?.shown.map(\.title) ?? [] }

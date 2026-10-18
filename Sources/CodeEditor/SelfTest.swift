@@ -84,11 +84,13 @@ enum SelfTest {
                     try? fm.removeItem(at: LocalHistory.root)
                     SelfTestBranches.run()
                     SelfTestPR.run()
+                    SelfTestArtisan.run {
                     viewerChecks(app: app, w: w) {
                         SelfTestPrettierReal.run(w: w) {
                             SelfTestPerf.run(app: app)
                             finish()
                         }
+                    }
                     }
                 }
             }
