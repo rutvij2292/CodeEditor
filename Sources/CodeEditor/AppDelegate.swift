@@ -1,12 +1,33 @@
 import AppKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
     private(set) var windows: [ProjectWindow] = []
     private var keyMonitor: Any?
     private var shiftDown = false
     private var lastShiftUp: TimeInterval = 0
+    private weak var lastKeyWindow: ProjectWindow?
 
-    var active: ProjectWindow? { windows.first { $0.window.isKeyWindow } ?? windows.last }
+    // Handlers other features install (menu items call them with the active window; no-ops until set).
+    static var nextProblemHandler: ((ProjectWindow) -> Void)?
+    static var previousProblemHandler: ((ProjectWindow) -> Void)?
+    static var findUsagesHandler: ((ProjectWindow) -> Void)?
+    static var renameHandler: ((ProjectWindow) -> Void)?
+    static var formatHandler: ((ProjectWindow) -> Void)?
+
+    /// The project window menu commands act on: the key window, else the last project window that was key
+    /// (a QuickPicker or other panel can be key while a command runs), else the newest window.
+    var active: ProjectWindow? {
+        windows.first { $0.window.isKeyWindow }
+            ?? lastKeyWindow.flatMap { last in windows.first { $0 === last } }
+            ?? windows.last
+    }
+
+    @objc private func windowDidBecomeKey(_ note: Notification) { noteKey(note.object as? NSWindow) }
+
+    /// Remembers which project window was key last.
+    func noteKey(_ window: NSWindow?) {
+        if let project = windows.first(where: { $0.window === window }) { lastKeyWindow = project }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Theme.start()
@@ -21,8 +42,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return event
         }
 
+        NotificationCenter.default.addObserver(self, selector: #selector(windowDidBecomeKey(_:)),
+                                               name: NSWindow.didBecomeKeyNotification, object: nil)
+
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
         for arg in args { openPath(URL(fileURLWithPath: arg)) }
+        if windows.isEmpty { SessionStore.windowsToReopen().forEach { openProject($0) } }
         if windows.isEmpty {
             let w = newWindow()
             if !AppEnv.headless, !RecentProjects.all.isEmpty { DispatchQueue.main.async { self.showRecentProjects(nil) } }
@@ -38,7 +63,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         windows.allSatisfy { $0.confirmCloseAll() } ? .terminateNow : .terminateCancel
     }
 
-    func applicationWillTerminate(_ notification: Notification) { LanguageServers.stopAll() }
+    func applicationWillTerminate(_ notification: Notification) {
+        windows.forEach { $0.saveSession() }
+        SessionStore.rememberOpenWindows(windows.compactMap(\.root))
+        LanguageServers.stopAll()
+    }
 
     func application(_ application: NSApplication, open urls: [URL]) { urls.forEach(openPath) }
 
@@ -48,7 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func newWindow() -> ProjectWindow {
         let w = ProjectWindow()
         w.onClose = { [weak self] closed in self?.windows.removeAll { $0 === closed } }
+        w.onOpenFolder = { [weak self] url in self?.openProject(url) }
         windows.append(w)
+        lastKeyWindow = w
         if !AppEnv.headless {
             w.window.cascadeTopLeft(from: NSPoint(x: 40 + 28 * Double(windows.count % 8), y: 700 - 28 * Double(windows.count % 8)))
             w.window.makeKeyAndOrderFront(nil)
@@ -148,6 +179,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func fetchChanges(_ sender: Any?) { active?.gitFetch() }
     @objc func selectOpenedFile(_ sender: Any?) { active?.selectOpenedFile() }
     @objc func collapseAll(_ sender: Any?) { active?.collapseTree() }
+    @objc func showFindTool(_ sender: Any?) { active?.showToolPanel("find") }
+    @objc func showProblemsTool(_ sender: Any?) { active?.showToolPanel("problems") }
+    @objc func showGitTool(_ sender: Any?) { active?.showToolPanel("git") }
+    @objc func findInFiles(_ sender: Any?) { active?.onFindInFiles?() }
+    @objc func replaceInFiles(_ sender: Any?) { active?.onReplaceInFiles?() }
+    @objc func nextProblem(_ sender: Any?) { active.map { Self.nextProblemHandler?($0) } }
+    @objc func previousProblem(_ sender: Any?) { active.map { Self.previousProblemHandler?($0) } }
+    @objc func findUsages(_ sender: Any?) { active.map { Self.findUsagesHandler?($0) } }
+    @objc func renameSymbol(_ sender: Any?) { active.map { Self.renameHandler?($0) } }
+    @objc func formatDocument(_ sender: Any?) { active.map { Self.formatHandler?($0) } }
+    @objc func toggleReopenWindows(_ sender: Any?) { SessionStore.reopenOnLaunch.toggle() }
+    @objc func toggleIncludeVendor(_ sender: Any?) {
+        ProjectIndex.includeVendor.toggle()
+        windows.forEach { $0.reindex() }
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(toggleReopenWindows(_:)): item.state = SessionStore.reopenOnLaunch ? .on : .off
+        case #selector(toggleIncludeVendor(_:)): item.state = ProjectIndex.includeVendor ? .on : .off
+        default: break
+        }
+        return true
+    }
+
     @objc func themeSystem(_ sender: Any?) { Theme.setMode(.system) }
     @objc func themeLight(_ sender: Any?) { Theme.setMode(.light) }
     @objc func themeDark(_ sender: Any?) { Theme.setMode(.dark) }

@@ -13,6 +13,8 @@ final class StatusBar: NSView {
     private let encoding = StatusBar.label()
     private let language = StatusBar.label()
     private let server = StatusBar.label()
+    private let notice = StatusBar.label()
+    private var noticeTimer: Timer?
     private let topLine = NSView()
 
     override init(frame: NSRect) {
@@ -23,7 +25,10 @@ final class StatusBar: NSView {
         indent.target = self; indent.action = #selector(indentTapped)
         let right = NSStackView(views: [server, language, indent, lineEnding, encoding, position])
         right.spacing = 14
-        let row = NSStackView(views: [branch, NSView(), right])
+        notice.setContentHuggingPriority(.init(1), for: .horizontal)
+        notice.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        notice.alignment = .center
+        let row = NSStackView(views: [branch, notice, right])
         row.distribution = .fill
         row.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 12)
         row.translatesAutoresizingMaskIntoConstraints = false
@@ -59,7 +64,7 @@ final class StatusBar: NSView {
     @objc private func restyle() {
         layer?.backgroundColor = Theme.background.blended(withFraction: Theme.isDark ? 0.05 : 0.025, of: Theme.foreground)?.cgColor
         topLine.layer?.backgroundColor = Theme.foreground.withAlphaComponent(0.12).cgColor
-        for l in [lineEnding, encoding, language, server] { l.textColor = Theme.gutter }
+        for l in [lineEnding, encoding, language, server, notice] { l.textColor = Theme.gutter }
         for b in [branch, position, indent] { b.contentTintColor = Theme.gutter; setTitle(b, b.title) }
     }
 
@@ -75,7 +80,26 @@ final class StatusBar: NSView {
         lineEnding.stringValue = eol ?? ""
         language.stringValue = languageName ?? ""
         server.stringValue = serverText
-        setTitle(branch, branchName.map { "⎇ " + $0 } ?? "")
+        setTitle(branch, branchName ?? "")
+    }
+
+    var branchText: String { branch.attributedTitle.string }
+    var noticeText: String { notice.stringValue }
+
+    /// "⎇ main ↑1 ↓2 · 3 changes" (arrows only when non-zero; "·" part only when there are changes).
+    static func gitSummary(branch: String?, ahead: Int, behind: Int, changes: Int) -> String {
+        guard var text = branch.map({ "⎇ " + $0 }) else { return "" }
+        if ahead > 0 { text += " ↑\(ahead)" }
+        if behind > 0 { text += " ↓\(behind)" }
+        if changes > 0 { text += " · \(changes) change\(changes == 1 ? "" : "s")" }
+        return text
+    }
+
+    /// Short message in the middle of the bar (e.g. "Closed deleted file x.php"); clears itself.
+    func flash(_ text: String, seconds: TimeInterval = 5) {
+        notice.stringValue = text
+        noticeTimer?.invalidate()
+        noticeTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in self?.notice.stringValue = "" }
     }
 
     @objc private func positionTapped() { onGoToLine?() }

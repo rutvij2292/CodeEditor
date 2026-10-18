@@ -1,12 +1,15 @@
 import AppKit
 
-/// One window per project: file tree, tabs, navigation history, popups, Git panel.
+/// One window per project: file tree, tabs, navigation history, popups, bottom tool panel (Git, Find, Problems, ...).
 final class ProjectWindow: NSObject, NSWindowDelegate {
     let window: NSWindow
     let tree = FileTreeController()
     let tabs = TabHost()
+    let bottom = BottomPanel()
     private(set) var root: URL?
     private(set) var editors: [String: EditorTab] = [:]
+    /// Tabs that show a "cannot open this file" message instead of an editor.
+    private(set) var placeholders: [String: LoadProblem] = [:]
     private var mru: [String] = []
     private var history: [String] = []
     private var historyIndex = -1
@@ -14,16 +17,35 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     private var index: ProjectIndex?
     private var symbols: SymbolIndex?
     private var watcher: FSWatcher?
-    private var diskTimer: Timer?
+    private var fallbackTimer: Timer?
     private var git: GitPanelController?
     private var gitRoot: URL?
+    private var gitRootResolved = false
+    private let gitHost = NSView()
     private let statusBar = StatusBar()
-    private var branchLabel: String?
+    private var gitSummary = ""
+    private(set) var statusKinds: [String: VCSKind] = [:]
     private let mainSplit = NSSplitViewController()
     private let rootSplit = NSSplitViewController()
-    private let gitContainer = NSViewController()
-    private var gitItem: NSSplitViewItem!
+    private var bottomItem: NSSplitViewItem!
+    private var restoring = false
+    private var sessionWork: DispatchWorkItem?
+    private var diffWindows: [NSWindow] = []
+    private lazy var coalescer = ChangeCoalescer(interval: 0.75) { [weak self] paths in self?.processChanges(paths) }
+    /// FS-event bursts handled so far (after coalescing).
+    private(set) var changeBatches = 0
     var onClose: ((ProjectWindow) -> Void)?
+    /// A folder was dropped on the window: the app opens it as a project.
+    var onOpenFolder: ((URL) -> Void)?
+    /// Hooks for the Find/Replace-in-files tool (menu items call these; no-op until set).
+    var onFindInFiles: (() -> Void)?
+    var onReplaceInFiles: (() -> Void)?
+
+    var coalesceInterval: TimeInterval {
+        get { coalescer.interval }
+        set { coalescer.interval = newValue }
+    }
+    var usesFallbackPolling: Bool { fallbackTimer != nil }
 
     override init() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
@@ -38,8 +60,12 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
 
         tabs.onSelect = { [weak self] id in self?.didSelect(id) }
         tabs.onClose = { [weak self] id in self?.close(id) }
+        tabs.menuProvider = { [weak self] id in self?.tabMenu(for: id) }
+        tabs.onDropURLs = { [weak self] urls in self?.handleDrop(urls) }
+        tabs.onReorder = { [weak self] in self?.scheduleSessionSave() }
         tree.onOpen = { [weak self] url in self?.open(url) }
         tree.onEscape = { [weak self] in self?.focusEditor() }
+        tree.onChange = { [weak self] change in self?.handleFileChange(change) }
 
         let sidebarVC = NSViewController(); sidebarVC.view = tree.scrollView
         let contentVC = NSViewController()
@@ -68,23 +94,26 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         mainSplit.addSplitViewItem(sidebarItem)
         mainSplit.addSplitViewItem(contentItem)
 
-        gitContainer.view = NSView()
-        gitItem = NSSplitViewItem(viewController: gitContainer)
-        gitItem.minimumThickness = 180
-        gitItem.canCollapse = true
-        gitItem.isCollapsed = true
+        let bottomVC = NSViewController()
+        bottomVC.view = bottom.view
+        bottomItem = NSSplitViewItem(viewController: bottomVC)
+        bottomItem.minimumThickness = 120
+        bottomItem.canCollapse = true
+        bottomItem.isCollapsed = true
         rootSplit.splitView.isVertical = false
         rootSplit.splitView.dividerStyle = .thin
         rootSplit.addSplitViewItem(NSSplitViewItem(viewController: mainSplit))
-        rootSplit.addSplitViewItem(gitItem)
+        rootSplit.addSplitViewItem(bottomItem)
+
+        bottom.onVisibilityChange = { [weak self] visible in self?.applyBottomVisibility(visible) }
+        bottom.onEscape = { [weak self] in self?.focusEditor() }
+        bottom.onWillShow = { [weak self] id in if id == "git" { self?.ensureGitPanel() } }
+        bottom.register(id: "git", title: "Git", view: gitHost)
 
         window.contentViewController = rootSplit
         window.setContentSize(NSSize(width: 1200, height: 800))
         DispatchQueue.main.async { [weak self] in self?.mainSplit.splitView.setPosition(260, ofDividerAt: 0) }
 
-        diskTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            self?.editors.values.forEach { $0.reloadIfChangedOnDisk() }
-        }
         NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive),
                                                name: NSApplication.didBecomeActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(selectionChanged(_:)),
@@ -93,7 +122,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
                                                name: LanguageServers.statusDidChange, object: nil)
     }
 
-    deinit { diskTimer?.invalidate() }
+    deinit { fallbackTimer?.invalidate() }
 
     // MARK: Project
 
@@ -108,23 +137,53 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         projectIndex.refresh(force: true) { symbolIndex.rebuild() }
         RecentProjects.add(url)
         git = nil
-        gitRoot = GitRepo.repoRoot(for: url)
+        gitRoot = nil
+        gitRootResolved = false
+        gitHost.subviews.forEach { $0.removeFromSuperview() }
+        bottom.setPersistence(key: AppEnv.headless ? nil : url.path)
         watcher = AppEnv.headless ? nil : FSWatcher(path: url.path) { [weak self] paths in self?.filesChanged(paths) }
+        // FSEvents replaces polling; poll slowly only when the watcher could not start.
+        fallbackTimer?.invalidate()
+        fallbackTimer = nil
+        if !AppEnv.headless, watcher == nil {
+            fallbackTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+                self?.editors.values.forEach { $0.reloadIfChangedOnDisk() }
+            }
+        }
         updateTitle()
-        refreshGitStatus()
+        GitRepo.repoRoot(for: url) { [weak self] repo in
+            guard let self, self.root == url else { return }
+            self.gitRoot = repo
+            self.gitRootResolved = true
+            if self.bottom.isVisible, self.bottom.selectedID == "git" { self.ensureGitPanel() }
+            self.refreshGitStatus()
+        }
+        if let session = SessionStore.load(for: url) { restoreSession(session) }
     }
 
-    private func filesChanged(_ paths: [String]) {
+    // MARK: File-system events
+
+    /// FSEvents callback: filters out skipped/build directories and coalesces bursts into one `processChanges`.
+    func filesChanged(_ paths: [String]) {
+        guard let root else { return }
+        coalescer.add(paths.filter { $0.contains("/.git/") || !ProjectIndex.isSkipped(path: $0, under: root) })
+    }
+
+    private func processChanges(_ paths: Set<String>) {
+        changeBatches += 1
         let gitMeta = paths.contains { $0.contains("/.git/") }
-        let content = paths.contains { path in
-            !path.contains("/.git/") && !ProjectIndex.skipNames.contains(where: { path.contains("/\($0)/") })
-        }
+        let content = paths.contains { !$0.contains("/.git/") }
         if content {
             tree.refresh()
             index?.refresh(force: true) { [weak self] in self?.symbols?.rebuild() }
             editors.values.forEach { $0.reloadIfChangedOnDisk() }
         }
         if content || gitMeta { refreshGitStatus() }
+    }
+
+    /// Rescans Go to File and symbols (e.g. after toggling "Include vendor").
+    func reindex() {
+        index?.refresh(force: true) { [weak self] in self?.symbols?.rebuild() }
     }
 
     /// Shows the language server's state and memory cost under the window title.
@@ -147,9 +206,12 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         let caret = editor?.textView.lineAndColumn
         statusBar.update(line: caret?.line, column: caret?.column, selected: editor?.textView.selectedRange().length ?? 0,
                          indent: editor?.indent.label, language: editor.map { Self.languageName($0.url) },
-                         lineEnding: editor?.lineEnding, branch: branchLabel,
+                         lineEnding: editor?.lineEnding, branch: gitSummary,
                          server: root.map { LanguageServers.statusText(forRoot: $0) } ?? "")
     }
+
+    var statusBarBranchText: String { statusBar.branchText }
+    var statusBarNotice: String { statusBar.noticeText }
 
     private func chooseIndent(from anchor: NSView) {
         guard current != nil else { return }
@@ -180,39 +242,85 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         guard let gitRoot else { return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let result = try? GitRepo(root: gitRoot).statusAndBranch()
-            let map = Dictionary((result?.changes ?? []).map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
-            var label = result.map { $0.info.name }
-            if let info = result?.info, label != nil {
-                if info.ahead > 0 { label! += " ↑\(info.ahead)" }
-                if info.behind > 0 { label! += " ↓\(info.behind)" }
-            }
             DispatchQueue.main.async {
-                self?.tree.setStatus(map, repoRoot: gitRoot)
-                self?.branchLabel = label
-                self?.refreshStatus()
+                guard let self else { return }
+                self.applyGitStatus(changes: result?.changes ?? [], info: result?.info, repoRoot: gitRoot)
             }
         }
     }
 
+    /// Applies a status snapshot: tree and tab colours, and the status bar's Git summary.
+    func applyGitStatus(changes: [GitChange], info: GitRepo.BranchInfo?, repoRoot: URL) {
+        let map = Dictionary(changes.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        tree.setStatus(map, repoRoot: repoRoot)
+        statusKinds = Dictionary(VCSKind.kinds(for: map, repoRoot: repoRoot).map { (VCSKind.canonical($0.key), $0.value) },
+                                 uniquingKeysWith: { a, _ in a })
+        for e in tabs.entries { applyTint(e.id) }
+        gitSummary = info.map { StatusBar.gitSummary(branch: $0.name, ahead: $0.ahead, behind: $0.behind, changes: changes.count) } ?? ""
+        refreshStatus()
+    }
+
+    private func applyTint(_ id: String) {
+        tabs.setTint(statusKinds[VCSKind.canonical(id)]?.color, for: id)
+    }
+
     // MARK: Files and tabs
 
-    func open(_ url: URL, line: Int? = nil) {
+    func open(_ url: URL, line: Int? = nil, options: OpenOptions = OpenOptions()) {
         let id = url.standardizedFileURL.path
         if editors[id] == nil {
-            guard let editor = EditorTab(url: url) else { NSSound.beep(); return }
+            if placeholders[id] != nil { tabs.select(id); return }
+            guard let editor = EditorTab(url: url, options: options) else { showLoadProblem(url); return }
             editors[id] = editor
-            let name = url.lastPathComponent
             editor.onDirtyChange = { [weak self, weak editor] in
-                self?.tabs.setTitle((editor?.isDirty == true ? "● " : "") + name, for: id)
+                guard let self, let editor else { return }
+                self.tabs.setDirty(editor.isDirty, for: editor.url.standardizedFileURL.path)
             }
-            editor.onSave = { [weak self] in self?.fileSaved(url) }
-            tabs.add(id: id, title: name, view: editor.view)
+            editor.onSave = { [weak self, weak editor] in if let editor { self?.fileSaved(editor.url) } }
+            editor.onDropURLs = { [weak self] urls in self?.handleDrop(urls) }
+            editor.onShowDiff = { [weak self] e in self?.showDiff(e) }
+            tabs.add(id: id, title: url.lastPathComponent, view: editor.view)
+            applyTint(id)
         } else {
             tabs.select(id)
         }
         if let line { editors[id]?.textView.goToLine(line) }
         if let root { RecentFiles.add(url, in: root) }
         window.makeFirstResponder(editors[id]?.textView)
+        scheduleSessionSave()
+    }
+
+    /// Shows a message tab for a file that cannot be opened as plain text, with a way to open it anyway.
+    private func showLoadProblem(_ url: URL) {
+        let id = url.standardizedFileURL.path
+        let problem = EditorTab.loadProblem(for: url) ?? .unreadable
+        placeholders[id] = problem
+        let name = url.lastPathComponent
+        let view: LoadProblemView
+        switch problem {
+        case .notUTF8:
+            view = LoadProblemView(message: "“\(name)” is not valid UTF-8 text.",
+                                   detail: "It may be binary or use another encoding.",
+                                   actions: [("Open anyway as Latin-1", { [weak self] in self?.reopen(url, OpenOptions(encoding: .isoLatin1)) })])
+        case .tooLarge(let size):
+            let mb = String(format: "%.1f", Double(size) / 1_000_000)
+            view = LoadProblemView(message: "“\(name)” is \(mb) MB, over the 5 MB limit.",
+                                   detail: "Large files are slow to edit and highlight.",
+                                   actions: [("Open read-only (first 5 MB)", { [weak self] in self?.reopen(url, OpenOptions(readOnlyTruncated: true)) })])
+        case .unreadable:
+            view = LoadProblemView(message: "“\(name)” could not be read.", detail: "Check that the file exists and you can read it.", actions: [])
+        }
+        view.addAction("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        tabs.add(id: id, title: name, view: view)
+    }
+
+    private func reopen(_ url: URL, _ options: OpenOptions) {
+        let id = url.standardizedFileURL.path
+        let position = tabs.entries.firstIndex { $0.id == id }
+        placeholders[id] = nil
+        tabs.remove(id)
+        open(url, options: options)
+        if let position { tabs.move(id, toIndex: position) }
     }
 
     private func fileSaved(_ url: URL) {
@@ -233,6 +341,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         }
         updateTitle()
         refreshStatus()
+        scheduleSessionSave()
     }
 
     private func updateTitle() {
@@ -249,17 +358,40 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
 
     var current: EditorTab? { tabs.selectedID.flatMap { editors[$0] } }
 
-    func close(_ id: String) {
-        guard let editor = editors[id], confirmDiscard(editor) else { return }
-        tabs.remove(id)
+    /// Closes a tab, asking about unsaved changes. False means the user cancelled.
+    @discardableResult
+    func close(_ id: String) -> Bool {
+        if placeholders[id] != nil { placeholders[id] = nil; forget(id); return true }
+        guard let editor = editors[id], confirmDiscard(editor) else { return false }
+        closeNow(id)
+        return true
+    }
+
+    /// Closes without asking (file deleted, or the user already decided).
+    private func closeNow(_ id: String) {
+        guard let editor = editors[id] else { return }
         editors[id] = nil
         EditorEvents.notifyClosed(editor)
+        forget(id)
+    }
+
+    private func forget(_ id: String) {
+        tabs.remove(id)
         mru.removeAll { $0 == id }
         history.removeAll { $0 == id }
         historyIndex = min(historyIndex, history.count - 1)
         updateTitle()
         refreshStatus()
+        scheduleSessionSave()
     }
+
+    private func closeMany(_ ids: [String]) {
+        for id in ids where !close(id) { break }
+    }
+
+    func closeOthers(_ id: String) { closeMany(tabs.ids(except: id)) }
+    func closeAllTabs() { closeMany(tabs.entries.map(\.id)) }
+    func closeToTheRight(of id: String) { closeMany(tabs.ids(toRightOf: id)) }
 
     private func confirmDiscard(_ editor: EditorTab) -> Bool {
         guard editor.isDirty, !AppEnv.headless else { return true }
@@ -282,11 +414,177 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool { confirmCloseAll() }
 
     func windowWillClose(_ notification: Notification) {
-        diskTimer?.invalidate()
+        saveSession()
+        sessionWork?.cancel()
+        coalescer.cancel()
+        fallbackTimer?.invalidate()
         watcher = nil
         editors.values.forEach { EditorEvents.notifyClosed($0) }
+        diffWindows.forEach { $0.close() }
         QuickPicker.dismiss()
         onClose?(self)
+    }
+
+    // MARK: Tab menu
+
+    func tabMenu(for id: String) -> NSMenu {
+        let menu = NSMenu()
+        let rows: [(String, Selector)] = [("Close", #selector(tabMenuClose(_:))), ("Close Others", #selector(tabMenuCloseOthers(_:))),
+                                          ("Close All", #selector(tabMenuCloseAll(_:))),
+                                          ("Close to the Right", #selector(tabMenuCloseRight(_:)))]
+        for (title, action) in rows {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = id
+            if title == "Close Others" { item.isEnabled = tabs.entries.count > 1 }
+            if title == "Close to the Right" { item.isEnabled = !tabs.ids(toRightOf: id).isEmpty }
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        for (title, action) in [("Copy Path", #selector(tabMenuCopyPath(_:))), ("Reveal in Finder", #selector(tabMenuReveal(_:)))] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = id
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    private func tabID(_ item: NSMenuItem) -> String? { item.representedObject as? String }
+    @objc private func tabMenuClose(_ i: NSMenuItem) { if let id = tabID(i) { close(id) } }
+    @objc private func tabMenuCloseOthers(_ i: NSMenuItem) { if let id = tabID(i) { closeOthers(id) } }
+    @objc private func tabMenuCloseAll(_ i: NSMenuItem) { closeAllTabs() }
+    @objc private func tabMenuCloseRight(_ i: NSMenuItem) { if let id = tabID(i) { closeToTheRight(of: id) } }
+    @objc private func tabMenuCopyPath(_ i: NSMenuItem) {
+        guard let id = tabID(i) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(id, forType: .string)
+    }
+    @objc private func tabMenuReveal(_ i: NSMenuItem) {
+        if let id = tabID(i) { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: id)]) }
+    }
+
+    // MARK: File operations (from the tree) and drops
+
+    /// Brings open tabs, the tree, the index and Git status in line with a change made through the tree.
+    func handleFileChange(_ change: FileChange) {
+        switch change {
+        case .created: break
+        case .moved(let from, let to): retargetTabs(from: from, to: to)
+        case .deleted(let url): closeTabsForDeleted(url)
+        }
+        tree.refresh()
+        reindex()
+        refreshGitStatus()
+        scheduleSessionSave()
+    }
+
+    private func retargetTabs(from: URL, to: URL) {
+        let old = from.standardizedFileURL.path, new = to.standardizedFileURL.path
+        for id in tabs.entries.map(\.id) {
+            guard let newID = FileOperations.remap(path: id, from: old, to: new) else { continue }
+            guard let editor = editors.removeValue(forKey: id) else {
+                placeholders[id] = nil
+                forget(id)
+                continue
+            }
+            let newURL = URL(fileURLWithPath: newID)
+            editor.retarget(to: newURL)
+            editors[newID] = editor
+            tabs.retarget(id, to: newID, title: newURL.lastPathComponent)
+            mru = mru.map { $0 == id ? newID : $0 }
+            history = history.map { $0 == id ? newID : $0 }
+            applyTint(newID)
+        }
+        updateTitle()
+    }
+
+    private func closeTabsForDeleted(_ url: URL) {
+        let gone = url.standardizedFileURL.path
+        var closed: [String] = []
+        for id in tabs.entries.map(\.id) where FileOperations.remap(path: id, from: gone, to: "") != nil {
+            if placeholders[id] != nil { placeholders[id] = nil; forget(id) } else { closeNow(id) }
+            closed.append((id as NSString).lastPathComponent)
+        }
+        if !closed.isEmpty {
+            statusBar.flash(closed.count == 1 ? "Closed “\(closed[0])” (deleted)" : "Closed \(closed.count) deleted files")
+        }
+    }
+
+    /// Files dropped on the editor area or tab strip open as tabs; folders open as projects.
+    func handleDrop(_ urls: [URL]) {
+        for url in urls {
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }
+            if isDir.boolValue { onOpenFolder?(url) } else { open(url) }
+        }
+    }
+
+    private func showDiff(_ editor: EditorTab) {
+        guard !AppEnv.headless, let disk = editor.currentDiskText() else { return }
+        let view = SideBySideDiffView(frame: NSRect(x: 0, y: 0, width: 1100, height: 680))
+        view.show(old: disk, new: editor.textView.string, oldTitle: "On disk", newTitle: "Your buffer",
+                  fileExtension: editor.url.pathExtension)
+        let win = NSWindow(contentRect: view.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        win.isReleasedWhenClosed = false
+        win.contentView = view
+        win.title = "Diff – \(editor.url.lastPathComponent)"
+        diffWindows.append(win)
+        win.makeKeyAndOrderFront(nil)
+    }
+
+    // MARK: Session
+
+    func captureSession() -> Session {
+        var s = Session()
+        for e in tabs.entries {
+            guard let editor = editors[e.id] else { continue }
+            s.tabs.append(.init(path: e.id, caret: editor.caretLocation, scrollY: editor.scrollY))
+        }
+        s.selected = tabs.selectedID
+        let f = window.frame
+        s.windowFrame = [Double(f.minX), Double(f.minY), Double(f.width), Double(f.height)]
+        if let w = mainSplit.splitView.subviews.first?.frame.width, w > 50 { s.sidebarWidth = Double(w) }
+        let height = bottom.isVisible && bottom.view.bounds.height > 80 ? bottom.view.bounds.height : bottom.height
+        s.bottom = .init(visible: bottom.isVisible, selected: bottom.selectedID, height: Double(height))
+        s.expanded = tree.expandedPaths()
+        return s
+    }
+
+    func restoreSession(_ s: Session) {
+        restoring = true
+        defer { restoring = false }
+        tree.expand(paths: s.expanded)
+        for t in s.tabs where FileManager.default.fileExists(atPath: t.path) {
+            open(URL(fileURLWithPath: t.path))
+            editors[t.path]?.restore(caret: t.caret, scrollY: t.scrollY)
+        }
+        if let sel = s.selected, editors[sel] != nil { tabs.select(sel) }
+        if let f = s.windowFrame, f.count == 4, f[2] >= 640, f[3] >= 400 {
+            var rect = NSRect(x: f[0], y: f[1], width: f[2], height: f[3])
+            if let screen = NSScreen.main { rect = window.constrainFrameRect(rect, to: screen) }
+            window.setFrame(rect, display: false)
+        }
+        if let w = s.sidebarWidth, w >= 180 {
+            DispatchQueue.main.async { [weak self] in self?.mainSplit.splitView.setPosition(CGFloat(w), ofDividerAt: 0) }
+        }
+        if let b = s.bottom {
+            if b.height > 80 { bottom.height = CGFloat(b.height) }
+            if b.visible, let sel = b.selected, bottom.has(sel) { bottom.show(sel) }
+        }
+    }
+
+    func saveSession() {
+        guard SessionStore.enabled, !restoring, let root else { return }
+        SessionStore.save(captureSession(), for: root)
+    }
+
+    private func scheduleSessionSave() {
+        guard SessionStore.enabled, !restoring, root != nil else { return }
+        sessionWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.saveSession() }
+        sessionWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
     }
 
     // MARK: Actions
@@ -325,21 +623,45 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     func collapseTree() { tree.collapseAll() }
     func selectOpenedFile() { if let id = tabs.selectedID { tree.reveal(URL(fileURLWithPath: id)) } }
 
+    /// Cmd-L: a small QuickPicker-style input accepting `line` or `line:column`.
     func goToLine() {
         guard let editor = current else { return }
-        let alert = NSAlert()
-        alert.messageText = "Go to Line"
-        alert.informativeText = "Enter line or line:column"
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Go")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let parts = field.stringValue.split(separator: ":").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
-        guard let line = parts.first else { return }
-        editor.textView.goToLine(line, column: parts.count > 1 ? parts[1] : 1)
-        window.makeFirstResponder(editor.textView)
+        let total = (editor.textView.string as NSString).length == 0 ? 1 : editor.textView.string.split(separator: "\n", omittingEmptySubsequences: false).count
+        QuickPicker.present(over: window, placeholder: "Go to line — line or line:column (1–\(total))", items: [], provider: { [weak self, weak editor] query in
+            guard let (line, column) = GoToLineInput.parse(query) else { return [] }
+            let clamped = min(line, total)
+            return [PickerItem(title: "Go to line \(clamped)" + (column > 1 ? ", column \(column)" : ""),
+                               detail: "of \(total)", symbol: "arrow.right.to.line", key: query) {
+                editor?.textView.goToLine(clamped, column: column)
+                self?.focusEditor()
+            }]
+        })
+    }
+
+    // MARK: Tool panels (bottom)
+
+    /// Adds a tab to the bottom tool panel (Find, Problems, ...). `installCloseRequest` receives a closure the tool
+    /// can call to hide the panel and return focus to the editor.
+    func registerToolPanel(id: String, title: String, view: NSView,
+                           installCloseRequest: ((@escaping () -> Void) -> Void)? = nil) {
+        bottom.register(id: id, title: title, view: view, installCloseRequest: installCloseRequest)
+    }
+
+    func hasToolPanel(_ id: String) -> Bool { bottom.has(id) }
+
+    func showToolPanel(_ id: String, focus: (() -> Void)? = nil) { bottom.show(id, focus: focus) }
+
+    func toggleToolPanel(_ id: String) { bottom.toggle(id) }
+
+    func setToolPanelBadge(_ text: String?, for id: String) { bottom.setBadge(text, for: id) }
+
+    private func applyBottomVisibility(_ visible: Bool) {
+        if AppEnv.headless { bottomItem.isCollapsed = !visible } else { bottomItem.animator().isCollapsed = !visible }
+        guard visible else { return }
+        DispatchQueue.main.async { [self] in
+            let total = rootSplit.splitView.bounds.height
+            rootSplit.splitView.setPosition(max(total * 0.3, total - bottom.height), ofDividerAt: 0)
+        }
     }
 
     // MARK: Popups
@@ -444,52 +766,47 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         return items
     }
 
+
     // MARK: Git panel
 
     /// Cmd-K: show the Commit/Changes panel (never hides it) and put the caret in the commit message.
     func showCommit() {
         guard root != nil else { return }
-        ensureGitPanel()
-        if gitItem.isCollapsed { toggleGitPanel(); return }
-        git?.reload()
-        git?.focusCommitMessage()
+        bottom.show("git") { [weak self] in
+            self?.git?.reload()
+            self?.git?.focusCommitMessage()
+        }
     }
 
     func gitPush() { showCommit(); git?.push() }
     func gitPull() { showCommit(); git?.pull() }
     func gitFetch() { showCommit(); git?.fetch() }
 
+    /// Cmd-9: show the Git tool, or hide the panel if Git is what it shows.
     func toggleGitPanel() {
         guard root != nil else { return }
-        ensureGitPanel()
-        let willShow = gitItem.isCollapsed
-        if AppEnv.headless { gitItem.isCollapsed = !willShow } else { gitItem.animator().isCollapsed = !willShow }
-        if willShow {
-            DispatchQueue.main.async { [self] in
-                let height = rootSplit.splitView.bounds.height
-                rootSplit.splitView.setPosition(max(height * 0.45, height - 420), ofDividerAt: 0)
-                git?.reload()
-                git?.focusCommitMessage()
-            }
-        } else {
-            focusEditor()
+        let hiding = bottom.isVisible && bottom.selectedID == "git"
+        bottom.toggle("git") { [weak self] in
+            self?.git?.reload()
+            self?.git?.focusCommitMessage()
         }
+        if hiding { focusEditor() }
     }
 
     private func ensureGitPanel() {
-        guard git == nil, let root else { return }
-        let host = gitContainer.view
+        guard git == nil, root != nil else { return }
+        let host = gitHost
         host.subviews.forEach { $0.removeFromSuperview() }
-        guard let repo = gitRoot ?? GitRepo.repoRoot(for: root) else {
-            let label = NSTextField(labelWithString: "This project is not a Git repository.")
+        func message(_ text: String) {
+            let label = NSTextField(labelWithString: text)
             label.textColor = .secondaryLabelColor
             label.translatesAutoresizingMaskIntoConstraints = false
             host.addSubview(label)
             NSLayoutConstraint.activate([label.centerXAnchor.constraint(equalTo: host.centerXAnchor),
                                          label.centerYAnchor.constraint(equalTo: host.centerYAnchor)])
-            return
         }
-        gitRoot = repo
+        guard gitRootResolved else { message("Looking for a Git repository…"); return }
+        guard let repo = gitRoot else { message("This project is not a Git repository."); return }
         let panel = GitPanelController(root: repo) { [weak self] url in self?.open(url) }
         panel.onStatusChange = { [weak self] in self?.refreshGitStatus(); self?.tree.refresh() }
         git = panel
@@ -501,5 +818,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             panel.view.topAnchor.constraint(equalTo: host.topAnchor),
             panel.view.bottomAnchor.constraint(equalTo: host.bottomAnchor),
         ])
+        if bottom.isVisible, bottom.selectedID == "git" {
+            DispatchQueue.main.async { panel.reload() }
+        }
     }
 }
