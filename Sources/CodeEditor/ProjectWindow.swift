@@ -170,6 +170,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         window.representedURL = root
     }
 
+    var symbolEntries: [SymbolIndex.Entry] { symbols?.entries ?? [] }
+
     var current: EditorTab? { tabs.selectedID.flatMap { editors[$0] } }
 
     func close(_ id: String) {
