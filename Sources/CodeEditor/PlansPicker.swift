@@ -93,7 +93,7 @@ enum PlansPicker {
             let st = status(p)
             let b = badge(status: st, recent: recent(p), modified: p.modified, now: now)
             let badgeText = b.trimmingCharacters(in: .whitespaces)
-            rows.append(PickerItem(title: badgeText.isEmpty ? p.title : "\(p.title)   [\(badgeText)]", detail: "\(progressText(p)) · \(PlanStore.age(p.modified, now: now)) · \(p.display)",
+            rows.append(PickerItem(title: badgeText.isEmpty ? p.title : "\(p.title)   [\(badgeText)]", detail: "\(p.display) · \(PlanStore.age(p.modified, now: now)) · \(progressText(p))",
                                    symbol: p.total > 0 && p.done == p.total ? "checkmark.circle" : "checklist",
                                    key: p.title + " " + p.display) { open(p) })
             if st == .changed {

@@ -9,7 +9,14 @@ struct HttpResponse {
     var truncated: Bool
     var duration: TimeInterval
 
-    var statusText: String { HTTPURLResponse.localizedString(forStatusCode: status).capitalized }
+    var statusText: String {
+        switch status {
+        case 200: return "OK"
+        case 201: return "Created"
+        case 204: return "No Content"
+        default: return HTTPURLResponse.localizedString(forStatusCode: status).capitalized
+        }
+    }
     var contentType: String { headers.first { $0.name.caseInsensitiveCompare("Content-Type") == .orderedSame }?.value ?? "" }
     /// UTF-8 text of the (possibly truncated) body; nil for binary data.
     var bodyText: String? {
