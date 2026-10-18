@@ -15,6 +15,22 @@ final class CodeTextView: NSTextView {
     var onQuickDocumentation: (() -> Void)?
     var onParameterInfo: (() -> Void)?
 
+    /// Fired when the text view loses first-responder status (completion popup closes).
+    var onResignFirstResponder: (() -> Void)?
+    override func resignFirstResponder() -> Bool {
+        let r = super.resignFirstResponder()
+        if r { onResignFirstResponder?() }
+        return r
+    }
+
+    /// Fired before every single-range edit (range, replacement length in UTF-16) so tab-stop trackers can follow the text.
+    var onWillChange: ((NSRange, Int) -> Void)?
+    override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        let ok = super.shouldChangeText(in: affectedCharRange, replacementString: replacementString)
+        if ok { onWillChange?(affectedCharRange, (replacementString as NSString?)?.length ?? 0) }
+        return ok
+    }
+
     @objc func triggerCompletion(_ sender: Any?) { onTriggerCompletion?() }
     @objc func goToDefinition(_ sender: Any?) { onGoToDefinition?() }
     @objc func showQuickDocumentation(_ sender: Any?) { onQuickDocumentation?() }
