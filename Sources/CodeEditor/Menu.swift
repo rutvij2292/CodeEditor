@@ -111,6 +111,8 @@ enum MainMenu {
             item("Forward", #selector(AppDelegate.goForward(_:)), "]", target: a),
             item("Previous Tab", #selector(AppDelegate.previousTab(_:)), "{", [.command, .shift], target: a),
             item("Next Tab", #selector(AppDelegate.nextTab(_:)), "}", [.command, .shift], target: a),
+            sep,
+            item("Move Caret to Matching Brace", #selector(BracketColorizer.moveCaretToMatchingBrace(_:)), "m", [.command, .shift], target: BracketColorizer.shared),
         ]))
 
         main.addItem(menu("View", [
@@ -120,6 +122,7 @@ enum MainMenu {
             item("Collapse All in Tree", #selector(AppDelegate.collapseAll(_:)), "-", target: a),
             sep,
             appearanceMenu(a),
+            item("Bracket Pair Colorization", #selector(BracketColorizer.toggleBracketColorization(_:)), target: BracketColorizer.shared),
         ]))
 
         main.addItem(menu("Window", [
