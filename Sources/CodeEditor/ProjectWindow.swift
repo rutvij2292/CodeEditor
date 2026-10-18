@@ -370,7 +370,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         guard root != nil else { return }
         ensureGitPanel()
         let willShow = gitItem.isCollapsed
-        gitItem.animator().isCollapsed = !willShow
+        if AppEnv.headless { gitItem.isCollapsed = !willShow } else { gitItem.animator().isCollapsed = !willShow }
         if willShow {
             DispatchQueue.main.async { [self] in
                 let height = rootSplit.splitView.bounds.height

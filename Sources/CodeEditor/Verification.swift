@@ -21,12 +21,13 @@ enum Verification {
             case "actions": w.showFindAction()
             case "everywhere": w.showSearchEverywhere()
             case "projects": app.showRecentProjects(nil)
+            case "git": w.toggleGitPanel()
             default: break
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (picker == "git" ? 3.5 : 1.6)) {
             if let w = app.active?.window.contentView { render(w, to: shot) }
-            if picker != nil { QuickPicker.snapshot(to: shot.replacingOccurrences(of: ".png", with: "_picker.png")) }
+            if picker != nil, picker != "git" { QuickPicker.snapshot(to: shot.replacingOccurrences(of: ".png", with: "_picker.png")) }
             fputs("snapshot done\n", stderr)
             NSApp.terminate(nil)
         }
