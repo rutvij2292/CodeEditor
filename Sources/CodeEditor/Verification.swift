@@ -42,7 +42,7 @@ enum Verification {
             default: break
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + ((picker == "git" || BranchVerification.isBranchPicker(picker) || picker == "find" || picker == "problems" || picker == "commit" || picker == "http") ? 3.5 : picker == "completion" ? 2.2 : 1.6)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + ((picker == "git" || BranchVerification.isBranchPicker(picker) || picker == "find" || picker == "problems" || picker == "commit") ? 3.5 : picker == "http" ? 4.5 : picker == "completion" ? 2.2 : 1.6)) {
             if let w = app.active?.window.contentView { render(w, to: shot) }
             if picker == "completion", let w = app.active, let tab = w.current {
                 let popupPath = shot.replacingOccurrences(of: ".png", with: "_popup.png")
@@ -90,7 +90,7 @@ enum Verification {
         w.open(file)
         w.showToolPanel("http")
         let line = AppEnv.value("CE_HTTP_LINE").flatMap(Int.init) ?? 1
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { if let tab = w.current { HttpSystem.binding(for: tab)?.run(line: line) } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { if let tab = w.current { HttpSystem.binding(for: tab)?.run(line: line) } }
     }
 
     /// CE_PICKER=bottom: the bottom panel with Git / Find / Problems tabs, a badge, and sample tool content.
