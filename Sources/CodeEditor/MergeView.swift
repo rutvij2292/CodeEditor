@@ -83,6 +83,15 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
         var conflict: Bool
         var resolved = false
         var trivial: Bool { base == ours && ours == theirs }
+        var oursLines: [String] = [], theirsLines: [String] = []
+        var oursChecked: [Bool] = [], theirsChecked: [Bool] = []
+        var theirsFirst = false
+        var appliedEmpty = false
+        var oursBoxes: Bool { !trivial && ours != base }
+        var theirsBoxes: Bool { !trivial && theirs != base && (conflict || ours == base) }
+    }
+    private struct PickState {
+        var ours: [Bool], theirs: [Bool], theirsFirst: Bool, resolved: Bool, appliedEmpty: Bool, text: String
     }
     private typealias Span = (start: Int, count: Int)
 
@@ -99,6 +108,8 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
     private let yoursButton = NSButton(title: "Accept Yours", target: nil, action: nil)
     private let theirsButton = NSButton(title: "Accept Theirs", target: nil, action: nil)
     private let prevButton = NSButton(), nextButton = NSButton()
+    private let nonConflictingPopup = NSPopUpButton(frame: .zero, pullsDown: true)
+    private var oursRowHunk: [Int] = [], theirsRowHunk: [Int] = []
 
     private var hunks: [MHunk] = []
     private var hasBase = true
@@ -147,7 +158,14 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
             b.controlSize = .small
             b.target = self; b.action = sel
         }
-        let leftStack = NSStackView(views: [yoursButton, theirsButton])
+        nonConflictingPopup.controlSize = .small
+        nonConflictingPopup.font = .systemFont(ofSize: 11)
+        nonConflictingPopup.addItems(withTitles: ["Apply Non-Conflicting", "Left", "Right", "All"])
+        for (i, sel) in [(1, #selector(applyNonConflictingLeft)), (2, #selector(applyNonConflictingRight)), (3, #selector(applyNonConflictingAll))] {
+            nonConflictingPopup.item(at: i)?.target = self
+            nonConflictingPopup.item(at: i)?.action = sel
+        }
+        let leftStack = NSStackView(views: [yoursButton, theirsButton, nonConflictingPopup])
         let navStack = NSStackView(views: [counter, prevButton, nextButton])
         for s in [leftStack, navStack] { s.spacing = 6; s.translatesAutoresizingMaskIntoConstraints = false; toolbar.addSubview(s) }
         applyButton.translatesAutoresizingMaskIntoConstraints = false
@@ -200,6 +218,17 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
         oursPane.text.bandSource = { [weak self] r in self?.sideBands(r, ours: true) ?? [] }
         theirsPane.text.bandSource = { [weak self] r in self?.sideBands(r, ours: false) ?? [] }
         result.text.bandSource = { [weak self] r in self?.resultBands(r) ?? [] }
+        for (pane, isOurs) in [(oursPane, true), (theirsPane, false)] {
+            pane.gutterExtra = 22
+            pane.gutter.checkState = { [weak self] row in self?.lineCheckState(row, ours: isOurs) }
+            pane.gutter.onMouse = { [weak self] row, x, _, phase in
+                guard phase == .down, x < 22 else { return }
+                self?.toggleLine(row, ours: isOurs)
+            }
+            pane.gutter.rowMenu = { [weak self] row in self?.hunkMenu(row: row, ours: isOurs) }
+            pane.text.rowMenu = { [weak self] row in self?.hunkMenu(row: row, ours: isOurs) }
+        }
+        result.text.rowMenu = { [weak self] row in self?.resultMenu(row: row) }
         themeChanged()
     }
 
@@ -225,8 +254,19 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
         hunks = Diff3.detailed(base: base, ours: ours, theirs: theirs).map {
             MHunk(base: $0.base, ours: $0.ours, theirs: $0.theirs, conflict: $0.isConflict)
         }
+        for i in hunks.indices {
+            var h = hunks[i]
+            h.oursLines = DiffEngine.splitLines(h.ours)
+            h.theirsLines = DiffEngine.splitLines(h.theirs)
+            h.oursChecked = [Bool](repeating: !h.conflict && h.ours != h.base, count: h.oursLines.count)
+            h.theirsChecked = [Bool](repeating: !h.conflict && h.theirs != h.base && h.ours == h.base, count: h.theirsLines.count)
+            h.appliedEmpty = !h.conflict && !h.trivial && ((h.ours != h.base ? h.ours : h.theirs).isEmpty)
+            hunks[i] = h
+        }
         oursSpans = spans(hunks.map { $0.ours })
         theirsSpans = spans(hunks.map { $0.theirs })
+        oursRowHunk = rowMap(oursSpans)
+        theirsRowHunk = rowMap(theirsSpans)
         let initial = Diff3.detailed(base: base, ours: ours, theirs: theirs).map { $0.merged ?? (base != nil ? $0.base : $0.ours) }
 
         let maxLines = max(Self.lineCount(ours), Self.lineCount(theirs), initial.reduce(0) { $0 + Self.lineCount($1) })
@@ -349,42 +389,199 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
 
     // MARK: actions
 
-    private func gutterAction(_ k: Int, _ side: MergeGutter.Side, _ action: MergeGutter.Action, _ event: NSEvent) {
-        let h = hunks[k]
-        var text: String
-        switch action {
-        case .apply: text = side == .left ? h.ours : h.theirs
-        case .ignore: text = h.base
-        }
-        if action == .apply, event.modifierFlags.contains(.option), h.resolved || !h.conflict {
-            text = resultText(k) + text
-        }
-        replaceHunk(k, with: text)
+    private func rowMap(_ spans: [Span]) -> [Int] {
+        var out = [Int](repeating: -1, count: (spans.last.map { $0.start + $0.count } ?? 0))
+        for (k, sp) in spans.enumerated() { for r in sp.start..<(sp.start + sp.count) where r < out.count { out[r] = k } }
+        return out
     }
 
-    private func replaceHunk(_ k: Int, with text: String) {
+    private func gutterAction(_ k: Int, _ side: MergeGutter.Side, _ action: MergeGutter.Action, _ event: NSEvent) {
+        switch action {
+        case .ignore: revertToBase(k)
+        case .apply:
+            if event.modifierFlags.contains(.option) { applyBoth(k, theirsFirst: side == .right) }
+            else if side == .left { applyOurs(k) } else { applyTheirs(k) }
+        }
+    }
+
+    // MARK: picking (line level and hunk level)
+
+    private func joined(_ lines: [String]) -> String {
+        var text = ""
+        for (i, l) in lines.enumerated() {
+            text += l
+            if i < lines.count - 1, l.utf8.last != 10 { text += "\n" }
+        }
+        return text
+    }
+
+    private func computedText(_ k: Int) -> String {
+        let h = hunks[k]
+        let o = zip(h.oursLines, h.oursChecked).filter { $0.1 }.map { $0.0 }
+        let t = zip(h.theirsLines, h.theirsChecked).filter { $0.1 }.map { $0.0 }
+        let lines: [String]
+        if h.conflict { lines = h.theirsFirst ? t + o : o + t }
+        else if h.oursBoxes { lines = o } else { lines = t }
+        if lines.isEmpty { return h.appliedEmpty ? "" : h.base }
+        return joined(lines)
+    }
+
+    private func snapshot(_ k: Int) -> PickState {
+        let h = hunks[k]
+        return PickState(ours: h.oursChecked, theirs: h.theirsChecked, theirsFirst: h.theirsFirst, resolved: h.resolved,
+                         appliedEmpty: h.appliedEmpty, text: resultText(k))
+    }
+
+    private func restore(_ k: Int, _ s: PickState) {
+        guard hunks.indices.contains(k) else { return }
+        let cur = snapshot(k)
+        result.text.undoManager?.registerUndo(withTarget: self) { $0.restore(k, cur) }
+        hunks[k].oursChecked = s.ours; hunks[k].theirsChecked = s.theirs
+        hunks[k].theirsFirst = s.theirsFirst; hunks[k].resolved = s.resolved; hunks[k].appliedEmpty = s.appliedEmpty
+        setHunkText(k, s.text)
+    }
+
+    /// Changes check state of one hunk and rewrites its result text (undoable as one step).
+    private func pick(_ k: Int, ours: [Bool]? = nil, theirs: [Bool]? = nil, theirsFirst: Bool? = nil, text override: String? = nil) {
+        guard hunks.indices.contains(k) else { return }
+        let prev = snapshot(k)
+        let um = result.text.undoManager
+        um?.registerUndo(withTarget: self) { $0.restore(k, prev) }
+        if um?.isUndoing == false, um?.isRedoing == false { um?.setActionName("Apply Change") }
+        if let o = ours { hunks[k].oursChecked = o }
+        if let t = theirs { hunks[k].theirsChecked = t }
+        if let f = theirsFirst { hunks[k].theirsFirst = f }
+        hunks[k].appliedEmpty = override.map { $0.isEmpty } ?? false
+        hunks[k].resolved = true
+        setHunkText(k, override ?? computedText(k))
+    }
+
+    private func setHunkText(_ k: Int, _ text: String) {
         let tv = result.text
         let range = NSRange(location: edges[k], length: edges[k + 1] - edges[k])
-        hunks[k].resolved = true
-        programmaticHunk = k
-        if tv.shouldChangeText(in: range, replacementString: text), let storage = tv.textStorage {
+        if let storage = tv.textStorage, (storage.string as NSString).substring(with: range) != text {
+            tv.undoManager?.disableUndoRegistration()
+            programmaticHunk = k
             storage.replaceCharacters(in: range, with: text)
             storage.setAttributes(DiffUI.baseAttributes, range: NSRange(location: range.location, length: (text as NSString).length))
-            tv.didChangeText()
+            programmaticHunk = nil
+            tv.undoManager?.enableUndoRegistration()
         }
-        programmaticHunk = nil
-        tv.undoManager?.setActionName("Apply Change")
+        afterResultEdit()
     }
 
-    func acceptAllOurs() { acceptAll { $0.ours } }
-    func acceptAllTheirs() { acceptAll { $0.theirs } }
+    func applyOurs(_ k: Int) {
+        let h = hunks[k]
+        pick(k, ours: h.oursLines.map { _ in true }, theirs: h.theirsLines.map { _ in false }, text: h.ours)
+    }
+    func applyTheirs(_ k: Int) {
+        let h = hunks[k]
+        pick(k, ours: h.oursLines.map { _ in false }, theirs: h.theirsLines.map { _ in true }, text: h.theirs)
+    }
+    func applyBoth(_ k: Int, theirsFirst: Bool) {
+        let h = hunks[k]
+        let text = theirsFirst ? joined(h.theirsLines + h.oursLines) : joined(h.oursLines + h.theirsLines)
+        pick(k, ours: h.oursLines.map { _ in true }, theirs: h.theirsLines.map { _ in true }, theirsFirst: theirsFirst, text: text)
+    }
+    func revertToBase(_ k: Int) {
+        let h = hunks[k]
+        pick(k, ours: h.oursLines.map { _ in false }, theirs: h.theirsLines.map { _ in false }, text: h.base)
+    }
 
-    private func acceptAll(_ pick: (MHunk) -> String) {
-        loadResult(hunks.map(pick))
-        for i in hunks.indices { hunks[i].resolved = true }
+    private func lineCheckState(_ row: Int, ours: Bool) -> Int? {
+        let map = ours ? oursRowHunk : theirsRowHunk
+        guard map.indices.contains(row), map[row] >= 0 else { return nil }
+        let h = hunks[map[row]]
+        guard ours ? h.oursBoxes : h.theirsBoxes else { return nil }
+        let start = (ours ? oursSpans : theirsSpans)[map[row]].start
+        let arr = ours ? h.oursChecked : h.theirsChecked
+        return arr.indices.contains(row - start) ? (arr[row - start] ? 1 : 0) : nil
+    }
+
+    private func toggleLine(_ row: Int, ours: Bool) {
+        let map = ours ? oursRowHunk : theirsRowHunk
+        guard lineCheckState(row, ours: ours) != nil else { return }
+        let k = map[row]
+        let idx = row - (ours ? oursSpans : theirsSpans)[k].start
+        if ours { var a = hunks[k].oursChecked; a[idx].toggle(); pick(k, ours: a) }
+        else { var a = hunks[k].theirsChecked; a[idx].toggle(); pick(k, theirs: a) }
+    }
+
+    func setLine(ours: Bool, hunk k: Int, line: Int, checked: Bool) {
+        if ours { var a = hunks[k].oursChecked; a[line] = checked; pick(k, ours: a) }
+        else { var a = hunks[k].theirsChecked; a[line] = checked; pick(k, theirs: a) }
+    }
+
+    var currentResult: String { result.text.string }
+    var remainingConflicts: Int { unresolved.count }
+
+    func acceptAllOurs() { acceptAll(ours: true) }
+    func acceptAllTheirs() { acceptAll(ours: false) }
+
+    private func acceptAll(ours: Bool) {
+        loadResult(hunks.map { ours ? $0.ours : $0.theirs })
+        for i in hunks.indices {
+            hunks[i].resolved = true
+            hunks[i].oursChecked = hunks[i].oursLines.map { _ in ours }
+            hunks[i].theirsChecked = hunks[i].theirsLines.map { _ in !ours }
+            hunks[i].appliedEmpty = (ours ? hunks[i].ours : hunks[i].theirs).isEmpty
+        }
         updateStatus()
         redrawAll()
     }
+
+    func applyNonConflicting(left: Bool, right rightSide: Bool) {
+        let um = result.text.undoManager
+        um?.beginUndoGrouping()
+        for k in hunks.indices {
+            let h = hunks[k]
+            guard !h.conflict, !h.trivial else { continue }
+            if h.ours != h.base, left { applyOurs(k) }
+            else if h.theirs != h.base, h.ours == h.base, rightSide { applyTheirs(k) }
+        }
+        um?.endUndoGrouping()
+    }
+    @objc private func applyNonConflictingLeft() { applyNonConflicting(left: true, right: false) }
+    @objc private func applyNonConflictingRight() { applyNonConflicting(left: false, right: true) }
+    @objc private func applyNonConflictingAll() { applyNonConflicting(left: true, right: true) }
+
+    // MARK: context menus
+
+    private func hunkMenu(row: Int, ours: Bool) -> NSMenu? {
+        let map = ours ? oursRowHunk : theirsRowHunk
+        guard map.indices.contains(row), map[row] >= 0, !hunks[map[row]].trivial else { return nil }
+        return pickMenu(map[row])
+    }
+
+    private func resultMenu(row: Int) -> NSMenu? {
+        let spans = resultSpans()
+        guard let k = spans.firstIndex(where: { row >= $0.start && row < $0.start + max(1, $0.count) }), !hunks[k].trivial else { return nil }
+        return pickMenu(k)
+    }
+
+    private func pickMenu(_ k: Int) -> NSMenu {
+        let h = hunks[k]
+        let m = NSMenu()
+        func add(_ title: String, _ sel: Selector, _ enabled: Bool = true) {
+            let item = NSMenuItem(title: title, action: sel, keyEquivalent: "")
+            item.target = self
+            item.tag = k
+            item.isEnabled = enabled
+            m.addItem(item)
+        }
+        add("Apply Ours", #selector(menuOurs(_:)), h.conflict || h.ours != h.base)
+        add("Apply Theirs", #selector(menuTheirs(_:)), h.conflict || h.theirs != h.base)
+        add("Apply Both (Ours then Theirs)", #selector(menuBothOT(_:)), h.conflict)
+        add("Apply Both (Theirs then Ours)", #selector(menuBothTO(_:)), h.conflict)
+        m.addItem(.separator())
+        add("Revert to Base", #selector(menuBase(_:)))
+        return m
+    }
+    @objc private func menuOurs(_ i: NSMenuItem) { applyOurs(i.tag) }
+    @objc private func menuTheirs(_ i: NSMenuItem) { applyTheirs(i.tag) }
+    @objc private func menuBothOT(_ i: NSMenuItem) { applyBoth(i.tag, theirsFirst: false) }
+    @objc private func menuBothTO(_ i: NSMenuItem) { applyBoth(i.tag, theirsFirst: true) }
+    @objc private func menuBase(_ i: NSMenuItem) { revertToBase(i.tag) }
 
     @objc private func yoursTapped() { acceptAllOurs() }
     @objc private func theirsTapped() { acceptAllTheirs() }
@@ -412,7 +609,9 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
         for i in 1...n where edges[i] < edges[i - 1] { edges[i] = edges[i - 1] }
     }
 
-    func textDidChange(_ notification: Notification) {
+    func textDidChange(_ notification: Notification) { afterResultEdit() }
+
+    private func afterResultEdit() {
         invalidateResult()
         updateStatus()
         redrawAll()

@@ -17,6 +17,7 @@ enum DiffColors {
     static var chrome: NSColor { dark ? rgb(0.15, 0.16, 0.18) : rgb(0.93, 0.94, 0.95) }
     static var separator: NSColor { dark ? NSColor(white: 1, alpha: 0.12) : NSColor(white: 0, alpha: 0.15) }
     static var secondary: NSColor { dark ? rgb(0.60, 0.63, 0.68) : rgb(0.40, 0.42, 0.46) }
+    static var selection: NSColor { NSColor.selectedContentBackgroundColor }
     static var flash: NSColor { dark ? NSColor(white: 1, alpha: 1) : NSColor(srgbRed: 1, green: 0.8, blue: 0.1, alpha: 1) }
 }
 
@@ -33,10 +34,27 @@ final class DiffTextView: NSTextView {
     var lineHeight: CGFloat = 16
     var bandSource: ((Range<Int>) -> [DiffBand])?
     var flash: (rows: Range<Int>, alpha: CGFloat)?
+    var rowMenu: ((Int) -> NSMenu?)?
+
+    func row(at event: NSEvent) -> Int {
+        let p = convert(event.locationInWindow, from: nil)
+        return Int(floor((p.y - DiffUI.inset) / lineHeight))
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let custom = rowMenu?(row(at: event)) else { return super.menu(for: event) }
+        if let base = super.menu(for: event), !base.items.isEmpty {
+            let items = base.items
+            base.removeAllItems()
+            custom.addItem(.separator())
+            for i in items { custom.addItem(i) }
+        }
+        return custom
+    }
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
-        let inset = textContainerInset.height
+        let inset = DiffUI.inset
         let first = max(0, Int(floor((rect.minY - inset) / lineHeight)))
         let last = max(first, Int(ceil((rect.maxY - inset) / lineHeight)))
         for band in bandSource?(first..<(last + 1)) ?? [] {
@@ -74,11 +92,23 @@ final class DiffTextView: NSTextView {
     }
 }
 
-/// Right-aligned line numbers for a fixed-line-height pane.
+/// Right-aligned line numbers for a fixed-line-height pane, optionally with checkboxes,
+/// row selection and mouse hooks.
 final class DiffGutter: NSView {
+    enum Phase { case down, drag, up }
     weak var scrollView: NSScrollView?
     var rowCount = 0
     var numberForRow: (Int) -> Int? = { $0 + 1 }
+    /// nil = no checkbox on that row, otherwise 0 off / 1 on / 2 mixed.
+    var checkState: ((Int) -> Int?)?
+    var hunkCheckState: ((Int) -> Int?)?
+    var isSelected: ((Int) -> Bool)?
+    var onMouse: ((Int, CGFloat, NSEvent, Phase) -> Void)?
+    var rowMenu: ((Int) -> NSMenu?)?
+    var hasHunkColumn = false
+    var hunkBoxX: CGFloat { 4 }
+    var lineBoxX: CGFloat { hasHunkColumn ? 22 : 4 }
+    static let boxSize: CGFloat = 12
     override var isFlipped: Bool { true }
 
     init(scrollView: NSScrollView) {
@@ -94,6 +124,10 @@ final class DiffGutter: NSView {
 
     @objc private func refresh() { needsDisplay = true }
 
+    func row(at point: NSPoint) -> Int {
+        Int(floor((point.y + (scrollView?.contentView.bounds.origin.y ?? 0) - DiffUI.inset) / DiffUI.lineHeight))
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         Theme.background.setFill()
         bounds.fill()
@@ -106,13 +140,53 @@ final class DiffGutter: NSView {
             .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: Theme.gutter,
         ]
         for row in first...last {
+            let y = DiffUI.inset + CGFloat(row) * lh - off
+            if isSelected?(row) == true {
+                DiffColors.selection.withAlphaComponent(0.55).setFill()
+                NSRect(x: 0, y: y, width: bounds.width, height: lh).fill()
+            }
+            if let h = hunkCheckState?(row) { drawBox(h, at: NSPoint(x: hunkBoxX, y: y + (lh - Self.boxSize) / 2), hunk: true) }
+            if let c = checkState?(row) { drawBox(c, at: NSPoint(x: lineBoxX, y: y + (lh - Self.boxSize) / 2), hunk: false) }
             guard let n = numberForRow(row) else { continue }
             let label = "\(n)" as NSString
             let size = label.size(withAttributes: attrs)
-            label.draw(at: NSPoint(x: bounds.width - size.width - 8,
-                                   y: DiffUI.inset + CGFloat(row) * lh - off + (lh - size.height) / 2), withAttributes: attrs)
+            label.draw(at: NSPoint(x: bounds.width - size.width - 8, y: y + (lh - size.height) / 2), withAttributes: attrs)
         }
     }
+
+    private func drawBox(_ state: Int, at p: NSPoint, hunk: Bool) {
+        let r = NSRect(origin: p, size: NSSize(width: Self.boxSize, height: Self.boxSize))
+        let path = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: hunk ? 6 : 3, yRadius: hunk ? 6 : 3)
+        if state == 0 {
+            Theme.background.setFill(); path.fill()
+            NSColor.secondaryLabelColor.setStroke()
+        } else {
+            NSColor.controlAccentColor.setFill(); path.fill()
+            NSColor.controlAccentColor.setStroke()
+        }
+        path.lineWidth = 1
+        path.stroke()
+        guard state != 0 else { return }
+        let mark = NSBezierPath()
+        if state == 2 {
+            mark.move(to: NSPoint(x: r.minX + 3, y: r.midY)); mark.line(to: NSPoint(x: r.maxX - 3, y: r.midY))
+        } else {
+            mark.move(to: NSPoint(x: r.minX + 3, y: r.midY)); mark.line(to: NSPoint(x: r.minX + 5.2, y: r.maxY - 3.2))
+            mark.line(to: NSPoint(x: r.maxX - 2.8, y: r.minY + 3.2))
+        }
+        mark.lineWidth = 1.6
+        NSColor.white.setStroke()
+        mark.stroke()
+    }
+
+    private func forward(_ event: NSEvent, _ phase: Phase) {
+        let p = convert(event.locationInWindow, from: nil)
+        onMouse?(row(at: p), p.x, event, phase)
+    }
+    override func mouseDown(with event: NSEvent) { forward(event, .down) }
+    override func mouseDragged(with event: NSEvent) { forward(event, .drag) }
+    override func mouseUp(with event: NSEvent) { forward(event, .up) }
+    override func menu(for event: NSEvent) -> NSMenu? { rowMenu?(row(at: convert(event.locationInWindow, from: nil))) }
 }
 
 /// Plain filled view whose colour is re-evaluated on every draw (follows light/dark changes).
@@ -129,6 +203,11 @@ final class DiffPane {
     let gutter: DiffGutter
     let box = NSView()
     private let gutterWidth: NSLayoutConstraint
+    private var baseGutterWidth: CGFloat = 44
+    var gutterExtra: CGFloat = 0 { didSet { gutterWidth.constant = baseGutterWidth + gutterExtra } }
+    /// Filler rows are expressed as paragraph spacing before a line (text stays the real file content).
+    private(set) var gaps: [Int: Int] = [:]
+    private(set) var topGap = 0
 
     init(editable: Bool) {
         let storage = NSTextStorage()
@@ -177,12 +256,40 @@ final class DiffPane {
     func setText(_ s: String, maxLineNumber: Int) {
         text.string = s
         restyle()
-        gutterWidth.constant = CGFloat(max(3, String(maxLineNumber).count)) * 7 + 18
+        baseGutterWidth = CGFloat(max(3, String(maxLineNumber).count)) * 7 + 18
+        gutterWidth.constant = baseGutterWidth + gutterExtra
+    }
+
+    func setGutterRows(_ rows: Int, maxLineNumber: Int) {
+        gutter.rowCount = rows
+        baseGutterWidth = CGFloat(max(3, String(maxLineNumber).count)) * 7 + 18
+        gutterWidth.constant = baseGutterWidth + gutterExtra
+    }
+
+    func setGaps(_ gaps: [Int: Int], top: Int) {
+        self.gaps = gaps
+        topGap = top
+        restyle()
     }
 
     func restyle() {
         guard let storage = text.textStorage else { return }
+        storage.beginEditing()
         storage.setAttributes(DiffUI.baseAttributes, range: NSRange(location: 0, length: storage.length))
+        if !gaps.isEmpty {
+            let starts = DiffUI.lineStarts(storage.string as NSString)
+            for (line, gap) in gaps where line > 0 && line < starts.count {
+                let end = line + 1 < starts.count ? starts[line + 1] : storage.length
+                let p = NSMutableParagraphStyle()
+                p.minimumLineHeight = DiffUI.lineHeight
+                p.maximumLineHeight = DiffUI.lineHeight
+                p.paragraphSpacingBefore = CGFloat(gap) * DiffUI.lineHeight
+                storage.addAttribute(.paragraphStyle, value: p, range: NSRange(location: starts[line], length: end - starts[line]))
+            }
+        }
+        storage.endEditing()
+        let inset = NSSize(width: 4, height: DiffUI.inset + CGFloat(topGap) * DiffUI.lineHeight)
+        if text.textContainerInset != inset { text.textContainerInset = inset }
         text.typingAttributes = DiffUI.baseAttributes
         text.backgroundColor = Theme.background
         text.insertionPointColor = Theme.foreground
@@ -213,6 +320,13 @@ enum DiffUI {
     }
     static var baseAttributes: [NSAttributedString.Key: Any] {
         [.font: Theme.font, .foregroundColor: Theme.foreground, .paragraphStyle: paragraph]
+    }
+
+    static func lineStarts(_ s: NSString) -> [Int] {
+        var out = [0]
+        for i in 0..<s.length where s.character(at: i) == 10 { out.append(i + 1) }
+        if out.last == s.length, s.length > 0 { out.removeLast() }
+        return out
     }
 
     static func columns(_ s: String) -> Int { s.utf16.count + 3 * s.utf8.reduce(0) { $0 + ($1 == 9 ? 1 : 0) } }
