@@ -16,6 +16,7 @@ extension ProjectWindow {
         findPanel = find
         registerToolPanel(id: "find", title: "Find", view: find.view) { close in find.onClose = close }
         installProblemsPanel(root: root)
+        installHttpPanel(root: root)
         installTerminalPanel(root: root)
         installClaudeBridge()
         onFindInFiles = { [weak self] in self?.showFind(replace: false) }
@@ -31,6 +32,14 @@ extension ProjectWindow {
             if !text.contains("\n"), text.count <= 200 { seed = text }
         }
         showToolPanel("find") { find.show(seed: seed, replaceMode: replace) }
+    }
+
+    private func installHttpPanel(root: URL) {
+        HttpSystem.start()
+        let http = HttpPanelController(root: root)
+        http.reveal = { [weak self] in self?.showToolPanel("http") }
+        HttpSystem.register(http)
+        registerToolPanel(id: "http", title: "HTTP", view: http.view)
     }
 
     private func installProblemsPanel(root: URL) {

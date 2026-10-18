@@ -241,6 +241,7 @@ enum Languages {
             return g(tree_sitter_markdown_inline(), hl: [read("MarkdownInline", "highlights.scm")])
         case "sql": return Grammar(key: key, language: nil, highlights: nil, injections: nil, lexer: .sql)
         case "dotenv": return Grammar(key: key, language: nil, highlights: nil, injections: nil, lexer: .dotenv)
+        case "http": return Grammar(key: key, language: nil, highlights: nil, injections: nil, lexer: .http)
         default: return nil
         }
     }
@@ -268,7 +269,7 @@ enum Languages {
         "sh": "bash", "bash": "bash", "zsh": "bash", "ksh": "bash", "command": "bash", "env": "dotenv",
         "xml": "xml", "svg": "xml", "xsd": "xml", "xsl": "xml", "xslt": "xml", "plist": "xml", "csproj": "xml",
         "rss": "xml", "atom": "xml", "wsdl": "xml", "storyboard": "xml", "xib": "xml",
-        "sql": "sql",
+        "sql": "sql", "http": "http", "rest": "http",
     ]
 
     private static let fileNameKeys: [String: String] = [

@@ -628,12 +628,13 @@ struct LineTable {
 // MARK: - Simple lexers
 
 enum SimpleLexer {
-    enum Kind { case sql, dotenv }
+    enum Kind { case sql, dotenv, http }
 
     static func lex(_ kind: Kind, _ s: [unichar], base: Int, emit: (Int, Int, String) -> Void) {
         switch kind {
         case .sql: sql(s, base, emit)
         case .dotenv: dotenv(s, base, emit)
+        case .http: HttpLexer.lex(s, base: base, emit: emit)
         }
     }
 
