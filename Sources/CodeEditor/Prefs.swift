@@ -31,6 +31,8 @@ enum Prefs {
     static var foldingEnabled: Bool { get { get("foldingEnabled", true) } set { set("foldingEnabled", newValue) } }
     /// Fold `use` imports / license header comments when a file opens.
     static var foldImportsOnOpen: Bool { get { get("foldImportsOnOpen", false) } set { set("foldImportsOnOpen", newValue) } }
+    /// Highlight other occurrences of the identifier under the caret (read / write tints).
+    static var highlightOccurrences: Bool { get { get("highlightOccurrences", true) } set { set("highlightOccurrences", newValue) } }
     static var inlineBlame: Bool { get { get("inlineBlame", true) } set { set("inlineBlame", newValue) } }
     /// Default indentation when neither .editorconfig nor the file's own content decides.
     static var defaultIndentSize: Int { get { get("defaultIndentSize", 4) } set { set("defaultIndentSize", min(8, max(1, newValue))) } }
@@ -64,7 +66,7 @@ enum Prefs {
     /// Every key above, for "Restore Defaults" and tests.
     static let allKeys: [String] = [
         "editorFontName", "editorFontSize", "lineHeightMultiple", "showLineNumbers", "showIndentGuides", "highlightCurrentLine",
-        "softWrap", "bracketPairColorization", "showBreadcrumbs", "foldingEnabled", "foldImportsOnOpen", "inlineBlame",
+        "softWrap", "bracketPairColorization", "showBreadcrumbs", "foldingEnabled", "foldImportsOnOpen", "highlightOccurrences", "inlineBlame",
         "defaultIndentSize", "defaultIndentUsesTabs",
         "terminalDock", "terminalFontName", "terminalFontSize", "terminalCursorStyle", "terminalScrollback", "terminalShell",
         "terminalAgents", "terminalNotifyOnIdle", "completionMinChars", "completionDelayMs", "intelephenseLicenceConfigured",
