@@ -16,6 +16,7 @@ final class GutterView: NSView {
     private static let barZone: CGFloat = 10       // right edge strip reserved for the change bars
     private static let chevronZone: CGFloat = 14   // fold chevron column left of the bars
     private static let leftPad: CGFloat = 8
+    private static let iconZone: CGFloat = 14      // left edge strip for run/status icons
     private static let numberGap: CGFloat = 4
     override var isFlipped: Bool { true }
     static var narrow = AppEnv.value("CE_GUT_FULL") == nil
@@ -42,6 +43,9 @@ final class GutterView: NSView {
     var markers: [GutterMarker] = [] { didSet { if markers != oldValue { markersChanged(from: oldValue) } } }
     /// Click on a marker bar; the rect is the marker's extent in this view's coordinates.
     var onMarkerClick: ((GutterMarker, NSRect) -> Void)?
+    /// Run/status icons at the left edge, keyed by 1-based line (tests: TestGutter.swift). Setting redraws.
+    var lineIcons: [Int: GutterLineIcon] = [:] { didSet { if lineIcons != oldValue { invalidate() } } }
+    var onIconClick: ((Int) -> Void)?
     /// Called with the preferred width when the number of digits (or the font / prefs) changes.
     var onWidthChange: ((CGFloat) -> Void)?
 
@@ -306,6 +310,7 @@ final class GutterView: NSView {
         }
         drawChevrons(caret: caret)
         drawMarkers()
+        drawLineIcons()
     }
 
     // MARK: fold chevrons
@@ -345,6 +350,18 @@ final class GutterView: NSView {
 
     /// The first logical line of the row under a y position of the last draw (test hook / click handling).
     func rowLine(atY y: CGFloat) -> Int? { rows.first { y >= $0.y0 && y < $0.y1 }?.line }
+
+    // MARK: line icons
+
+    private func drawLineIcons() {
+        guard !lineIcons.isEmpty else { return }
+        for row in rows {
+            guard let icon = lineIcons[row.line] else { continue }
+            let d: CGFloat = 9
+            let box = NSRect(x: 3, y: row.y0 + (row.firstHeight - d) / 2, width: d, height: d)
+            icon.draw(in: box)
+        }
+    }
 
     // MARK: markers
 
@@ -401,6 +418,10 @@ final class GutterView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+        if p.x < Self.iconZone, !lineIcons.isEmpty, let row = rows.first(where: { p.y >= $0.y0 && p.y < $0.y1 }), lineIcons[row.line] != nil {
+            onIconClick?(row.line)
+            return
+        }
         if p.x >= bounds.width - Self.barZone, let (m, r) = marker(at: p) {
             onMarkerClick?(m, r)
             return
@@ -441,4 +462,40 @@ final class EditorContainer: NSView {
         gutter.onWidthChange = { w in width.constant = w }
     }
     required init?(coder: NSCoder) { fatalError() }
+}
+
+
+/// Status glyph in the gutter's left strip.
+enum GutterLineIcon: Equatable {
+    case run, running, passed, failed, skipped
+
+    func draw(in r: NSRect) {
+        let green = NSColor(calibratedRed: 0.25, green: 0.65, blue: 0.35, alpha: 1)
+        let red = NSColor(calibratedRed: 0.85, green: 0.25, blue: 0.25, alpha: 1)
+        switch self {
+        case .run, .running:
+            (self == .run ? green : NSColor.systemOrange).setFill()
+            let p = NSBezierPath()
+            p.move(to: NSPoint(x: r.minX + 1, y: r.minY)); p.line(to: NSPoint(x: r.maxX, y: r.midY)); p.line(to: NSPoint(x: r.minX + 1, y: r.maxY))
+            p.close(); p.fill()
+        case .passed, .failed, .skipped:
+            let color = self == .passed ? green : (self == .failed ? red : NSColor.systemGray)
+            color.setFill()
+            NSBezierPath(ovalIn: r).fill()
+            NSColor.white.setStroke()
+            let m = NSBezierPath()
+            m.lineWidth = 1.3
+            m.lineCapStyle = .round
+            switch self {
+            case .passed:
+                m.move(to: NSPoint(x: r.minX + 2.2, y: r.midY)); m.line(to: NSPoint(x: r.midX - 0.5, y: r.maxY - 2.6)); m.line(to: NSPoint(x: r.maxX - 2, y: r.minY + 2.4))
+            case .failed:
+                m.move(to: NSPoint(x: r.minX + 2.6, y: r.minY + 2.6)); m.line(to: NSPoint(x: r.maxX - 2.6, y: r.maxY - 2.6))
+                m.move(to: NSPoint(x: r.maxX - 2.6, y: r.minY + 2.6)); m.line(to: NSPoint(x: r.minX + 2.6, y: r.maxY - 2.6))
+            default:
+                m.move(to: NSPoint(x: r.minX + 2.5, y: r.midY)); m.line(to: NSPoint(x: r.maxX - 2.5, y: r.midY))
+            }
+            m.stroke()
+        }
+    }
 }
