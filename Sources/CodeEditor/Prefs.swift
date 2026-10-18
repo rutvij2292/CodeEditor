@@ -50,7 +50,31 @@ enum Prefs {
     /// Show a badge/bounce when a background terminal tab produced output and then went quiet (an agent finished).
     static var terminalNotifyOnIdle: Bool { get { get("terminalNotifyOnIdle", true) } set { set("terminalNotifyOnIdle", newValue) } }
 
+    // MARK: Completion
+    /// Identifier characters typed before the completion popup opens on its own (1...4).
+    static var completionMinChars: Int { get { get("completionMinChars", 2) } set { set("completionMinChars", min(4, max(1, newValue))) } }
+    /// Delay in milliseconds before the automatic completion popup opens (0...1000).
+    static var completionDelayMs: Int { get { get("completionDelayMs", 40) } set { set("completionDelayMs", min(1000, max(0, newValue))) } }
+
     // MARK: Language intelligence
     /// Intelephense licence key (stored in the Keychain by the Settings window; this only caches presence).
     static var intelephenseLicenceConfigured: Bool { get { get("intelephenseLicenceConfigured", false) } set { set("intelephenseLicenceConfigured", newValue) } }
+
+    // MARK: Maintenance (Settings window)
+    /// Every key above, for "Restore Defaults" and tests.
+    static let allKeys: [String] = [
+        "editorFontName", "editorFontSize", "lineHeightMultiple", "showLineNumbers", "showIndentGuides", "highlightCurrentLine",
+        "softWrap", "bracketPairColorization", "showBreadcrumbs", "foldingEnabled", "foldImportsOnOpen", "inlineBlame",
+        "defaultIndentSize", "defaultIndentUsesTabs",
+        "terminalDock", "terminalFontName", "terminalFontSize", "terminalCursorStyle", "terminalScrollback", "terminalShell",
+        "terminalAgents", "terminalNotifyOnIdle", "completionMinChars", "completionDelayMs", "intelephenseLicenceConfigured",
+    ]
+
+    /// Removes the stored values (back to defaults) and posts `didChange` once per key.
+    static func reset(_ keys: [String]) {
+        for key in keys {
+            if AppEnv.headless { memory[key] = nil } else { UserDefaults.standard.removeObject(forKey: key) }
+            NotificationCenter.default.post(name: didChange, object: nil, userInfo: ["key": key])
+        }
+    }
 }

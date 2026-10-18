@@ -14,6 +14,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     static var renameHandler: ((ProjectWindow) -> Void)?
     static var formatHandler: ((ProjectWindow) -> Void)?
 
+    /// Terminal integration hooks (Edit/View menu items). The integrator connects the terminal package's APIs here;
+    /// until set, Focus Terminal falls back to showing the terminal and the rest do nothing.
+    struct TerminalHandlers {
+        var sendFileReference: ((ProjectWindow) -> Void)?
+        var sendSelectionReference: ((ProjectWindow) -> Void)?
+        var sendSelectionText: ((ProjectWindow) -> Void)?
+        var focus: ((ProjectWindow) -> Void)?
+        var maximize: ((ProjectWindow) -> Void)?
+    }
+    static var terminalHandlers = TerminalHandlers()
+
+    /// Boolean preferences behind the View/Git menu checkmarks (`NSMenuItem.representedObject` holds the key).
+    static let preferenceToggles: [String: (get: () -> Bool, set: (Bool) -> Void)] = [
+        "showBreadcrumbs": ({ Prefs.showBreadcrumbs }, { Prefs.showBreadcrumbs = $0 }),
+        "inlineBlame": ({ Prefs.inlineBlame }, { Prefs.inlineBlame = $0 }),
+        "showIndentGuides": ({ Prefs.showIndentGuides }, { Prefs.showIndentGuides = $0 }),
+        "highlightCurrentLine": ({ Prefs.highlightCurrentLine }, { Prefs.highlightCurrentLine = $0 }),
+        "showLineNumbers": ({ Prefs.showLineNumbers }, { Prefs.showLineNumbers = $0 }),
+        "softWrap": ({ Prefs.softWrap }, { setSoftWrap($0) }),
+    ]
+
     /// The project window menu commands act on: the key window, else the last project window that was key
     /// (a QuickPicker or other panel can be key while a command runs), else the newest window.
     var active: ProjectWindow? {
@@ -31,6 +52,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Theme.start()
+        applyCompletionPrefs()
+        NotificationCenter.default.addObserver(forName: Prefs.didChange, object: nil, queue: .main) { [weak self] note in
+            if let key = note.userInfo?["key"] as? String, key.hasPrefix("completion") { self?.applyCompletionPrefs() }
+        }
         CompletionSystem.start()
         CompletionSystem.symbolProvider = { [weak self] in self?.active?.symbolEntries ?? [] }
         LanguageServers.start()
@@ -217,6 +242,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func toggleAutoSaveFocus(_ sender: Any?) { AutoSave.focusLossEnabled.toggle() }
     @objc func toggleAutoSaveTabSwitch(_ sender: Any?) { AutoSave.tabSwitchEnabled.toggle() }
     @objc func showLocalHistory(_ sender: Any?) { active?.showLocalHistory() }
+    @objc func showSettings(_ sender: Any?) { SettingsWindowController.shared.show() }
+    @objc func sendFileToTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.sendFileReference?($0) } }
+    @objc func sendSelectionReferenceToTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.sendSelectionReference?($0) } }
+    @objc func sendSelectionTextToTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.sendSelectionText?($0) } }
+    @objc func focusTerminal(_ sender: Any?) {
+        guard let w = active else { return }
+        if let focus = Self.terminalHandlers.focus { focus(w) } else { w.showTerminal() }
+    }
+    @objc func maximizeTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.maximize?($0) } }
+    @objc func togglePreference(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String, let t = Self.preferenceToggles[key] else { return }
+        t.set(!t.get())
+    }
+
+    /// Completion popup tuning lives in `Prefs`; `CompletionSystem` holds the live values.
+    private func applyCompletionPrefs() {
+        CompletionSystem.autoOpenMinChars = Prefs.completionMinChars
+        CompletionSystem.debounce = TimeInterval(Prefs.completionDelayMs) / 1000
+    }
 
     /// Cmd-Opt-L: the project's real formatter (Pint / Prettier / LSP); if none applies, the editor's safe re-indent.
     @objc func reformatCode(_ sender: Any?) {
@@ -244,6 +288,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case #selector(toggleFormatOnSave(_:)): item.state = Formatter.formatOnSave ? .on : .off
         case #selector(toggleAutoSaveFocus(_:)): item.state = AutoSave.focusLossEnabled ? .on : .off
         case #selector(toggleAutoSaveTabSwitch(_:)): item.state = AutoSave.tabSwitchEnabled ? .on : .off
+        case #selector(togglePreference(_:)):
+            if let key = item.representedObject as? String, let t = Self.preferenceToggles[key] { item.state = t.get() ? .on : .off }
         default: break
         }
         return true

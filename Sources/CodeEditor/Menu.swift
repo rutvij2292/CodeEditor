@@ -31,6 +31,8 @@ enum MainMenu {
         let main = NSMenu()
 
         main.addItem(menu("CodeEditor", [
+            item("Settings…", #selector(AppDelegate.showSettings(_:)), ",", target: a),
+            sep,
             item("Hide CodeEditor", #selector(NSApplication.hide(_:)), "h"),
             item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
             sep,
@@ -79,6 +81,10 @@ enum MainMenu {
             findItem,
             item("Find in Files…", #selector(AppDelegate.findInFiles(_:)), "f", [.command, .shift], target: a),
             item("Replace in Files…", #selector(AppDelegate.replaceInFiles(_:)), "r", [.command, .shift], target: a),
+            sep,
+            item("Send @File to Terminal", #selector(AppDelegate.sendFileToTerminal(_:)), "k", [.command, .option], target: a),
+            item("Send Selection Reference to Terminal", #selector(AppDelegate.sendSelectionReferenceToTerminal(_:)), "k", [.command, .option, .control], target: a),
+            item("Send Selection Text to Terminal", #selector(AppDelegate.sendSelectionTextToTerminal(_:)), "k", [.command, .option, .shift], target: a),
         ]))
 
         main.addItem(menu("Code", [
@@ -92,6 +98,12 @@ enum MainMenu {
             sep,
             item("Extend Selection", Selector(("extendSelection:")), up, [.option]),
             item("Shrink Selection", Selector(("shrinkSelection:")), down, [.option]),
+            sep,
+            // Folding commands live on CodeTextView (nil target: disabled until the responder chain provides them).
+            item("Fold Code Block", Selector(("foldCurrent:")), "-"),
+            item("Unfold Code Block", Selector(("unfoldCurrent:")), "="),
+            item("Fold All", Selector(("foldAll:")), "_", [.command, .shift]),
+            item("Unfold All", Selector(("unfoldAll:")), "+", [.command, .shift]),
             item("Select Next Occurrence", Selector(("selectNextOccurrence:")), "g", [.control]),
             item("Unselect Occurrence", Selector(("unselectPreviousOccurrence:")), "g", [.control, .shift]),
             item("Select All Occurrences", Selector(("selectAllOccurrences:")), "g", [.control, .command]),
@@ -135,6 +147,8 @@ enum MainMenu {
             item("Update Project (Pull)", #selector(AppDelegate.updateProject(_:)), "t", target: a),
             item("Fetch", #selector(AppDelegate.fetchChanges(_:)), "", target: a),
             item("Show History for File", #selector(AppDelegate.showFileHistory(_:)), "", target: a),
+            item("Annotate with Git Blame", Selector(("toggleBlameAnnotations:")), "a", [.command, .option]),
+            toggleItem("Toggle Inline Blame", "inlineBlame", a),
             sep,
             item("Show Git Panel", #selector(AppDelegate.toggleGit(_:)), "9", target: a),
         ]))
@@ -148,10 +162,19 @@ enum MainMenu {
             sep,
             item("Select Opened File", #selector(AppDelegate.selectOpenedFile(_:)), f1, [.option], target: a),
             item("Terminal", #selector(AppDelegate.showTerminal(_:)), f12, [.option], target: a),
-            item("Collapse All in Tree", #selector(AppDelegate.collapseAll(_:)), "-", target: a),
+            item("Focus Terminal", #selector(AppDelegate.focusTerminal(_:)), "`", [.control], target: a),
+            item("Maximize Terminal", #selector(AppDelegate.maximizeTerminal(_:)), target: a),
+            item("Collapse All in Tree", #selector(AppDelegate.collapseAll(_:)), "-", [.command, .control], target: a),
             item("Include vendor in Go to File", #selector(AppDelegate.toggleIncludeVendor(_:)), target: a),
             item("Format on Save", #selector(AppDelegate.toggleFormatOnSave(_:)), target: a),
             item("Restart Language Servers", #selector(AppDelegate.restartLanguageServers(_:)), target: a),
+            sep,
+            toggleItem("Breadcrumbs", "showBreadcrumbs", a),
+            toggleItem("Inline Git Blame", "inlineBlame", a),
+            toggleItem("Indent Guides", "showIndentGuides", a),
+            toggleItem("Current Line", "highlightCurrentLine", a),
+            toggleItem("Line Numbers", "showLineNumbers", a),
+            toggleItem("Soft Wrap", "softWrap", a),
             sep,
             appearanceMenu(a),
             item("Bracket Pair Colorization", #selector(BracketColorizer.toggleBracketColorization(_:)), target: BracketColorizer.shared),
@@ -162,6 +185,29 @@ enum MainMenu {
             item("Zoom", #selector(NSWindow.performZoom(_:))),
         ]))
         return main
+    }
+
+    /// A View/Git menu checkmark item bound to a `Prefs` Boolean (see `AppDelegate.togglePreference`).
+    private static func toggleItem(_ title: String, _ key: String, _ a: AppDelegate) -> NSMenuItem {
+        let i = item(title, #selector(AppDelegate.togglePreference(_:)), target: a)
+        i.representedObject = key
+        return i
+    }
+
+    /// Shortcuts bound to more than one menu item ("⌘K: Commit…, Foo"). Empty when every key equivalent is unique.
+    static func duplicateShortcuts(in menu: NSMenu) -> [String] {
+        var seen: [String: [String]] = [:]
+        func walk(_ m: NSMenu, path: String) {
+            for i in m.items where !i.isSeparatorItem {
+                if let sub = i.submenu { walk(sub, path: path + i.title + " › ") }
+                guard !i.keyEquivalent.isEmpty else { continue }
+                let mask = i.keyEquivalentModifierMask.intersection([.command, .option, .control, .shift])
+                seen[shortcutText(for: i) + "|" + String(mask.rawValue), default: []].append(path + i.title)
+            }
+        }
+        for top in menu.items { if let sub = top.submenu { walk(sub, path: top.title + " › ") } }
+        // AppKit injects Dictation / Emoji items into Edit (each twice under one title): not ours.
+        return seen.filter { Set($0.value).count > 1 }.map { String($0.key.split(separator: "|")[0]) + ": " + $0.value.joined(separator: ", ") }.sorted()
     }
 
     private static func appearanceMenu(_ a: AppDelegate) -> NSMenuItem {
@@ -194,6 +240,9 @@ enum MainMenu {
         case 0x7f: out += "⌫"
         case 13: out += "↩"
         case UInt32(NSF1FunctionKey)...UInt32(NSF12FunctionKey): out += "F\(key.unicodeScalars.first!.value - UInt32(NSF1FunctionKey) + 1)"
+        case 0x20: out += "Space"
+        case 0x2D, 0x5F: out += "−"        // - and _ (shifted)
+        case 0x3D, 0x2B: out += "="        // = and + (shifted)
         default: out += key.uppercased()
         }
         return out
