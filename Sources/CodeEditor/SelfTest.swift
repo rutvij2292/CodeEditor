@@ -76,12 +76,41 @@ enum SelfTest {
         // The scan completes on the main queue, which we are occupying: continue from its callback.
         index.refresh(force: true) {
             indexChecks(index)
-            laterChecks(w: w, a: a, dir: dir)
-            projectChecks(app: app, w: w, dir: dir) {
-                try? fm.removeItem(at: dir)
-                try? fm.removeItem(at: LocalHistory.root)
-                finish()
+            humpSearchChecks(in: fm.temporaryDirectory.appendingPathComponent("ce-hump-\(getpid())")) {
+                laterChecks(w: w, a: a, dir: dir)
+                projectChecks(app: app, w: w, dir: dir) {
+                    try? fm.removeItem(at: dir)
+                    try? fm.removeItem(at: LocalHistory.root)
+                    finish()
+                }
             }
+        }
+    }
+
+    /// Go to File ranking like PhpStorm: camel-hump queries match file NAMES (TaController -> TaTrackController), app code beats tests/docs.
+    private static func humpSearchChecks(in root: URL, then next: @escaping () -> Void) {
+        let fm = FileManager.default
+        let files = ["app/Http/Controllers/TaTrackController.php", "app/Http/Controllers/Auth/LoginController.php",
+                     "app/Http/Controllers/UserController.php", "tests/Feature/TaTrackControllerTest.php", "tests/Feature/UserControllerTest.php",
+                     "docs/Controllers/TaTrackController.md", "app/Services/TaTrackService.php", "app/Models/TaTrack.php",
+                     "app/Http/Controllers/TemporaryWorkplanEvaluationExportController.php", "resources/js/Pages/TaTrack/Index.vue"]
+        for rel in files {
+            let url = root.appendingPathComponent(rel)
+            try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            fm.createFile(atPath: url.path, contents: Data())
+        }
+        let index = ProjectIndex(root: root)
+        index.refresh(force: true) {
+            func top(_ q: String) -> String? { index.search(q, limit: 3).first?.path }
+            check("camel hump: TaController -> TaTrackController.php", top("TaController") == "app/Http/Controllers/TaTrackController.php")
+            check("camel hump: TaTrackCont ranks app above tests/docs", top("TaTrackCont") == "app/Http/Controllers/TaTrackController.php")
+            check("lowercase prefix: tatrackserv", top("tatrackserv") == "app/Services/TaTrackService.php")
+            check("hump initials: wpevalexp", top("wpevalexp") == "app/Http/Controllers/TemporaryWorkplanEvaluationExportController.php")
+            check("TaController finds the tests too, after the app file",
+                  index.search("TaController", limit: 5).map(\.path).contains("tests/Feature/TaTrackControllerTest.php"))
+            check("no match returns nothing", index.search("zzqx", limit: 5).isEmpty)
+            try? fm.removeItem(at: root)
+            next()
         }
     }
 

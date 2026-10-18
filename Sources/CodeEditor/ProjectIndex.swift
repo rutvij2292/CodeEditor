@@ -86,24 +86,43 @@ final class ProjectIndex {
         }
     }
 
-    /// Fuzzy file search for Go to File: cheap subsequence prefilter on lowercased paths, full scoring on survivors.
+    /// Fuzzy file search for Go to File: cheap subsequence prefilter on lowercased paths, then best-alignment scoring of the
+    /// FILE NAME first (camelCase-hump aware, like PhpStorm), falling back to the whole relative path for queries with folders.
     func search(_ query: String, limit: Int) -> [(path: String, score: Int)] {
-        let q = Array(query.lowercased().filter { !$0.isWhitespace })
-        guard !q.isEmpty else { return [] }
-        let qBytes = Array(String(q).utf8)
-        var scored: [(path: String, score: Int)] = []
+        let typed = query.filter { !$0.isWhitespace }
+        guard !typed.isEmpty else { return [] }
+        let qBytes = Array(typed.lowercased().utf8)
+        let q = Array(typed.utf16)
+        var scored: [(path: String, score: Int, nameLength: Int)] = []
         for (i, text) in lower.enumerated() {
             var qi = 0
             for b in text.utf8 where qi < qBytes.count && b == qBytes[qi] { qi += 1 }
-            guard qi == qBytes.count, let score = Fuzzy.score(q, in: files[i]) else { continue }
-            scored.append((files[i], score))
+            guard qi == qBytes.count else { continue }
+            let path = files[i]
+            let name = path.lastIndex(of: "/").map { String(path[path.index(after: $0)...]) } ?? path
+            var score: Int
+            if let ns = Fuzzy.score(q, caseAware: true, in: name) {
+                score = ns + 60                                             // matches inside the file name beat path-only matches
+                if name.lowercased().hasPrefix(typed.lowercased()) { score += 20 }
+            } else if let ps = Fuzzy.score(q, caseAware: true, in: path) {
+                score = ps
+            } else { continue }
+            scored.append((path, score - Self.noisePenalty(path), name.count))
         }
-        scored.sort { $0.score > $1.score }
-        if vendorLazy, Self.includeVendor, scored.count < limit {
-            scored = Array(scored.prefix(limit))
-            scored.append(contentsOf: VendorIndex.shared(for: root).searchFiles(query, limit: limit - scored.count))
-            return scored
+        scored.sort { a, b in
+            if a.score != b.score { return a.score > b.score }
+            if a.nameLength != b.nameLength { return a.nameLength < b.nameLength }
+            return a.path.count < b.path.count
         }
-        return Array(scored.prefix(limit))
+        return scored.prefix(limit).map { ($0.path, $0.score) }
+    }
+
+    /// Application code should outrank tests, docs, build output and fixtures when names match equally well.
+    private static func noisePenalty(_ path: String) -> Int {
+        if path.hasPrefix("tests/") || path.contains("/tests/") || path.contains("/Tests/") { return 6 }
+        if path.hasPrefix("docs/") || path.hasSuffix(".md") { return 8 }
+        if path.hasPrefix("storage/") || path.contains("/storage/") { return 14 }
+        if path.hasPrefix("public/") || path.contains("/dist/") || path.contains("/build/") { return 10 }
+        return 0
     }
 }
