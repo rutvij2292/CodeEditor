@@ -231,6 +231,7 @@ extension LSPSession {
         let previousDef = tv.onGoToDefinition
         tv.onGoToDefinition = { [weak self] in
             guard let self, let tv = self.textView else { return }
+            if let tab = self.tab, LanguageServers.beforeDefinition?(tab, tv.selectedRange().location) == true { return }
             self.goToDefinition(at: tv.selectedRange().location, fallback: previousDef)
         }
         tv.onQuickDocumentation = { [weak self] in
@@ -295,7 +296,8 @@ extension LSPSession {
         LSPPopups.hideHover()
         hoverAnchor = nil
         guard let off else { return }
-        let cmd = event.modifierFlags.contains(.command)
+        var cmd = event.modifierFlags.contains(.command)
+        if cmd, let tab, LanguageServers.suppressHoverUnderline?(tab, off) == true { cmd = false }   // a navigator owns this token
         let hasDiag = !diagnostics(at: off).isEmpty
         guard cmd || hasDiag else { return }
         hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
@@ -332,14 +334,26 @@ extension LSPSession {
             popup.setContent(LSPMarkdown.render(parts.joined(separator: "\n\n")))
             popup.show(for: self, anchor: self.screenRect(forCharacterRange: anchorRange))
         }
-        guard docs, let inst = instance(supporting: "hoverProvider"), let client = inst.client else { present(nil); return }
+        let hoverers = instances(supporting: "hoverProvider")
+        guard docs, !hoverers.isEmpty else { present(nil); return }
         let table = LSPLineTable(text as NSString)
         let params: [String: Any] = ["textDocument": ["uri": uri], "position": table.lspPosition(offset)]
-        client.request("textDocument/hover", params, timeout: 5) { result in
-            if case .success(let v) = result, let dict = v as? [String: Any] {
-                present(LSPUIParse.markdown(from: dict["contents"]))
-            } else { present(nil) }
+        // Every server of the file contributes (e.g. HTML + Tailwind: element docs and the generated CSS).
+        var answers = [String?](repeating: nil, count: hoverers.count)
+        var pending = hoverers.count
+        for (i, inst) in hoverers.enumerated() {
+            guard let client = inst.client else { pending -= 1; continue }
+            client.request("textDocument/hover", params, timeout: 5) { result in
+                if case .success(let v) = result, let dict = v as? [String: Any] { answers[i] = LSPUIParse.markdown(from: dict["contents"]) }
+                pending -= 1
+                if pending == 0 {
+                    var seen = Set<String>()
+                    let parts = answers.compactMap { $0 }.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && seen.insert($0).inserted }
+                    present(parts.isEmpty ? nil : parts.joined(separator: "\n\n---\n\n"))
+                }
+            }
         }
+        if pending == 0 { present(nil) }
     }
 
     // MARK: Signature help
@@ -371,7 +385,7 @@ extension LSPSession {
     }
 
     func showSignature(manual: Bool, trigger: String?) {
-        guard let tv = textView, let inst = instance(supporting: "signatureHelpProvider"), let client = inst.client else { return }
+        guard let tv = textView, instance(supporting: "signatureHelpProvider") != nil else { return }
         flushChanges()
         let caret = tv.selectedRange().location
         let table = LSPLineTable(tv.string as NSString)
@@ -379,7 +393,9 @@ extension LSPSession {
                                       "isRetrigger": LSPPopups.signature.isVisible]
         if let trigger { context["triggerCharacter"] = trigger }
         let params: [String: Any] = ["textDocument": ["uri": uri], "position": table.lspPosition(caret), "context": context]
-        client.request("textDocument/signatureHelp", params, timeout: 5) { [weak self] result in
+        requestChain("signatureHelpProvider", "textDocument/signatureHelp", params, timeout: 5, accept: { v in
+            ((v as? [String: Any])?["signatures"] as? [Any])?.isEmpty == false
+        }) { [weak self] result, _ in
             guard let self else { return }
             guard case .success(let v) = result, let dict = v as? [String: Any],
                   let attributed = LSPUIParse.signature(dict) else {
@@ -395,11 +411,11 @@ extension LSPSession {
     // MARK: Definition
 
     func goToDefinition(at offset: Int, fallback: (() -> Void)?) {
-        guard let inst = instance(supporting: "definitionProvider"), let client = inst.client else { fallback?(); return }
+        guard instance(supporting: "definitionProvider") != nil else { fallback?(); return }
         flushChanges()
         let table = LSPLineTable(text as NSString)
         let params: [String: Any] = ["textDocument": ["uri": uri], "position": table.lspPosition(offset)]
-        client.request("textDocument/definition", params, timeout: 8) { [weak self] result in
+        requestChain("definitionProvider", "textDocument/definition", params, timeout: 8) { [weak self] result, _ in
             guard let self else { return }
             let locations = LSPUIParse.locations(from: (try? result.get()) ?? nil)
             switch locations.count {
@@ -523,10 +539,13 @@ enum LSPEvents {
             case .leftMouseDown:
                 LSPPopups.hover.hide()
                 if event.modifierFlags.contains(.command), !event.modifierFlags.contains(.shift),
-                   let s = session(), let tv = s.textView, s.instance(supporting: "definitionProvider") != nil,
+                   let s = session(), let tv = s.textView,
                    let off = s.offsetUnderPoint(tv.convert(event.locationInWindow, from: nil)) {
-                    s.goToDefinition(at: off, fallback: nil)
-                    return nil
+                    if let tab = s.tab, LanguageServers.beforeDefinition?(tab, off) == true { return nil }
+                    if s.instance(supporting: "definitionProvider") != nil {
+                        s.goToDefinition(at: off, fallback: nil)
+                        return nil
+                    }
                 }
             case .scrollWheel:
                 LSPPopups.hover.hide(); LSPPopups.signature.hide()

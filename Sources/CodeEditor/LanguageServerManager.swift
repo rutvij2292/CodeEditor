@@ -15,10 +15,20 @@ struct LanguageServerConfig {
     let reportMissing: Bool                  // show "not found" in the status text
     let defaultTriggers: [String]
     var requireRootMarker = false             // only start when a marker file is really found (e.g. tailwind.config.js)
+    /// Dynamic launch (executable, args, init options) for a root; nil = use `executables`/`args`. Returning nil from
+    /// the closure means "not available" (reported like a missing executable).
+    var launch: ((URL, LanguageServerManager) -> LSPLaunch?)? = nil
+    /// Per-file filter (e.g. Tailwind only for `*.blade.php` among PHP files).
+    var accepts: ((URL) -> Bool)? = nil
+    /// Custom root discovery (Tailwind: nearest tailwind.config.* / package.json depending on tailwindcss).
+    var rootResolver: ((URL) -> URL?)? = nil
+    /// Per-file LSP languageId (e.g. `blade` for `*.blade.php`, `jsonc` for tsconfig.json).
+    var languageIdOverride: ((URL) -> String?)? = nil
     let initializationOptions: (URL) -> [String: Any]
     let settings: [String: Any]              // answered to workspace/configuration (keyed by top-level section)
 
     func languageId(forExtension ext: String) -> String { languageIds[ext] ?? ext }
+    func languageId(for url: URL) -> String { languageIdOverride?(url) ?? languageId(forExtension: url.pathExtension.lowercased()) }
 
     static func licenceKey() -> String? {
         if let k = UserDefaults.standard.string(forKey: "intelephenseLicenceKey")?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -31,18 +41,22 @@ struct LanguageServerConfig {
 
     static var cacheDir: String { NSHomeDirectory() + "/Library/Caches/CodeEditor" }
 
-    /// Locates the TypeScript `lib` directory Volar needs (global npm, then VS Code's bundled copy).
-    static func typescriptLibDir() -> String? {
-        let fm = FileManager.default
-        var candidates: [String] = []
-        let nvm = NSHomeDirectory() + "/.nvm/versions/node"
-        for v in ((try? fm.contentsOfDirectory(atPath: nvm)) ?? []).sorted(by: >) {
-            candidates.append("\(nvm)/\(v)/lib/node_modules/typescript/lib")
-        }
-        candidates += ["/opt/homebrew/lib/node_modules/typescript/lib", "/usr/local/lib/node_modules/typescript/lib",
-                       "/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/node_modules/typescript/lib"]
-        return candidates.first { fm.fileExists(atPath: $0 + "/tsserver.js") }
+    static func isBlade(_ url: URL) -> Bool { url.lastPathComponent.lowercased().hasSuffix(".blade.php") }
+
+    /// tsconfig.json / jsconfig.json and friends allow comments: use the JSONC language id.
+    static func jsonLanguageId(_ url: URL) -> String? {
+        let n = url.lastPathComponent.lowercased()
+        if url.pathExtension.lowercased() == "jsonc" { return "jsonc" }
+        if n.hasPrefix("tsconfig") || n.hasPrefix("jsconfig") || n.hasPrefix(".eslintrc") || n.hasPrefix(".babelrc")
+            || n == ".swcrc" || n.hasSuffix(".code-workspace") { return "jsonc" }
+        return "json"
     }
+
+    static let typescriptSettings: [String: Any] = [
+        "preferences": ["includeCompletionsForModuleExports": true, "quoteStyle": "auto", "importModuleSpecifier": "relative",
+                        "includeCompletionsWithInsertText": true, "includePackageJsonAutoImports": "auto"],
+        "suggest": ["completeFunctionCalls": false, "autoImports": true], "validate": ["enable": true],
+    ]
 
     static let table: [LanguageServerConfig] = [
         LanguageServerConfig(
@@ -63,54 +77,85 @@ struct LanguageServerConfig {
                                         "diagnostics": ["enable": true], "format": ["enable": true],
                                         "completion": ["insertUseDeclaration": true, "triggerParameterHints": true],
                                         "trace": ["server": "off"]]]),
+        // Volar 3 (hybrid mode): template/style intelligence. Script, template-expression and type features come from
+        // the TypeScript server below, which loads @vue/typescript-plugin and is bridged through `tsserver/request`.
         LanguageServerConfig(
-            id: "volar", name: "Vue (Volar)", extensions: ["vue"], languageIds: ["vue": "vue"],
-            executables: ["vue-language-server"],
-            args: ["--stdio"] + (typescriptLibDir().map { ["--tsdk=\($0)"] } ?? []),
+            id: "volar", name: "Vue", extensions: ["vue"], languageIds: ["vue": "vue"],
+            executables: ["vue-language-server"], args: ["--stdio"],
             rootMarkers: ["package.json", "vite.config.ts", "vite.config.js", ".git"],
-            installHint: "npm i -g @vue/language-server typescript", reportMissing: true,
+            installHint: "npm i -g @vue/language-server", reportMissing: true,
             defaultTriggers: ["<", ".", ":", "@", "/"],
-            initializationOptions: { _ in
-                var o: [String: Any] = [:]
-                if let lib = typescriptLibDir() { o["typescript"] = ["tsdk": lib] }
-                return o
-            },
-            settings: [:]),
-        // Not installed on the author's machine; they are silent no-ops until the binary exists.
+            launch: { root, mgr in LanguageServerLaunch.vue(root: root, manager: mgr) },
+            initializationOptions: { _ in ["vue": ["hybridMode": true]] },
+            settings: ["vue": ["server": ["hybridMode": true]], "html": ["suggest": ["html5": true]], "css": ["validate": true],
+                       "typescript": typescriptSettings]),
+        // One TypeScript server per project, shared by JS/TS/JSX/TSX/Vue. Native TypeScript 7 when available (see
+        // LanguageServerLaunch), otherwise typescript-language-server + tsserver.
         LanguageServerConfig(
-            id: "typescript", name: "TypeScript", extensions: ["ts", "tsx", "js", "jsx", "mjs", "cjs"],
+            id: "typescript", name: "TypeScript", extensions: ["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts", "vue"],
             languageIds: ["ts": "typescript", "tsx": "typescriptreact", "js": "javascript", "jsx": "javascriptreact",
-                          "mjs": "javascript", "cjs": "javascript"],
+                          "mjs": "javascript", "cjs": "javascript", "mts": "typescript", "cts": "typescript", "vue": "vue"],
             executables: ["typescript-language-server"], args: ["--stdio"],
             rootMarkers: ["tsconfig.json", "jsconfig.json", "package.json", ".git"],
             installHint: "npm i -g typescript typescript-language-server", reportMissing: false,
             defaultTriggers: [".", "\"", "'", "/", "@", "<"],
-            initializationOptions: { _ in
-                var o: [String: Any] = [:]
-                if let lib = typescriptLibDir() { o["tsserver"] = ["path": lib + "/tsserver.js"] }
-                return o
-            },
-            settings: [:]),
+            launch: { root, mgr in LanguageServerLaunch.typescript(root: root, manager: mgr) },
+            initializationOptions: { _ in [:] },
+            settings: ["typescript": typescriptSettings, "javascript": typescriptSettings]),
         LanguageServerConfig(
             id: "html", name: "HTML", extensions: ["html", "htm"], languageIds: ["html": "html", "htm": "html"],
             executables: ["vscode-html-language-server"], args: ["--stdio"], rootMarkers: ["package.json", ".git"],
             installHint: "npm i -g vscode-langservers-extracted", reportMissing: false,
             defaultTriggers: ["<", "/", "\"", "=", ":"],
-            initializationOptions: { _ in ["provideFormatter": false] }, settings: [:]),
+            initializationOptions: { _ in ["provideFormatter": true, "embeddedLanguages": ["css": true, "javascript": true]] },
+            settings: ["html": ["suggest": ["html5": true], "validate": ["scripts": true, "styles": true], "autoClosingTags": true,
+                                "format": ["wrapLineLength": 120, "indentInnerHtml": false], "mirrorCursorOnMatchingTag": false],
+                       "css": ["validate": true], "javascript": ["format": ["enable": true]]]),
         LanguageServerConfig(
             id: "css", name: "CSS", extensions: ["css", "scss", "less"],
             languageIds: ["css": "css", "scss": "scss", "less": "less"],
             executables: ["vscode-css-language-server"], args: ["--stdio"], rootMarkers: ["package.json", ".git"],
             installHint: "npm i -g vscode-langservers-extracted", reportMissing: false,
-            defaultTriggers: ["-", ":", "@", "."], initializationOptions: { _ in [:] }, settings: [:]),
+            defaultTriggers: ["-", ":", "@", "."],
+            initializationOptions: { _ in ["provideFormatter": true] },
+            settings: ["css": ["validate": true, "lint": ["unknownAtRules": "ignore"]],
+                       "scss": ["validate": true, "lint": ["unknownAtRules": "ignore"]],
+                       "less": ["validate": true, "lint": ["unknownAtRules": "ignore"]]]),
         LanguageServerConfig(
-            id: "tailwind", name: "Tailwind CSS", extensions: ["html", "vue", "php", "css", "jsx", "tsx"],
-            languageIds: ["html": "html", "vue": "vue", "php": "php", "css": "css", "jsx": "javascriptreact", "tsx": "typescriptreact"],
+            id: "json", name: "JSON", extensions: ["json", "jsonc"], languageIds: ["json": "json", "jsonc": "jsonc"],
+            executables: ["vscode-json-language-server"], args: ["--stdio"], rootMarkers: ["package.json", ".git"],
+            installHint: "npm i -g vscode-langservers-extracted", reportMissing: false,
+            defaultTriggers: ["\"", ":", ","],
+            languageIdOverride: { LanguageServerConfig.jsonLanguageId($0) },
+            initializationOptions: { _ in ["provideFormatter": true] },
+            settings: ["json": ["validate": ["enable": true], "format": ["enable": true], "schemas": [] as [Any],
+                                "keepLines": ["enable": false]],
+                       "http": ["proxy": "", "proxyStrictSSL": false]]),
+        // Only starts for projects that use Tailwind (config file or package.json dependency). The built-in Tailwind
+        // completion provider keeps working as the fallback when the server is absent.
+        LanguageServerConfig(
+            id: "tailwind", name: "Tailwind CSS", extensions: ["html", "vue", "php", "css", "scss", "less", "jsx", "tsx", "js", "ts"],
+            languageIds: ["html": "html", "vue": "vue", "php": "blade", "css": "css", "scss": "scss", "less": "less",
+                          "jsx": "javascriptreact", "tsx": "typescriptreact", "js": "javascript", "ts": "typescript"],
             executables: ["tailwindcss-language-server"], args: ["--stdio"],
-            rootMarkers: ["tailwind.config.js", "tailwind.config.ts", "tailwind.config.cjs", "tailwind.config.mjs"],
+            rootMarkers: LanguageServerLaunch.tailwindConfigs,
             installHint: "npm i -g @tailwindcss/language-server", reportMissing: false,
-            defaultTriggers: ["\"", "'", "`", " ", ":", "-"], requireRootMarker: true, initializationOptions: { _ in [:] },
-            settings: ["tailwindCSS": ["emmetCompletions": false]] ),
+            defaultTriggers: ["\"", "'", "`", " ", ":", "-"], requireRootMarker: true,
+            accepts: { url in url.pathExtension.lowercased() != "php" || LanguageServerConfig.isBlade(url) },
+            rootResolver: { LanguageServerLaunch.tailwindRoot(for: $0) },
+            initializationOptions: { _ in [:] },
+            settings: ["tailwindCSS": [
+                "includeLanguages": ["blade": "html", "blade.php": "html", "vue": "html", "html": "html", "php": "html",
+                                     "javascript": "javascript", "javascriptreact": "javascriptreact",
+                                     "typescript": "typescript", "typescriptreact": "typescriptreact", "css": "css"],
+                "classAttributes": ["class", "className", ":class", "ngClass", "class:list", "classList"],
+                "emmetCompletions": false, "validate": true, "hovers": true, "suggestions": true, "colorDecorators": true,
+                "codeActions": true, "showPixelEquivalents": true, "rootFontSize": 16,
+                "lint": ["cssConflict": "warning", "invalidApply": "error", "invalidScreen": "error", "invalidVariant": "error",
+                         "invalidConfigPath": "error", "invalidTailwindDirective": "error", "recommendedVariantOrder": "ignore"],
+                "experimental": ["classRegex": [] as [Any]],
+                "files": ["exclude": ["**/.git/**", "**/node_modules/**", "**/.hg/**", "**/.svn/**"]],
+            ]]),
     ]
 
     /// Extension point for additional servers (user configuration, tests); consulted after `table`.
@@ -119,6 +164,10 @@ struct LanguageServerConfig {
     static func configs(forExtension ext: String) -> [LanguageServerConfig] {
         let e = ext.lowercased()
         return (table + extra).filter { $0.extensions.contains(e) }
+    }
+
+    static func configs(for url: URL) -> [LanguageServerConfig] {
+        configs(forExtension: url.pathExtension).filter { $0.accepts?(url) ?? true }
     }
 }
 
@@ -138,12 +187,12 @@ struct LanguageServerStatus {
     let root: URL
     let state: LanguageServerState
     let rssBytes: UInt64
-    /// "Intelephense: indexing 45% - 612 MB" style summary.
+    /// "TypeScript · 142 MB · indexing…" style summary.
     var text: String {
         let mem = rssBytes > 0 ? " · \(LanguageServerStatus.format(rssBytes))" : ""
         switch state {
-        case .starting: return "\(name): starting…"
-        case .indexing(let p): return "\(name): \(p)\(mem)"
+        case .starting: return "\(name)\(mem) · starting…"
+        case .indexing(let p): return "\(name)\(mem) · \(p)"
         case .ready: return "\(name)\(mem)"
         case .failed(let m): return m
         case .stopped: return "\(name): stopped"
@@ -171,6 +220,15 @@ final class LSPServerInstance {
     var progress: String?
     private var generation = 0
     unowned let manager: LanguageServerManager
+    /// Resolved launch (variant "native" / "tsserver" for TypeScript); nil before the first launch.
+    private(set) var launchSpec: LSPLaunch?
+    private(set) var readyAt: Date?
+    /// Volar: the TypeScript server that answers its `tsserver/request` bridge calls.
+    weak var companion: LSPServerInstance?
+    private var pendingBridge: [(id: Any, command: Any, args: Any)] = []
+    private var warmupWork: DispatchWorkItem?
+    var usesPullDiagnostics: Bool { launchSpec?.pullDiagnostics ?? false }
+    var variant: String { launchSpec?.variant ?? "" }
 
     init(config: LanguageServerConfig, root: URL, manager: LanguageServerManager) {
         self.config = config
@@ -221,10 +279,15 @@ final class LSPServerInstance {
         isInitialized = false
         capabilities = [:]
         progress = nil
-        guard let exe = manager.resolveExecutable(config.executables) else {
+        warmupWork?.cancel()
+        readyAt = nil
+        guard let spec = manager.resolveLaunch(config, root: root) else {
             setState(.failed("\(config.executables[0]) not found (\(config.installHint))"))
             return
         }
+        launchSpec = spec
+        let exe = spec.executable
+        LSPLog.log("launch \(config.id) [\(spec.variant)] \(exe) \(spec.args.joined(separator: " ")) root=\(root.path)")
         setState(.starting)
         let client = LSPClient()
         self.client = client
@@ -235,8 +298,14 @@ final class LSPServerInstance {
         let folder: [String: Any] = ["uri": uri, "name": root.lastPathComponent]
         client.onServerRequest = { method, params in
             switch method {
+            case "workspace/diagnostic/refresh":
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, gen == self.generation else { return }
+                    self.sessions.values.forEach { $0.requestDiagnostics(from: self, delay: 0.05) }
+                }
+                return NSNull()
             case "window/workDoneProgress/create", "client/registerCapability", "client/unregisterCapability",
-                 "window/showMessageRequest", "workspace/diagnostic/refresh", "workspace/semanticTokens/refresh",
+                 "window/showMessageRequest", "workspace/semanticTokens/refresh",
                  "workspace/inlayHint/refresh", "workspace/codeLens/refresh", "window/showDocument":
                 return NSNull()
             case "workspace/workspaceFolders": return [folder]
@@ -267,7 +336,8 @@ final class LSPServerInstance {
             self.manager.instanceExited(self, status: status, requested: requested)
         }
         do {
-            try client.start(executable: exe, arguments: config.args, environment: env, cwd: root)
+            for (k, v) in spec.env { env[k] = v }
+            try client.start(executable: exe, arguments: spec.args, environment: env, cwd: root)
         } catch {
             setState(.failed("\(config.name) failed to start: \(error.localizedDescription)"))
             return
@@ -277,8 +347,8 @@ final class LSPServerInstance {
             "clientInfo": ["name": "CodeEditor", "version": "1"],
             "rootUri": uri, "rootPath": root.path,
             "workspaceFolders": [folder],
-            "initializationOptions": config.initializationOptions(root),
-            "capabilities": Self.clientCapabilities,
+            "initializationOptions": spec.initializationOptions ?? config.initializationOptions(root),
+            "capabilities": Self.clientCapabilities(pull: spec.pullDiagnostics),
             "trace": "off",
         ]
         client.request("initialize", params, timeout: 90) { [weak self] result in
@@ -289,8 +359,11 @@ final class LSPServerInstance {
                 self.isInitialized = true
                 client.notify("initialized", [String: Any]())
                 if !settings.isEmpty { client.notify("workspace/didChangeConfiguration", ["settings": settings]) }
+                self.readyAt = Date()
+                self.beginWarmup()
                 self.setState(.ready)
                 self.manager.instanceReady(self)
+                self.flushBridge()
             case .failure(let e):
                 self.setState(.failed("\(self.config.name) failed to initialize: \(e.message)"))
                 client.shutdown()
@@ -318,11 +391,14 @@ final class LSPServerInstance {
             if progress != nil, Date().timeIntervalSince(lastRSS) > 1.5 { refreshRSS() }
             manager.statusChanged()
         case "tsserver/request":
-            // Volar 3 asks the client to forward requests to a tsserver carrying @vue/typescript-plugin.
-            // We run none, so answer "no result": Volar falls back to its tsconfig-less HTML/CSS/template services.
-            if let a = params as? [Any], let inner = a.first as? [Any], let id = inner.first {
-                client?.notify("tsserver/response", [[id, NSNull()]])
+            // Volar 3 asks the client to forward requests to a tsserver carrying @vue/typescript-plugin
+            // (params: [[id, command, args]]). We relay them to the TypeScript server of the same project.
+            if let a = params as? [Any], let inner = a.first as? [Any], inner.count >= 2 {
+                pendingBridge.append((inner[0], inner[1], inner.count > 2 ? inner[2] : NSNull()))
+                flushBridge()
             }
+        case "@/tailwindCSS/projectInitialized":
+            endWarmup()
         case "window/showMessage", "window/logMessage":
             LSPLog.log("\(config.id): \((p?["message"] as? String) ?? "")")
         default: break
@@ -339,6 +415,9 @@ final class LSPServerInstance {
     func stop() {
         generation += 1   // ignore any further callbacks from the old process
         idleWork?.cancel()
+        warmupWork?.cancel()
+        progress = nil
+        pendingBridge.removeAll()
         client?.shutdown()
         client = nil
         isInitialized = false
@@ -347,6 +426,67 @@ final class LSPServerInstance {
     }
 
     func killNow() { client?.kill() }
+
+    // MARK: Warm-up status ("indexing…" until the server produced its first result)
+
+    private func beginWarmup() {
+        guard config.id == "typescript" || config.id == "tailwind" || config.id == "volar" else { return }
+        progress = "indexing…"
+        warmupWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.endWarmup() }
+        warmupWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: work)
+    }
+
+    func endWarmup() {
+        warmupWork?.cancel()
+        warmupWork = nil
+        guard progress == "indexing…" else { return }
+        progress = nil
+        refreshRSS()
+        manager.statusChanged()
+    }
+
+    // MARK: Volar <-> tsserver bridge
+
+    /// Relays queued `tsserver/request`s to the companion TypeScript server (`typescript.tsserverRequest`) and answers
+    /// Volar with `tsserver/response` ([[id, body]]; null when the TS server is missing or fails).
+    func flushBridge() {
+        guard !pendingBridge.isEmpty else { return }
+        let volar = client
+        guard let ts = companion, ts.isInitialized, let tsClient = ts.client else {
+            // Companion not up yet: keep the requests (flushed when it is ready); give up if there is none at all.
+            if companion == nil || companion?.state == .stopped {
+                for r in pendingBridge { volar?.notify("tsserver/response", [[r.id, NSNull()]]) }
+                pendingBridge.removeAll()
+            }
+            return
+        }
+        let queued = pendingBridge
+        pendingBridge.removeAll()
+        for r in queued {
+            tsClient.request("workspace/executeCommand",
+                             ["command": "typescript.tsserverRequest", "arguments": [r.command, r.args, ["isAsync": true, "lowPriority": true]]],
+                             timeout: 30) { result in
+                var body: Any = NSNull()
+                if case .success(let v) = result, let d = v as? [String: Any], let b = d["body"] { body = b }
+                volar?.notify("tsserver/response", [[r.id, body]])
+            }
+        }
+    }
+
+    private static func clientCapabilities(pull: Bool) -> [String: Any] {
+        var caps = clientCapabilities
+        if pull {
+            var td = caps["textDocument"] as! [String: Any]
+            td["diagnostic"] = ["dynamicRegistration": false, "relatedDocumentSupport": false]
+            caps["textDocument"] = td
+            var ws = caps["workspace"] as! [String: Any]
+            ws["diagnostics"] = ["refreshSupport": true]
+            caps["workspace"] = ws
+        }
+        return caps
+    }
 
     private static let clientCapabilities: [String: Any] = [
         "workspace": ["workspaceFolders": true, "configuration": true, "applyEdit": true,
@@ -407,7 +547,10 @@ final class LanguageServerManager {
         started = true
         EditorEvents.onOpen { [weak self] tab in self?.tabOpened(tab) }
         EditorEvents.onClose { [weak self] tab in self?.tabClosed(tab) }
-        EditorEvents.onSave { [weak self] tab in self?.sessions[ObjectIdentifier(tab)]?.didSave() }
+        EditorEvents.onSave { [weak self] tab in
+            self?.sessions[ObjectIdentifier(tab)]?.didSave()
+            self?.projectFileSaved(tab.url)
+        }
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { [weak self] n in
             guard let self, let win = n.object as? NSWindow else { return }
             for s in self.sessions.values where s.tab?.textView.window === win { self.detach(s) }
@@ -419,25 +562,53 @@ final class LanguageServerManager {
 
     // MARK: Tabs
 
+    /// Large files are never sent to a server: the integrator's `EditorTab.isLargeFile` flag when it exists
+    /// (read reflectively so this compiles before that flag lands), else a plain size check.
+    static func isLargeFile(_ tab: EditorTab) -> Bool {
+        for child in Mirror(reflecting: tab).children where child.label == "isLargeFile" {
+            if let b = child.value as? Bool { return b }
+        }
+        let size = ((try? FileManager.default.attributesOfItem(atPath: tab.url.path))?[.size] as? NSNumber)?.intValue ?? 0
+        return size > LanguageServerPrefs.maxFileBytes || (tab.textView.textStorage?.length ?? 0) > LanguageServerPrefs.maxFileBytes
+    }
+
     private func tabOpened(_ tab: EditorTab) {
-        let ext = tab.url.pathExtension.lowercased()
-        let configs = LanguageServerConfig.configs(forExtension: ext)
-        guard !configs.isEmpty else { return }
+        guard !LanguageServerConfig.configs(for: tab.url).isEmpty else { return }
         let id = ObjectIdentifier(tab)
-        guard sessions[id] == nil else { return }
+        if let stale = sessions[id], stale.tab == nil { detach(stale) }   // a freed tab's address was reused
+        guard sessions[id] == nil, !Self.isLargeFile(tab) else { return }
         let session = LSPSession(tab: tab, manager: self)
         sessions[id] = session
-        for config in configs {
-            if !config.reportMissing, resolveExecutable(config.executables) == nil { continue }
-            guard let root = projectRoot(for: tab.url, config: config) else { continue }
+        attach(session)
+        session.installUI()
+        statusChanged()
+    }
+
+    /// Connects a session to every enabled, available server that applies to its file (starting them lazily).
+    private func attach(_ session: LSPSession) {
+        guard let tab = session.tab else { return }
+        let id = ObjectIdentifier(tab)
+        let url = tab.url
+        let isVue = url.pathExtension.lowercased() == "vue"
+        if isVue, let tsConfig = LanguageServerConfig.table.first(where: { $0.id == "typescript" }),
+           let tsRoot = projectRoot(for: url, config: tsConfig), !vueRoots.contains(tsRoot.path) {
+            // A Vue file needs the tsserver + @vue/typescript-plugin variant; swap a native TypeScript server out.
+            vueRoots.insert(tsRoot.path)
+            if let running = instances[tsConfig.id + "|" + tsRoot.path], running.variant != "tsserver" { restart(running) }
+        }
+        for config in LanguageServerConfig.configs(for: url) {
+            guard LanguageServerPrefs.isEnabled(config.id) else { continue }
+            if !config.reportMissing, config.launch == nil, resolveExecutable(config.executables) == nil { continue }
+            guard let root = projectRoot(for: url, config: config) else { continue }
             let inst = instance(for: config, root: root)
+            if case .failed = inst.state, !config.reportMissing { continue }
             session.instances.append(inst)
             inst.sessions[id] = session
             inst.idleWork?.cancel(); inst.idleWork = nil
             if inst.isInitialized { session.didOpen(in: inst) }
         }
-        session.installUI()
-        statusChanged()
+        // Volar's tsserver bridge talks to the TypeScript server serving the same file.
+        if let volar = session.instance("volar"), let ts = session.instance("typescript") { volar.companion = ts }
     }
 
     private func tabClosed(_ tab: EditorTab) {
@@ -446,7 +617,15 @@ final class LanguageServerManager {
 
     func detach(_ session: LSPSession) {
         guard let tab = session.tab ?? nil, sessions[ObjectIdentifier(tab)] === session else {
+            // The tab is already gone: drop the session everywhere so idle shutdown can proceed.
             sessions = sessions.filter { $0.value !== session }
+            session.close()
+            for inst in session.instances {
+                inst.sessions = inst.sessions.filter { $0.value !== session }
+                if inst.sessions.isEmpty { scheduleIdle(inst) }
+            }
+            clearDiagnostics(forPath: session.url.standardizedFileURL.path)
+            statusChanged()
             return
         }
         sessions[ObjectIdentifier(tab)] = nil
@@ -480,9 +659,59 @@ final class LanguageServerManager {
         return inst
     }
 
+    /// TypeScript roots that contain `.vue` files (their TypeScript server must be a tsserver with the Vue plugin).
+    var vueRoots: Set<String> = []
+
     func instanceReady(_ inst: LSPServerInstance) {
         for s in inst.sessions.values { s.didOpen(in: inst) }
         inst.refreshRSS()
+        for other in instances.values where other.companion === inst { other.flushBridge() }
+    }
+
+    /// Stops and relaunches one server; its open documents are re-sent once it is ready.
+    func restart(_ inst: LSPServerInstance) {
+        for s in inst.sessions.values { s.instanceRestarting(inst) }
+        inst.restarts = 0
+        inst.stop()
+        resetExecutableCache()
+        inst.launch()
+        statusChanged()
+    }
+
+    /// "Restart language servers": relaunches every server whose project root is `root` (or contains / is inside it).
+    /// Servers without open documents are simply stopped (they start again lazily).
+    func restartAll(forRoot root: URL) {
+        let rp = root.standardizedFileURL.path
+        func related(_ i: LSPServerInstance) -> Bool {
+            let p = i.root.path
+            return p == rp || p.hasPrefix(rp + "/") || rp.hasPrefix(p + "/")
+        }
+        let targets = instances.values.filter(related)
+        for inst in targets {
+            if inst.sessions.isEmpty { inst.stop(); instances[inst.key] = nil } else { restart(inst) }
+        }
+        // Sessions of files that had no server yet (e.g. the executable was just installed) get another chance.
+        for s in sessions.values where s.url.standardizedFileURL.path.hasPrefix(rp + "/") && s.instances.isEmpty { attach(s) }
+        statusChanged()
+    }
+
+    /// Applies a changed `lsp.<id>.enabled` preference to the running servers and open documents.
+    func serverPreferenceChanged(_ id: String) {
+        if !LanguageServerPrefs.isEnabled(id) {
+            for inst in instances.values where inst.config.id == id {
+                for s in inst.sessions.values { s.instanceRestarting(inst); s.instances.removeAll { $0 === inst } }
+                inst.sessions.removeAll()
+                inst.stop()
+                instances[inst.key] = nil
+            }
+        } else {
+            for s in sessions.values where !s.instances.contains(where: { $0.config.id == id }) {
+                guard LanguageServerConfig.configs(for: s.url).contains(where: { $0.id == id }) else { continue }
+                s.resetAttachments()
+                attach(s)
+            }
+        }
+        statusChanged()
     }
 
     func instanceExited(_ inst: LSPServerInstance, status: Int32, requested: Bool) {
@@ -491,6 +720,7 @@ final class LanguageServerManager {
         LSPLog.log("\(inst.config.id) exited unexpectedly (\(status))")
         for s in inst.sessions.values { s.instanceRestarting(inst) }
         if inst.sessions.isEmpty { instances[inst.key] = nil; return }
+        if let up = inst.readyAt, Date().timeIntervalSince(up) > 120 { inst.restarts = 0 }   // it ran fine for a while
         if inst.restarts < 3 {
             let delay = restartBackoff * pow(2, Double(inst.restarts))
             inst.restarts += 1
@@ -524,6 +754,7 @@ final class LanguageServerManager {
     func stopAll() {
         for inst in instances.values { inst.stop() }
         instances.removeAll()
+        for s in sessions.values { s.resetAttachments() }
         statusChanged()
     }
 
@@ -537,7 +768,7 @@ final class LanguageServerManager {
         guard rssTimer == nil else { return }
         rssTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             guard let self else { return }
-            for (id, s) in self.sessions where s.tab == nil { self.sessions[id] = nil; self.detach(s) }
+            for s in self.sessions.values where s.tab == nil { self.detach(s) }
             for i in self.instances.values { i.refreshRSS() }
             self.statusChanged()
             if self.instances.isEmpty { self.rssTimer?.invalidate(); self.rssTimer = nil }
@@ -578,8 +809,16 @@ final class LanguageServerManager {
         guard let uri = params["uri"] as? String, let url = URL(string: uri), url.isFileURL else { return }
         let raw = (params["diagnostics"] as? [[String: Any]]) ?? []
         let version = (params["version"] as? NSNumber)?.intValue
+        inst.endWarmup()
         guard let session = session(forURL: url) else { return }
         session.setDiagnostics(raw, serverId: inst.config.id, version: version)
+    }
+
+    func clearDiagnostics(forPath path: String) {
+        guard diagnostics[path] != nil else { return }
+        diagnostics[path] = nil
+        statusChanged()
+        problemsChanged()
     }
 
     func recordDiagnostics(for session: LSPSession, serverId: String) {
@@ -589,6 +828,25 @@ final class LanguageServerManager {
     }
 
     /// Cheap file-event forwarding for the integrator (created=1, changed=2, deleted=3).
+    /// Saving a project/config file notifies every server of the project (tsconfig.json is also open in the JSON
+    /// server only, yet the TypeScript and Tailwind servers must reload).
+    static let watchedNames: Set<String> = ["tsconfig.json", "jsconfig.json", "package.json", "tailwind.config.js", "tailwind.config.ts",
+                                            "tailwind.config.cjs", "tailwind.config.mjs", "postcss.config.js", ".eslintrc.json"]
+    func projectFileSaved(_ url: URL) {
+        let n = url.lastPathComponent
+        guard Self.watchedNames.contains(n) || (n.hasPrefix("tsconfig.") && n.hasSuffix(".json")) else { return }
+        let ownSession = session(forURL: url)
+        for inst in instances.values where inst.isInitialized && url.path.hasPrefix(inst.root.path + "/")
+            && !(ownSession?.instances.contains { $0 === inst } ?? false) {
+            inst.client?.notify("workspace/didChangeWatchedFiles", ["changes": [["uri": url.absoluteString, "type": 2]]])
+        }
+        // Their diagnostics may change (new compiler options).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self else { return }
+            for inst in self.instances.values where inst.usesPullDiagnostics { inst.sessions.values.forEach { $0.requestDiagnostics(from: inst) } }
+        }
+    }
+
     func fileEvents(_ events: [(url: URL, type: Int)]) {
         for inst in instances.values where inst.isInitialized {
             let rp = inst.root.path + "/"
@@ -606,7 +864,14 @@ final class LanguageServerManager {
 
     // MARK: Roots and executables
 
+    func resolveLaunch(_ config: LanguageServerConfig, root: URL) -> LSPLaunch? {
+        if let launch = config.launch { return launch(root, self) }
+        guard let exe = resolveExecutable(config.executables) else { return nil }
+        return LSPLaunch(executable: exe, args: config.args)
+    }
+
     func projectRoot(for file: URL, config: LanguageServerConfig) -> URL? {
+        if let resolver = config.rootResolver { return resolver(file) }
         let markers = config.rootMarkers
         let fm = FileManager.default
         let home = NSHomeDirectory()
