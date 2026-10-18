@@ -10,6 +10,32 @@ struct OpenOptions: Equatable {
     var encoding: String.Encoding = .utf8
     /// Show only the first 5 MB, read-only.
     var readOnlyTruncated = false
+    /// Open a file over the 5 MB limit (up to `EditorTab.hardLimit`) editable, with highlighting/LSP/bracket features off.
+    var openAnyway = false
+    /// Sniff a byte-order mark and honour it. Off when the user picked an encoding explicitly ("Reopen with encoding").
+    var autoDetect = true
+}
+
+/// A decoded file plus what is needed to write it back unchanged.
+struct LoadedFile {
+    var text: String
+    var readOnly: Bool
+    var encoding: String.Encoding
+    var bom: Bool
+    /// Decoding replaced undecodable bytes: writing this text back would corrupt the file.
+    var lossy: Bool
+    var large: Bool
+}
+
+/// What an external reload changed (for the status message, the flash and tests).
+struct ExternalChange {
+    var url: URL
+    var date: Date
+    /// Changed regions in the NEW text (UTF-16 ranges, whole lines).
+    var ranges: [NSRange]
+    var firstLine: Int?
+    var lastLine: Int?
+    var wholeText: Bool
 }
 
 enum LineEnding: String { case lf = "LF", crlf = "CRLF" }
@@ -55,9 +81,14 @@ final class NoticeBanner: NSView {
         label.textColor = Theme.foreground
     }
 
+    private var handlers: [String: () -> Void] = [:]
+    /// Runs the action behind a button (tests, menus).
+    func press(_ title: String) { handlers[title]?() }
+
     func set(message: String, actions: [(String, () -> Void)]) {
         self.message = message
         buttonTitles = actions.map { $0.0 }
+        handlers = Dictionary(actions.map { ($0.0, $0.1) }, uniquingKeysWith: { a, _ in a })
         label.stringValue = message
         buttons.arrangedSubviews.forEach { buttons.removeArrangedSubview($0); $0.removeFromSuperview() }
         for (title, run) in actions {
@@ -122,6 +153,8 @@ final class EditorPane: NSView {
 /// One open file: scroll view + text view + highlighter.
 final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
     static let sizeLimit = 5_000_000
+    /// Largest file "Open anyway" will load.
+    static let hardLimit = 50_000_000
     private(set) var url: URL
     let scrollView = NSScrollView()
     private(set) var view: NSView!
@@ -131,15 +164,34 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
     private(set) var isDirty = false
     var onDirtyChange: (() -> Void)?
     var onSave: (() -> Void)?
-    private var diskDate: Date?
-    private var conflictDate: Date?
+    private var diskStamp: FileStamp?
+    private var conflictStamp: FileStamp?
     private(set) var hasDiskConflict = false
     private(set) var encoding: String.Encoding = .utf8
+    /// The file started with a byte-order mark (written back unchanged).
+    private(set) var hasBOM = false
     private(set) var isReadOnly = false
+    /// Over the 5 MB limit: Highlighter, BracketColorizer, LSP sync and Completion must skip this tab.
+    private(set) var isLargeFile = false
+    /// Decoded with replacement characters: never written back.
+    private(set) var isLossyDecoded = false
+    private var saveInFlight = false
+    private var saveErrorShown = false
+    private var idleWork: DispatchWorkItem?
+    private let undo = UndoManager()
     private(set) var eol: LineEnding = .lf
     var onDropURLs: (([URL]) -> Void)? { didSet { pane?.onDropURLs = onDropURLs } }
     /// Asked to show a buffer-vs-disk diff (the window owns the UI).
     var onShowDiff: ((EditorTab) -> Void)?
+    /// Banner "Save As…" / "Close" (the window owns the UI).
+    var onSaveAs: ((EditorTab) -> Void)?
+    var onCloseRequest: ((EditorTab) -> Void)?
+    /// A clean buffer was reloaded because the file changed on disk.
+    var onExternalReload: ((EditorTab, ExternalChange) -> Void)?
+    /// Large file whose "Open anyway" button was pressed (window reopens it).
+    var onOpenAnyway: ((EditorTab) -> Void)?
+    private(set) var lastExternalChange: ExternalChange?
+    private var flashView: FlashOverlay?
     private var pane: EditorPane!
     private(set) var indent = IndentSettings.standard
     private var paragraph: NSParagraphStyle = .default
@@ -150,20 +202,33 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         return nil
     }
 
-    static func read(_ url: URL, options: OpenOptions) -> Result<(text: String, readOnly: Bool), LoadProblem> {
-        let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.intValue ?? 0
-        if size > sizeLimit, !options.readOnlyTruncated { return .failure(.tooLarge(size)) }
+    static func read(_ url: URL, options: OpenOptions) -> Result<LoadedFile, LoadProblem> {
+        let size = Int(FileIO.stamp(url)?.size ?? 0)
+        var large = false
         if size > sizeLimit {
-            guard let handle = try? FileHandle(forReadingFrom: url), let head = try? handle.read(upToCount: sizeLimit) else {
-                return .failure(.unreadable)
+            if options.readOnlyTruncated {
+                guard let handle = try? FileHandle(forReadingFrom: url), let head = try? handle.read(upToCount: sizeLimit) else {
+                    return .failure(.unreadable)
+                }
+                try? handle.close()
+                // Cutting at a byte count can split a character: decode leniently (and never write it back).
+                return .success(LoadedFile(text: String(decoding: head, as: UTF8.self), readOnly: true, encoding: .utf8,
+                                           bom: false, lossy: true, large: true))
             }
-            try? handle.close()
-            // Cutting at a byte count can split a character: decode leniently.
-            return .success((String(decoding: head, as: UTF8.self), true))
+            guard options.openAnyway, size <= hardLimit else { return .failure(.tooLarge(size)) }
+            large = true
         }
         guard let data = try? Data(contentsOf: url) else { return .failure(.unreadable) }
-        guard let text = String(data: data, encoding: options.encoding) else { return .failure(.notUTF8) }
-        return .success((text, false))
+        var encoding = options.encoding
+        var payload = data
+        var bom = false
+        if let (sniffed, length) = TextEncodings.sniffBOM(data), options.autoDetect || sniffed == options.encoding {
+            encoding = sniffed
+            payload = data.dropFirst(length)
+            bom = true
+        }
+        guard let text = String(data: payload, encoding: encoding) else { return .failure(.notUTF8) }
+        return .success(LoadedFile(text: text, readOnly: false, encoding: encoding, bom: bom, lossy: false, large: large))
     }
 
     static func detectLineEnding(_ text: String) -> LineEnding {
@@ -185,7 +250,10 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         self.url = url
         guard case .success(let loaded) = Self.read(url, options: options) else { return nil }
         let text = loaded.text
-        encoding = options.encoding
+        encoding = loaded.encoding
+        hasBOM = loaded.bom
+        isLossyDecoded = loaded.lossy
+        isLargeFile = loaded.large
         isReadOnly = loaded.readOnly
         eol = Self.detectLineEnding(text)
         // Classic TextKit 1 stack: the highlighter and ruler both need NSLayoutManager.
@@ -196,6 +264,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         storage.addLayoutManager(layout)
         self.storage = storage
         layout.addTextContainer(container)
+        if loaded.large { layout.allowsNonContiguousLayout = true }
         textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
         super.init()
 
@@ -233,7 +302,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         textView.unregisterDraggedTypes()
         textView.registerForDraggedTypes([.string])
         textView.commentStyle = CodeTextView.commentStyle(forExtension: url.pathExtension)
-        diskDate = Self.modificationDate(url)
+        diskStamp = FileIO.stamp(url)
         NotificationCenter.default.addObserver(self, selector: #selector(themeChanged), name: Theme.didChange, object: nil)
 
         scrollView.documentView = textView
@@ -243,10 +312,14 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         scrollView.backgroundColor = Theme.background
         pane = EditorPane(content: EditorContainer(scrollView: scrollView, gutter: GutterView(textView: textView, scrollView: scrollView)))
         view = pane
-        if isReadOnly { pane.showBanner("Read-only: showing the first 5 MB of a larger file.", actions: []) }
+        if isReadOnly {
+            showLargeFileBanner()
+        } else if isLargeFile {
+            pane.showBanner("Large file: highlighting, completion and language features are off.", actions: [])
+        }
 
         storage.delegate = self
-        highlighter = Highlighter(textView: textView, fileName: url.lastPathComponent)
+        if !isLargeFile { highlighter = Highlighter(textView: textView, fileName: url.lastPathComponent) }
         EditorEvents.notifyOpened(self)
     }
 
@@ -275,6 +348,17 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
 
     func textDidChange(_ notification: Notification) {
         if !isDirty { isDirty = true; onDirtyChange?() }
+        scheduleIdleSave()
+    }
+
+    /// Per-tab undo stack (the window's shared manager would mix tabs and be absent in headless runs).
+    func undoManager(for view: NSTextView) -> UndoManager? { undo }
+
+    private func showLargeFileBanner() {
+        var actions: [(String, () -> Void)] = []
+        let size = Int(FileIO.stamp(url)?.size ?? 0)
+        if size <= Self.hardLimit { actions.append(("Open anyway", { [weak self] in if let self { self.onOpenAnyway?(self) } })) }
+        pane.showBanner("File too large to edit — showing the first 5 MB, read-only. Open anyway?", actions: actions)
     }
 
     /// Feeds each edit to the incremental parser; it repaints at the end of the run loop.
@@ -282,11 +366,6 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
                      range editedRange: NSRange, changeInLength delta: Int) {
         guard editedMask.contains(.editedCharacters) else { return }
         highlighter?.textDidEdit(range: editedRange, changeInLength: delta)
-    }
-
-    private static func modificationDate(_ url: URL) -> Date? {
-        // URL caches resource values, so ask the file system directly.
-        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
 
     @objc private func themeChanged() {
@@ -301,41 +380,215 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         highlighter?.apply()
     }
 
+    // MARK: Text comparison and minimal edits
+
+    /// Literal UTF-16 equality. (Swift's `==` treats canonically equivalent strings as equal; a file whose only change is
+    /// Unicode normalisation must still count as changed.)
+    static func same(_ a: String, _ b: String) -> Bool { (a as NSString).isEqual(to: b) }
+
+    struct Hunk: Equatable {
+        var old: NSRange
+        var text: String
+    }
+
+    /// Line-based changed regions turning `old` into `new`, ascending, in OLD coordinates. Huge inputs (or a huge differing
+    /// middle) degrade to one replacement of the differing middle / the whole text; the result is always exact.
+    static func hunks(from old: String, to new: String, maxMiddleLines: Int = 40_000, maxChars: Int = 8_000_000) -> [Hunk] {
+        let oldNS = old as NSString, newNS = new as NSString
+        if oldNS.isEqual(to: new) { return [] }
+        let whole = [Hunk(old: NSRange(location: 0, length: oldNS.length), text: new)]
+        if oldNS.length + newNS.length > maxChars { return whole }
+        let a = DiffEngine.splitLines(old), b = DiffEngine.splitLines(new)
+        var table: [[UInt8]: Int] = [:]
+        func id(_ s: String) -> Int {
+            let key = Array(s.utf8)
+            if let v = table[key] { return v }
+            table[key] = table.count
+            return table.count - 1
+        }
+        let ia = a.map(id), ib = b.map(id)
+        var lo = 0
+        while lo < ia.count, lo < ib.count, ia[lo] == ib[lo] { lo += 1 }
+        var ea = ia.count, eb = ib.count
+        while ea > lo, eb > lo, ia[ea - 1] == ib[eb - 1] { ea -= 1; eb -= 1 }
+        let ops: [DiffEngine.Op]
+        if (ea - lo) + (eb - lo) > maxMiddleLines {
+            ops = [DiffEngine.Op](repeating: .equal, count: lo) + [DiffEngine.Op](repeating: .delete, count: ea - lo)
+                + [DiffEngine.Op](repeating: .insert, count: eb - lo) + [DiffEngine.Op](repeating: .equal, count: ia.count - ea)
+        } else {
+            ops = DiffEngine.edit(ia, ib, maxD: 2000)
+        }
+        var result: [Hunk] = []
+        var i = 0, j = 0, offset = 0, k = 0
+        while k < ops.count {
+            if ops[k] == .equal { offset += a[i].utf16.count; i += 1; j += 1; k += 1; continue }
+            let start = offset
+            var deleted = 0
+            var inserted = ""
+            while k < ops.count, ops[k] != .equal {
+                if ops[k] == .delete { deleted += a[i].utf16.count; i += 1 } else { inserted += b[j]; j += 1 }
+                k += 1
+            }
+            offset += deleted
+            result.append(Hunk(old: NSRange(location: start, length: deleted), text: inserted))
+        }
+        return result
+    }
+
+    /// Where an old-text offset lands after the hunks are applied.
+    static func map(_ location: Int, through hunks: [Hunk]) -> Int {
+        var delta = 0
+        for h in hunks {
+            let start = h.old.location, end = NSMaxRange(h.old)
+            if location <= start { break }
+            let n = (h.text as NSString).length
+            if location >= end { delta += n - h.old.length } else { return start + delta + min(location - start, n) }
+        }
+        return location + delta
+    }
+
+    private func replaceRange(_ range: NSRange, with text: String) -> Bool {
+        guard textView.shouldChangeText(in: range, replacementString: text) else { return false }
+        storage.replaceCharacters(in: range, with: NSAttributedString(string: text, attributes: textView.typingAttributes))
+        textView.didChangeText()
+        return true
+    }
+
+    /// Turns the buffer into `newText` by replacing only the changed regions, in ONE undo group (Cmd-Z restores the previous
+    /// text), keeping the caret/selection (mapped through the edits) and scroll position. The caller decides dirtiness.
+    @discardableResult
+    private func applyMinimalEdit(to newText: String, actionName: String) -> ExternalChange {
+        let oldText = textView.string
+        let hunks = Self.hunks(from: oldText, to: newText)
+        let selection = textView.selectedRange()
+        let origin = scrollView.contentView.bounds.origin
+        var wholeText = false
+        if !hunks.isEmpty {
+            textView.breakUndoCoalescing()
+            // An implicit per-event group may still be open (earlier edits in this run-loop turn): close it so this edit is its
+            // own undo step instead of being folded into theirs.
+            while undo.groupingLevel > 0 { undo.endUndoGrouping() }
+            undo.beginUndoGrouping()
+            for h in hunks.reversed() { _ = replaceRange(h.old, with: h.text) }
+            if !Self.same(textView.string, newText) {
+                // Safety net: the hunks did not reproduce the new text exactly. Replace everything (still undoable).
+                wholeText = true
+                _ = replaceRange(NSRange(location: 0, length: (textView.string as NSString).length), with: newText)
+            }
+            undo.setActionName(actionName)
+            undo.endUndoGrouping()
+            if !Self.same(textView.string, newText) {
+                // A delegate vetoed the edits: integrity beats undo, take the text as is.
+                textView.string = newText
+                storage.setAttributes(textView.typingAttributes, range: NSRange(location: 0, length: (newText as NSString).length))
+                wholeText = true
+            }
+        }
+        let length = (newText as NSString).length
+        let lo = min(Self.map(selection.location, through: hunks), length)
+        let hi = min(Self.map(NSMaxRange(selection), through: hunks), length)
+        textView.setSelectedRange(NSRange(location: lo, length: max(0, hi - lo)))
+        scrollView.contentView.scroll(to: origin)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        textView.lineEnding = (newText as NSString).range(of: "\r\n").location != NSNotFound ? "\r\n" : "\n"
+
+        var ranges: [NSRange] = []
+        var delta = 0
+        for h in hunks {
+            let n = (h.text as NSString).length
+            ranges.append(NSRange(location: h.old.location + delta, length: n))
+            delta += n - h.old.length
+        }
+        if wholeText { ranges = [NSRange(location: 0, length: length)] }
+        let ns = newText as NSString
+        func line(at location: Int) -> Int {
+            var count = 1, i = 0
+            while i < min(location, ns.length) { if ns.character(at: i) == 10 { count += 1 }; i += 1 }
+            return count
+        }
+        let change = ExternalChange(url: url, date: Date(), ranges: ranges,
+                                    firstLine: ranges.first.map { line(at: $0.location) },
+                                    lastLine: ranges.last.map { line(at: max($0.location, NSMaxRange($0) - 1)) },
+                                    wholeText: wholeText || hunks.count == 1 && hunks[0].old.length == (oldText as NSString).length)
+        lastExternalChange = change
+        return change
+    }
+
+    private func markClean() {
+        idleWork?.cancel(); idleWork = nil
+        if isDirty { isDirty = false; onDirtyChange?() }
+    }
+
+    /// Replaces the buffer with `text` as one undoable edit and leaves it dirty (used by Local History restore).
+    func replaceText(_ text: String, actionName: String) {
+        snapshotBuffer()
+        applyMinimalEdit(to: text, actionName: actionName)
+    }
+
     // MARK: Disk changes
 
-    /// Picks up edits made outside the app (agents, git). Clean buffers reload in place; for dirty ones the window
-    /// shows a banner (Reload / Keep mine / Show diff) and nothing is overwritten.
+    private var reloadOptions: OpenOptions { OpenOptions(encoding: encoding, autoDetect: false) }
+
+    private enum DiskProblem { case deleted, directory }
+    private var diskProblem: DiskProblem?
+    var isDeletedOnDisk: Bool { diskProblem == .deleted }
+
+    /// The buffer as it would be written (nil if the text cannot be encoded).
+    private func encodedData() -> Data? {
+        guard let body = serializedText().data(using: encoding) else { return nil }
+        return hasBOM ? Data(TextEncodings.bomBytes(for: encoding)) + body : body
+    }
+
+    /// Copies the buffer into Local History (before it is discarded or replaced).
+    private func snapshotBuffer() {
+        guard !isLargeFile, let data = encodedData() else { return }
+        LocalHistory.snapshot(data, of: url)
+    }
+
+    /// Picks up edits made outside the app (agents, git). Clean buffers reload in place as one undoable minimal edit; for dirty
+    /// ones the window shows a banner (Reload / Keep mine / Show diff) and nothing is overwritten.
     func reloadIfChangedOnDisk() {
-        guard !isReadOnly, let date = Self.modificationDate(url), date != diskDate else { return }
+        guard !isReadOnly else { return }
+        switch FileIO.kind(url) {
+        case .missing:
+            if diskProblem != .deleted { diskProblem = .deleted; showDeletedBanner() }
+            return
+        case .directory:
+            if diskProblem != .directory {
+                diskProblem = .directory
+                pane.showBanner("“\(url.lastPathComponent)” was replaced by a directory on disk.", actions: [
+                    ("Save As…", { [weak self] in if let self { self.onSaveAs?(self) } })])
+            }
+            return
+        case .file: break
+        }
+        guard let stamp = FileIO.stamp(url) else { return }
+        let recovered = diskProblem != nil
+        if stamp == diskStamp, !recovered { return }
+        diskProblem = nil
         if isDirty {
-            guard !hasDiskConflict || conflictDate != date else { return }
-            conflictDate = date
+            guard !hasDiskConflict || conflictStamp != stamp else { return }
+            conflictStamp = stamp
             hasDiskConflict = true
             showConflictBanner()
             return
         }
-        guard case .success(let loaded) = Self.read(url, options: OpenOptions(encoding: encoding)) else { return }
-        diskDate = date
-        guard loaded.text != textView.string else { return }
-        replaceBuffer(with: loaded.text)
-    }
-
-    private func replaceBuffer(with text: String) {
-        let selection = textView.selectedRange()
-        let origin = scrollView.contentView.bounds.origin
-        eol = Self.detectLineEnding(text)
-        textView.string = text
-        textView.textStorage?.setAttributes(textView.typingAttributes,
-                                            range: NSRange(location: 0, length: (text as NSString).length))
-        textView.setSelectedRange(NSRange(location: min(selection.location, (text as NSString).length), length: 0))
-        scrollView.contentView.scroll(to: origin)
-        highlighter?.reparse()
-        textView.undoManager?.removeAllActions()
+        guard case .success(let loaded) = Self.read(url, options: reloadOptions) else { return }
+        diskStamp = stamp
+        if recovered { clearConflict() }
+        guard !Self.same(loaded.text, textView.string) else { return }
+        snapshotBuffer()
+        hasBOM = loaded.bom
+        eol = Self.detectLineEnding(loaded.text)
+        let change = applyMinimalEdit(to: loaded.text, actionName: "Reload from Disk")
+        markClean()
+        flash(change.ranges)
+        onExternalReload?(self, change)
     }
 
     /// Text currently on disk (for the diff view).
     func currentDiskText() -> String? {
-        if case .success(let loaded) = Self.read(url, options: OpenOptions(encoding: encoding)) { return loaded.text }
+        if case .success(let loaded) = Self.read(url, options: reloadOptions) { return loaded.text }
         return nil
     }
 
@@ -347,41 +600,58 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         ])
     }
 
-    /// Discards the buffer's edits and loads the disk version.
+    private func showDeletedBanner() {
+        pane.showBanner("“\(url.lastPathComponent)” was deleted from disk — your buffer is kept.", actions: [
+            ("Recreate", { [weak self] in self?.save(overwriteNewer: true) }),
+            ("Save As…", { [weak self] in if let self { self.onSaveAs?(self) } }),
+            ("Close", { [weak self] in if let self { self.onCloseRequest?(self) } }),
+        ])
+    }
+
+    /// Discards the buffer's edits and loads the disk version (as an undoable edit; the discarded text goes to Local History).
     func reloadFromDisk() {
-        if let text = currentDiskText() {
-            replaceBuffer(with: text)
-            diskDate = Self.modificationDate(url)
-            let wasDirty = isDirty
-            isDirty = false
-            if wasDirty { onDirtyChange?() }
+        if case .success(let loaded) = Self.read(url, options: reloadOptions) {
+            if isDirty { snapshotBuffer() }
+            hasBOM = loaded.bom
+            eol = Self.detectLineEnding(loaded.text)
+            let change = applyMinimalEdit(to: loaded.text, actionName: "Reload from Disk")
+            diskStamp = FileIO.stamp(url)
+            markClean()
+            flash(change.ranges)
         }
         clearConflict()
     }
 
     /// Keeps the buffer; a later save may overwrite the disk version without asking again.
     func keepMine() {
-        diskDate = Self.modificationDate(url)
+        diskStamp = FileIO.stamp(url)
         clearConflict()
     }
 
     private func clearConflict() {
         hasDiskConflict = false
-        conflictDate = nil
+        conflictStamp = nil
+        diskProblem = nil
+        saveErrorShown = false
         pane.hideBanner()
     }
 
     var isBannerVisible: Bool { pane.isBannerVisible }
     var bannerMessage: String { pane.banner.message }
     var bannerButtons: [String] { pane.banner.buttonTitles }
+    /// Presses a banner button by title (tests, menus).
+    func pressBannerButton(_ title: String) { pane.banner.press(title) }
 
     /// The disk version is newer than what this buffer was loaded from or last saved as.
     var hasNewerDiskVersion: Bool {
-        guard let date = Self.modificationDate(url), let known = diskDate else { return false }
-        return date != known
+        guard let stamp = FileIO.stamp(url), let known = diskStamp else { return false }
+        return stamp != known
     }
 
-    func retarget(to newURL: URL) { url = newURL }
+    func retarget(to newURL: URL) {
+        url = newURL
+        if let stamp = FileIO.stamp(newURL) { diskStamp = stamp }
+    }
 
     var caretLocation: Int { textView.selectedRange().location }
     var scrollY: Double { Double(scrollView.contentView.bounds.origin.y) }
@@ -393,13 +663,76 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
-    /// Writes the buffer (keeping the file's encoding and line endings). Returns false if nothing was written.
+    // MARK: Flash of externally changed lines
+
+    var isFlashing: Bool { flashView?.superview != nil }
+    var flashBandCount: Int { flashView?.superview != nil ? flashView?.bands.count ?? 0 : 0 }
+
+    /// Tints the changed lines for 1.5 s (an overlay above the text view: syntax colours and bracket highlights are untouched).
+    func flash(_ ranges: [NSRange], duration: TimeInterval = 1.5) {
+        flashView?.removeFromSuperview()
+        flashView = nil
+        guard !ranges.isEmpty, !isLargeFile, let lm = textView.layoutManager, textView.textContainer != nil else { return }
+        let length = storage.length
+        guard length > 0 else { return }
+        var bands: [NSRect] = []
+        let inset = textView.textContainerOrigin
+        for r in ranges.prefix(60) {
+            var range = r
+            if range.length == 0 { range = NSRange(location: min(range.location, length - 1), length: 1) }
+            range = NSIntersectionRange(range, NSRange(location: 0, length: length))
+            guard range.length > 0 else { continue }
+            lm.ensureLayout(forCharacterRange: range)
+            let glyphs = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            lm.enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, _, _ in
+                if bands.count < 400 { bands.append(NSRect(x: 0, y: rect.minY + inset.y, width: self.textView.bounds.width, height: rect.height)) }
+            }
+        }
+        guard !bands.isEmpty else { return }
+        let overlay = FlashOverlay(frame: textView.bounds)
+        overlay.bands = bands
+        overlay.autoresizingMask = [.width]
+        textView.addSubview(overlay)
+        flashView = overlay
+        overlay.wantsLayer = true
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        fade.duration = duration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        fade.fillMode = .forwards
+        fade.isRemovedOnCompletion = false
+        overlay.layer?.add(fade, forKey: "fade")
+        Timer.scheduledTimer(withTimeInterval: duration + 0.1, repeats: false) { [weak overlay] _ in overlay?.removeFromSuperview() }
+    }
+
+    // MARK: Encoding
+
+    var encodingName: String { TextEncodings.name(encoding, bom: hasBOM) }
+
+    /// "Save with encoding": the next save writes the text in `new`. False if some character cannot be represented.
+    @discardableResult
+    func setSaveEncoding(_ new: String.Encoding) -> Bool {
+        guard !isReadOnly, !isLossyDecoded, serializedText().data(using: new) != nil else { return false }
+        encoding = new
+        hasBOM = new == .utf16LittleEndian || new == .utf16BigEndian
+        if !isDirty { isDirty = true; onDirtyChange?() }
+        return true
+    }
+
+    // MARK: Saving
+
+    private var saveStarted = Date.distantPast
+
+    /// Writes the buffer (keeping the file's real target, permissions, encoding, BOM and line endings). Returns true only if the
+    /// write has happened by the time this returns (a will-save hook may finish asynchronously: use `completion`).
     /// A newer disk version is never overwritten silently: the user is asked (headless runs decline).
     @discardableResult
-    func save(overwriteNewer: Bool = false) -> Bool {
-        guard !isReadOnly else { return false }
+    func save(overwriteNewer: Bool = false, overwriteReadOnly: Bool = false, completion: ((Bool) -> Void)? = nil) -> Bool {
+        guard !isReadOnly, !isLossyDecoded else { completion?(false); return false }
+        if saveInFlight, Date().timeIntervalSince(saveStarted) < 15 { completion?(false); return false }
         if !overwriteNewer, hasNewerDiskVersion {
-            if AppEnv.headless { return false }
+            if AppEnv.headless { completion?(false); return false }
             let alert = NSAlert()
             alert.messageText = "“\(url.lastPathComponent)” changed on disk"
             alert.informativeText = "Saving will overwrite the newer version on disk with your buffer."
@@ -408,25 +741,128 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
             alert.addButton(withTitle: "Cancel")
             switch alert.runModal() {
             case .alertFirstButtonReturn: break
-            case .alertSecondButtonReturn: onShowDiff?(self); return false
-            default: return false
+            case .alertSecondButtonReturn: onShowDiff?(self); completion?(false); return false
+            default: completion?(false); return false
             }
+            return runSave(auto: false, allowNewer: true, overwriteReadOnly: overwriteReadOnly, completion: completion)
         }
-        do {
-            guard let data = serializedText().data(using: encoding) else {
-                throw CocoaError(.fileWriteInapplicableStringEncoding)
-            }
-            try data.write(to: url, options: .atomic)
-            isDirty = false
-            diskDate = Self.modificationDate(url)
-            clearConflict()
-            onDirtyChange?()
-            onSave?()
-            EditorEvents.notifySaved(self)
-            return true
-        } catch {
-            if !AppEnv.headless { NSAlert(error: error).runModal() }
+        return runSave(auto: false, allowNewer: overwriteNewer, overwriteReadOnly: overwriteReadOnly, completion: completion)
+    }
+
+    private func runSave(auto: Bool, allowNewer: Bool, overwriteReadOnly: Bool, completion: ((Bool) -> Void)?) -> Bool {
+        saveInFlight = true
+        saveStarted = Date()
+        var proceeded = false
+        var finished = false
+        var ok = false
+        EditorEvents.notifyWillSave(self) { [weak self] in
+            guard !proceeded else { return }
+            proceeded = true
+            guard let self else { completion?(false); return }
+            ok = self.writeNow(auto: auto, allowNewer: allowNewer, overwriteReadOnly: overwriteReadOnly)
+            self.saveInFlight = false
+            finished = true
+            completion?(ok)
+        }
+        return finished && ok
+    }
+
+    private func writeNow(auto: Bool, allowNewer: Bool, overwriteReadOnly: Bool) -> Bool {
+        // The disk may have moved on while a will-save hook (formatter) was running.
+        if !allowNewer, hasNewerDiskVersion {
+            if !hasDiskConflict { reloadIfChangedOnDisk() }
             return false
         }
+        if auto, textView.hasMarkedText() { return false }
+        guard let data = encodedData() else {
+            showSaveError(FileIOError.cannotEncode(encodingName))
+            return false
+        }
+        if !isLargeFile { LocalHistory.snapshotDisk(of: url) }
+        do {
+            try FileIO.write(data, to: url, overwriteReadOnly: overwriteReadOnly)
+        } catch {
+            showSaveError(error)
+            return false
+        }
+        markClean()
+        diskStamp = FileIO.stamp(url)
+        diskProblem = nil
+        clearConflict()
+        onDirtyChange?()
+        onSave?()
+        EditorEvents.notifySaved(self)
+        return true
+    }
+
+    private func showSaveError(_ error: Error) {
+        saveErrorShown = true
+        let name = url.lastPathComponent
+        let saveAs: (String, () -> Void) = ("Save As…", { [weak self] in if let self { self.onSaveAs?(self) } })
+        switch error as? FileIOError {
+        case .readOnly:
+            pane.showBanner("“\(name)” is read-only on disk. Overwrite it?", actions: [
+                ("Overwrite", { [weak self] in self?.save(overwriteReadOnly: true) }), saveAs])
+        case .isDirectory:
+            pane.showBanner("Can’t save: “\(name)” is now a directory.", actions: [saveAs])
+        case .cannotEncode(let encodingName):
+            pane.showBanner("Can’t save as \(encodingName): the text has characters it cannot represent.", actions: [
+                ("Save as UTF-8", { [weak self] in if let self, self.setSaveEncoding(.utf8) { self.saveErrorShown = false; self.save() } }),
+                ("Dismiss", { [weak self] in self?.clearConflict() })])
+        default:
+            pane.showBanner("Couldn’t save “\(name)”: \(error.localizedDescription)", actions: [
+                ("Retry", { [weak self] in self?.save() }), saveAs])
+        }
+    }
+
+    // MARK: Auto-save
+
+    /// Saves a modified buffer on app/window focus loss, tab switch or idle. Never overwrites a newer disk version (the
+    /// dirty-vs-disk banner is shown instead), never saves mid-IME composition, lossy-decoded, read-only, large or vanished files.
+    @discardableResult
+    func autoSave(_ trigger: AutoSave.Trigger) -> AutoSave.Outcome {
+        guard AutoSave.enabled(for: trigger) else { return .skipped("disabled") }
+        guard isDirty else { return .skipped("clean") }
+        guard !isReadOnly else { return .skipped("read-only") }
+        guard !isLossyDecoded else { return .skipped("lossy encoding") }
+        guard !isLargeFile else { return .skipped("large file") }
+        guard textView.hasMarkedText() == false else { return .skipped("composing") }
+        guard FileIO.kind(url) == .file else { reloadIfChangedOnDisk(); return .skipped("missing on disk") }
+        guard !hasDiskConflict else { return .skipped("disk conflict") }
+        if hasNewerDiskVersion { reloadIfChangedOnDisk(); return .skipped("disk newer") }
+        guard !saveErrorShown else { return .skipped("save error pending") }
+        guard !saveInFlight || Date().timeIntervalSince(saveStarted) >= 15 else { return .skipped("busy") }
+        var done = false
+        let ok = runSave(auto: true, allowNewer: false, overwriteReadOnly: false) { _ in done = true }
+        if ok { return .saved }
+        return done ? .skipped("not saved") : .pending
+    }
+
+    var hasPendingIdleSave: Bool { idleWork != nil }
+
+    private func scheduleIdleSave() {
+        idleWork?.cancel()
+        idleWork = nil
+        let seconds = AutoSave.idleSeconds
+        guard seconds > 0 else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.idleWork = nil
+            if self.textView.hasMarkedText() { self.scheduleIdleSave(); return }
+            self.autoSave(.idle)
+        }
+        idleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+}
+
+/// Translucent bands over freshly reloaded lines; never takes events.
+final class FlashOverlay: NSView {
+    var bands: [NSRect] = []
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.systemYellow.withAlphaComponent(Theme.isDark ? 0.22 : 0.38).setFill()
+        for band in bands where band.intersects(dirtyRect) { band.fill() }
     }
 }

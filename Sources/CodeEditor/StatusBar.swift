@@ -5,12 +5,13 @@ final class StatusBar: NSView {
     var onGoToLine: (() -> Void)?
     var onChooseIndent: ((NSView) -> Void)?
     var onShowGit: (() -> Void)?
+    var onChooseEncoding: ((NSView) -> Void)?
 
     private let branch = StatusBar.button()
     private let position = StatusBar.button()
     private let indent = StatusBar.button()
     private let lineEnding = StatusBar.label()
-    private let encoding = StatusBar.label()
+    private let encoding = StatusBar.button()
     private let language = StatusBar.label()
     private let server = StatusBar.label()
     private let notice = StatusBar.label()
@@ -23,6 +24,7 @@ final class StatusBar: NSView {
         branch.target = self; branch.action = #selector(branchTapped)
         position.target = self; position.action = #selector(positionTapped)
         indent.target = self; indent.action = #selector(indentTapped)
+        encoding.target = self; encoding.action = #selector(encodingTapped)
         let right = NSStackView(views: [server, language, indent, lineEnding, encoding, position])
         right.spacing = 14
         notice.setContentHuggingPriority(.init(1), for: .horizontal)
@@ -64,8 +66,8 @@ final class StatusBar: NSView {
     @objc private func restyle() {
         layer?.backgroundColor = Theme.background.blended(withFraction: Theme.isDark ? 0.05 : 0.025, of: Theme.foreground)?.cgColor
         topLine.layer?.backgroundColor = Theme.foreground.withAlphaComponent(0.12).cgColor
-        for l in [lineEnding, encoding, language, server, notice] { l.textColor = Theme.gutter }
-        for b in [branch, position, indent] { b.contentTintColor = Theme.gutter; setTitle(b, b.title) }
+        for l in [lineEnding, language, server, notice] { l.textColor = Theme.gutter }
+        for b in [branch, position, indent, encoding] { b.contentTintColor = Theme.gutter; setTitle(b, b.title) }
     }
 
     private func setTitle(_ b: NSButton, _ text: String) {
@@ -73,16 +75,17 @@ final class StatusBar: NSView {
     }
 
     func update(line: Int?, column: Int?, selected: Int, indent indentLabel: String?, language languageName: String?,
-                lineEnding eol: String?, branch branchName: String?, server serverText: String) {
+                lineEnding eol: String?, branch branchName: String?, server serverText: String, encoding encodingName: String? = nil) {
         setTitle(position, line.map { "\($0):\(column ?? 1)" + (selected > 0 ? " (\(selected) sel)" : "") } ?? "")
         setTitle(indent, indentLabel ?? "")
-        encoding.stringValue = line == nil ? "" : "UTF-8"
+        setTitle(encoding, line == nil ? "" : (encodingName ?? "UTF-8"))
         lineEnding.stringValue = eol ?? ""
         language.stringValue = languageName ?? ""
         server.stringValue = serverText
         setTitle(branch, branchName ?? "")
     }
 
+    var encodingText: String { encoding.attributedTitle.string }
     var branchText: String { branch.attributedTitle.string }
     var noticeText: String { notice.stringValue }
 
@@ -104,5 +107,6 @@ final class StatusBar: NSView {
 
     @objc private func positionTapped() { onGoToLine?() }
     @objc private func indentTapped() { onChooseIndent?(indent) }
+    @objc private func encodingTapped() { onChooseEncoding?(encoding) }
     @objc private func branchTapped() { onShowGit?() }
 }
