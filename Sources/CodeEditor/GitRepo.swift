@@ -38,7 +38,8 @@ final class GitRepo {
     // MARK: process
 
     @discardableResult
-    private static func execute(_ args: [String], in dir: URL, optionalLocks: Bool = false) throws -> Data {
+    private static func execute(_ args: [String], in dir: URL, optionalLocks: Bool = false,
+                                env extra: [String: String] = [:], input: Data? = nil) throws -> Data {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: gitPath)
         p.arguments = ["-c", "core.quotepath=off"] + args
@@ -49,12 +50,16 @@ final class GitRepo {
         env["GIT_MERGE_AUTOEDIT"] = "no"
         if env["GIT_SSH_COMMAND"] == nil { env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes" }
         if optionalLocks { env["GIT_OPTIONAL_LOCKS"] = "0" }
+        for (k, v) in extra { env[k] = v }
         p.environment = env
-        let outPipe = Pipe(), errPipe = Pipe()
+        let outPipe = Pipe(), errPipe = Pipe(), inPipe = Pipe()
         p.standardOutput = outPipe
         p.standardError = errPipe
-        p.standardInput = FileHandle.nullDevice
+        p.standardInput = input == nil ? FileHandle.nullDevice : inPipe
         do { try p.run() } catch { throw GitError(message: "Cannot launch git: \(error.localizedDescription)") }
+        if let input {
+            DispatchQueue.global().async { inPipe.fileHandleForWriting.write(input); try? inPipe.fileHandleForWriting.close() }
+        }
         var errData = Data()
         let group = DispatchGroup()
         group.enter()
@@ -71,8 +76,8 @@ final class GitRepo {
     }
 
     @discardableResult
-    private func git(_ args: [String], optionalLocks: Bool = false) throws -> Data {
-        try Self.execute(args, in: root, optionalLocks: optionalLocks)
+    private func git(_ args: [String], optionalLocks: Bool = false, env: [String: String] = [:], input: Data? = nil) throws -> Data {
+        try Self.execute(args, in: root, optionalLocks: optionalLocks, env: env, input: input)
     }
 
     private func text(_ args: [String]) throws -> String {
@@ -242,6 +247,93 @@ final class GitRepo {
         if !others.isEmpty { try git(["reset", "-q", "--"] + others) }
         defer { if !others.isEmpty { try? stage(others) } }
         try git(args)
+    }
+
+    // MARK: partial staging / committing
+
+    struct CommitEntry {
+        let path: String
+        /// nil = the full working copy (or its absence), otherwise the exact blob content to commit
+        let content: String?
+    }
+
+    private func entryMode(_ path: String) -> String {
+        for args in [["ls-files", "-s", "--", path], ["ls-tree", "HEAD", "--", path]] {
+            if let out = try? text(args), let first = out.split(separator: "\n").first,
+               let mode = first.split(separator: " ").first, mode.count == 6 { return String(mode) }
+        }
+        let attrs = try? FileManager.default.attributesOfItem(atPath: root.appendingPathComponent(path).path)
+        let perms = (attrs?[.posixPermissions] as? NSNumber)?.intValue ?? 0o644
+        return perms & 0o100 != 0 ? "100755" : "100644"
+    }
+
+    private func writeBlob(_ content: String, path: String, env: [String: String] = [:]) throws -> String {
+        let out = try git(["hash-object", "-w", "--stdin", "--path=" + path], env: env, input: Data(content.utf8))
+        return String(decoding: out, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Sets the index entry of `path` to exactly `content`; the working copy is untouched.
+    func stagePartial(path: String, content: String) throws {
+        let sha = try writeBlob(content, path: path)
+        try git(["update-index", "--add", "--cacheinfo", "\(entryMode(path)),\(sha),\(path)"])
+    }
+
+    /// `content` is the HEAD version plus the changes that stay staged; the rest returns to the working copy only.
+    func unstagePartial(path: String, content: String) throws {
+        let head = try? headContent(of: path)
+        if head == content || (head == nil && content.isEmpty) { try unstage([path]) }
+        else { try stagePartial(path: path, content: content) }
+    }
+
+    /// Commits the given content without touching the working tree: the commit is built in a temporary index,
+    /// then the real index is reset for those paths so `status` shows exactly what was left out.
+    func commitPartial(message: String, entries: [CommitEntry], amend: Bool) throws {
+        guard !entries.isEmpty else { try commit(message: message, paths: nil, amend: amend); return }
+        if isMerging { try commit(message: message, paths: entries.map(\.path), amend: amend); return }
+        let msg = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let head = hasHead
+        if amend && !head { throw GitError(message: "Nothing to amend") }
+        if msg.isEmpty && !amend { throw GitError(message: "Commit message is empty") }
+
+        let tmpIndex = gitDir.appendingPathComponent("ce-partial-index-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: tmpIndex) }
+        let env = ["GIT_INDEX_FILE": tmpIndex]
+        if head { try git(["read-tree", "HEAD"], env: env) }
+
+        let full = entries.filter { $0.content == nil }.map(\.path)
+        if !full.isEmpty { try git(["update-index", "--add", "--remove", "--"] + full, env: env) }
+        for e in entries { if let c = e.content {
+            let sha = try writeBlob(c, path: e.path)
+            try git(["update-index", "--add", "--cacheinfo", "\(entryMode(e.path)),\(sha),\(e.path)"], env: env)
+        } }
+        let tree = String(decoding: try git(["write-tree"], env: env), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let headTree = head ? String(decoding: try git(["rev-parse", "HEAD^{tree}"]), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                            : "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        if tree == headTree && !amend { throw GitError(message: "Nothing to commit") }
+
+        var parents: [String] = []
+        var commitEnv: [String: String] = [:]
+        var message = msg
+        if head {
+            let oldHead = String(decoding: try git(["rev-parse", "HEAD"]), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            if amend {
+                let parentLine = try text(["rev-list", "--parents", "-n", "1", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
+                parents = parentLine.split(separator: " ").dropFirst().map(String.init)
+                let a = try text(["log", "-1", "--format=%an%x00%ae%x00%aI"]).trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\0", omittingEmptySubsequences: false).map(String.init)
+                if a.count == 3 { commitEnv = ["GIT_AUTHOR_NAME": a[0], "GIT_AUTHOR_EMAIL": a[1], "GIT_AUTHOR_DATE": a[2]] }
+                if message.isEmpty { message = try lastCommitMessage() }
+            } else { parents = [oldHead] }
+        }
+        var args = ["commit-tree", tree]
+        for p in parents { args += ["-p", p] }
+        args += ["-F", "-"]
+        let sha = String(decoding: try git(args, env: commitEnv, input: Data((message + "\n").utf8)), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let subject = message.split(separator: "\n").first.map(String.init) ?? ""
+        try git(["update-ref", "-m", (amend ? "commit (amend): " : head ? "commit: " : "commit (initial): ") + subject, "HEAD", sha])
+        let paths = entries.map(\.path)
+        if (try? git(["reset", "-q", "--"] + paths)) == nil {
+            for p in paths { try? git(["reset", "-q", "--", p]) }
+        }
     }
 
     // MARK: remotes
