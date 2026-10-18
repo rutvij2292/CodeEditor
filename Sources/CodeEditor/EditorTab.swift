@@ -111,9 +111,14 @@ final class EditorPane: NSView {
 
     let breadcrumbBar: BreadcrumbBar
     private var breadcrumbHeight: NSLayoutConstraint!
+    /// Viewer pane support (ViewerSystem.swift): the editor view and its trailing edge constraint, swapped for split / preview modes.
+    let contentView: NSView
+    var contentTrailing: NSLayoutConstraint!
+    var viewerState = ViewerPaneState()
 
     init(content: NSView, breadcrumbs: BreadcrumbBar) {
         breadcrumbBar = breadcrumbs
+        contentView = content
         super.init(frame: .zero)
         content.translatesAutoresizingMaskIntoConstraints = false
         banner.translatesAutoresizingMaskIntoConstraints = false
@@ -128,8 +133,10 @@ final class EditorPane: NSView {
             breadcrumbs.topAnchor.constraint(equalTo: banner.bottomAnchor), breadcrumbs.leadingAnchor.constraint(equalTo: leadingAnchor),
             breadcrumbs.trailingAnchor.constraint(equalTo: trailingAnchor), breadcrumbHeight,
             content.topAnchor.constraint(equalTo: breadcrumbs.bottomAnchor), content.leadingAnchor.constraint(equalTo: leadingAnchor),
-            content.trailingAnchor.constraint(equalTo: trailingAnchor), content.bottomAnchor.constraint(equalTo: bottomAnchor),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+        contentTrailing = content.trailingAnchor.constraint(equalTo: trailingAnchor)
+        contentTrailing.isActive = true
         registerForDraggedTypes([.fileURL])
     }
     required init?(coder: NSCoder) { fatalError() }

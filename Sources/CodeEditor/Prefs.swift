@@ -49,6 +49,11 @@ enum Prefs {
     static var defaultIndentSize: Int { get { get("defaultIndentSize", 4) } set { set("defaultIndentSize", min(8, max(1, newValue))) } }
     static var defaultIndentUsesTabs: Bool { get { get("defaultIndentUsesTabs", false) } set { set("defaultIndentUsesTabs", newValue) } }
 
+    // MARK: Viewers (Markdown preview, JSON/YAML tree)
+    /// View mode remembered per file type: "source" | "split" | "preview". See ViewerKinds.swift.
+    static func viewerMode(_ kind: String, fallback: String) -> String { get("viewerMode." + kind, fallback) }
+    static func setViewerMode(_ kind: String, _ mode: String) { set("viewerMode." + kind, mode) }
+
     // MARK: Terminal
     /// Where the terminal lives: "right" (docked beside the editor) or "bottom" (tab in the bottom panel).
     static var terminalDock: String { get { get("terminalDock", "right") } set { set("terminalDock", newValue == "bottom" ? "bottom" : "right") } }
@@ -81,6 +86,7 @@ enum Prefs {
         "defaultIndentSize", "defaultIndentUsesTabs",
         "terminalDock", "terminalFontName", "terminalFontSize", "terminalCursorStyle", "terminalScrollback", "terminalShell",
         "terminalAgents", "terminalNotifyOnIdle", "completionMinChars", "completionDelayMs", "intelephenseLicenceConfigured",
+        "viewerMode.markdown", "viewerMode.json", "viewerMode.yaml",
     ]
 
     /// Removes the stored values (back to defaults) and posts `didChange` once per key.

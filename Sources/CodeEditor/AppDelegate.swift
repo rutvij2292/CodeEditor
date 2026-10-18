@@ -57,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             if let key = note.userInfo?["key"] as? String, key.hasPrefix("completion") { self?.applyCompletionPrefs() }
         }
         CompletionSystem.start()
+        ViewerSystem.start()
         CompletionSystem.symbolProvider = { [weak self] in self?.active?.symbolEntries ?? [] }
         LanguageServers.start()
         LanguageServers.openLocation = { [weak self] url, line, _ in self?.active?.open(url, line: line) }
@@ -287,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// Cmd-Opt-L: the project's real formatter (Pint / Prettier / LSP); if none applies, the editor's safe re-indent.
     @objc func reformatCode(_ sender: Any?) {
         guard let tab = active?.current else { return }
-        let fallback = { tab.textView.reformatCode(nil) }
+        let fallback = { if !ViewerSystem.reformat(tab) { tab.textView.reformatCode(nil) } }
         let hasSelection = tab.textView.selectedRange().length > 0
         let finish: (Formatter.Result) -> Void = { result in
             switch result {

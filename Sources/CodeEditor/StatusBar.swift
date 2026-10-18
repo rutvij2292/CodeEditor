@@ -7,6 +7,9 @@ final class StatusBar: NSView {
     var onShowGit: (() -> Void)?
     var onChooseEncoding: ((NSView) -> Void)?
     var onToggleTerminal: (() -> Void)?
+    /// Cycles the Source / Split / Preview viewer mode (shown for Markdown, JSON and YAML files only).
+    var onCycleViewer: (() -> Void)?
+    private let viewerButton = StatusBar.button()
 
     private let branch = StatusBar.button()
     private let position = StatusBar.button()
@@ -53,7 +56,10 @@ final class StatusBar: NSView {
         NotificationCenter.default.addObserver(forName: PowerState.didChange, object: nil, queue: .main) { [weak self] _ in
             self?.powerLabel.isHidden = !PowerState.shared.saver
         }
-        let right = NSStackView(views: [powerLabel, server, language, indent, lineEnding, encoding, position, terminalBox])
+        viewerButton.target = self; viewerButton.action = #selector(viewerTapped)
+        viewerButton.toolTip = "View mode: Source / Split / Preview (\u{2303}\u{2325}\u{2318}V)"
+        viewerButton.isHidden = true
+        let right = NSStackView(views: [powerLabel, server, language, viewerButton, indent, lineEnding, encoding, position, terminalBox])
         right.spacing = 14
         notice.setContentHuggingPriority(.init(1), for: .horizontal)
         notice.setContentCompressionResistancePriority(.init(1), for: .horizontal)
@@ -95,7 +101,7 @@ final class StatusBar: NSView {
         layer?.backgroundColor = Theme.background.blended(withFraction: Theme.isDark ? 0.05 : 0.025, of: Theme.foreground)?.cgColor
         topLine.layer?.backgroundColor = Theme.foreground.withAlphaComponent(0.12).cgColor
         for l in [lineEnding, language, server, notice] { l.textColor = Theme.gutter }
-        for b in [branch, position, indent, encoding] { b.contentTintColor = Theme.gutter; setTitle(b, b.title) }
+        for b in [branch, position, indent, encoding, viewerButton] { b.contentTintColor = Theme.gutter; setTitle(b, b.title) }
         terminalButton.contentTintColor = Theme.gutter
         setTerminal(attention: terminalAttention)
     }
@@ -114,6 +120,13 @@ final class StatusBar: NSView {
         server.stringValue = serverText
         setTitle(branch, branchName ?? "")
     }
+
+    func setViewer(visible: Bool, text: String) {
+        viewerButton.isHidden = !visible
+        setTitle(viewerButton, visible ? "\u{25A7} " + text : "")
+    }
+    var viewerText: String { viewerButton.isHidden ? "" : viewerButton.attributedTitle.string }
+    @objc private func viewerTapped() { onCycleViewer?() }
 
     /// Terminal toggle state: orange dot = background output, green = an agent finished.
     func setTerminal(attention: TerminalPanelController.Attention) {
