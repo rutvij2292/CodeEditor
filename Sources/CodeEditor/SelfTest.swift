@@ -86,6 +86,7 @@ enum SelfTest {
                     SelfTestBranches.run()
                     SelfTestPR.run()
                     SelfTestInstances.run()
+                    SelfTestArtisan.run {
                     viewerChecks(app: app, w: w) {
                         SelfTestHttp.run(w: w) {
                             SelfTestChangeReview.run(w: w) {
@@ -95,6 +96,7 @@ enum SelfTest {
                                 }
                             }
                         }
+                    }
                     }
                 }
             }
