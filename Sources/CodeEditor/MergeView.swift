@@ -679,6 +679,7 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
             self.result.text.needsDisplay = true
             if alpha <= 0 { t.invalidate() }
         }
+        tick.tolerance = 0.01
         RunLoop.main.add(tick, forMode: .common)
         flashTimer = tick
     }

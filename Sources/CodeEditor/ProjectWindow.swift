@@ -175,7 +175,13 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         gitRootResolved = false
         gitHost.subviews.forEach { $0.removeFromSuperview() }
         bottom.setPersistence(key: AppEnv.headless ? nil : url.path)
-        watcher = AppEnv.headless ? nil : FSWatcher(path: url.path) { [weak self] paths in self?.filesChanged(paths) }
+        let watchRoot = url
+        let heavy = ["node_modules", ".build", "storage/framework", "storage/logs", "bootstrap/cache", "public/build", "dist", ".next"]
+            + (ProjectIndex.includeVendor ? [] : ["vendor"])
+        watcher = AppEnv.headless ? nil : FSWatcher(
+            path: url.path, excluded: heavy.map { url.appendingPathComponent($0).path },
+            filter: { paths in paths.filter { $0.contains("/.git/") || !ProjectIndex.isSkipped(path: $0, under: watchRoot) } }
+        ) { [weak self] paths in self?.filesChanged(paths) }
         // FSEvents replaces polling; poll slowly only when the watcher could not start.
         fallbackTimer?.invalidate()
         fallbackTimer = nil
@@ -183,6 +189,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             fallbackTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
                 self?.editors.values.forEach { $0.reloadIfChangedOnDisk() }
             }
+            fallbackTimer?.tolerance = 2
         }
         updateTitle()
         GitRepo.repoRoot(for: url) { [weak self] repo in
@@ -213,7 +220,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         }
         if content {
             if let root { LaravelNavigator.invalidate(root: root) }
-            tree.refresh()
+            tree.refreshIfAffected(paths)
             index?.refresh(force: true) { [weak self] in self?.symbols?.rebuild() }
             editors.values.forEach { $0.reloadIfChangedOnDisk() }
         }

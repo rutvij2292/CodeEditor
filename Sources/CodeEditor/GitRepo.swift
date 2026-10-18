@@ -44,6 +44,7 @@ final class GitRepo {
         p.executableURL = URL(fileURLWithPath: gitPath)
         p.arguments = ["-c", "core.quotepath=off"] + args
         p.currentDirectoryURL = dir
+        p.qualityOfService = .utility
         var env = ProcessInfo.processInfo.environment
         env["GIT_TERMINAL_PROMPT"] = "0"
         env["GIT_EDITOR"] = "true"

@@ -15,7 +15,7 @@ enum Blame {
     static var suppressInline: ((EditorTab, NSRange) -> Bool)?
 
     static let gitQueue = DispatchQueue(label: "Blame.git", qos: .utility)
-    static let mapQueue = DispatchQueue(label: "Blame.map", qos: .userInitiated)
+    static let mapQueue = DispatchQueue(label: "Blame.map", qos: .utility)
 
     private static var started = false
     fileprivate static var controllers: [ObjectIdentifier: BlameController] = [:]

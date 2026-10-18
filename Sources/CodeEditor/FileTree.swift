@@ -13,15 +13,52 @@ final class FileNode {
     var children: [FileNode] {
         if let loaded { return loaded }
         let items = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
-        let nodes = items
-            .filter { !ProjectIndex.treeHidden.contains($0.lastPathComponent) }
-            .map(FileNode.init)
-            .sorted {
-                if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
-                return $0.url.lastPathComponent.localizedStandardCompare($1.url.lastPathComponent) == .orderedAscending
-            }
+        // Sort keys computed once (lowercased UTF-8) and compared with a byte-level natural order: String comparison with
+        // options / localizedStandardCompare inside the comparator cost 100+ ms for a 2k-file folder.
+        var entries: [(node: FileNode, name: String, key: [UInt8], ascii: Bool)] = []
+        entries.reserveCapacity(items.count)
+        for item in items {
+            let name = item.lastPathComponent
+            if ProjectIndex.treeHidden.contains(name) { continue }
+            let key = Array(name.lowercased().utf8)
+            entries.append((FileNode(url: item), name, key, !key.contains { $0 >= 128 }))
+        }
+        entries.sort {
+            if $0.node.isDirectory != $1.node.isDirectory { return $0.node.isDirectory }
+            if $0.ascii && $1.ascii { return FileNode.naturalLess($0.key, $1.key) }
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+        let nodes = entries.map(\.node)
         loaded = nodes
         return nodes
+    }
+
+    /// Finder-like order on lowercased ASCII bytes: digit runs compare by value ("file2" < "file10").
+    static func naturalLess(_ a: [UInt8], _ b: [UInt8]) -> Bool {
+        var i = 0, j = 0
+        while i < a.count, j < b.count {
+            let x = a[i], y = b[j]
+            let xd = x >= 48 && x <= 57, yd = y >= 48 && y <= 57
+            if xd && yd {
+                var i2 = i, j2 = j
+                while i2 < a.count, a[i2] == 48 { i2 += 1 }
+                while j2 < b.count, b[j2] == 48 { j2 += 1 }
+                var ie = i2, je = j2
+                while ie < a.count, a[ie] >= 48, a[ie] <= 57 { ie += 1 }
+                while je < b.count, b[je] >= 48, b[je] <= 57 { je += 1 }
+                if ie - i2 != je - j2 { return ie - i2 < je - j2 }
+                var k = 0
+                while k < ie - i2 {
+                    if a[i2 + k] != b[j2 + k] { return a[i2 + k] < b[j2 + k] }
+                    k += 1
+                }
+                i = ie; j = je
+                continue
+            }
+            if x != y { return x < y }
+            i += 1; j += 1
+        }
+        return a.count - i < b.count - j
     }
 
     func child(named name: String) -> FileNode? { children.first { $0.url.lastPathComponent == name } }
@@ -122,6 +159,19 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         outline.reloadData()
         expand(paths: expanded)
         if let selected { reveal(selected) }
+    }
+
+    /// Refreshes only when a changed path lives directly in the root or in an expanded folder: events inside collapsed
+    /// folders (build output, caches, other branches' files) cost nothing.
+    func refreshIfAffected(_ paths: Set<String>) {
+        guard let rootURL = root?.url else { return }
+        let base = VCSKind.canonical(rootURL.path)
+        let expanded = Set(expandedPaths().map { VCSKind.canonical($0) })
+        let affected = paths.contains { p in
+            let parent = VCSKind.canonical((p as NSString).deletingLastPathComponent)
+            return parent == base || expanded.contains(parent)
+        }
+        if affected { refresh() }
     }
 
     func expandedPaths() -> [String] {

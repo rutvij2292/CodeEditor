@@ -152,6 +152,7 @@ final class GitGutterController {
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(textChanged), name: NSText.didChangeNotification, object: tv)
         nc.addObserver(self, selector: #selector(statusChanged), name: GitGutter.statusChanged, object: nil)
+        nc.addObserver(self, selector: #selector(powerChanged), name: PowerState.didChange, object: nil)
         reloadHead(resolveRoot: true)
     }
 
@@ -163,11 +164,19 @@ final class GitGutterController {
         gutter?.onMarkerClick = nil
     }
 
+    @objc private func powerChanged() {
+        if PowerState.liveGitDiff, dirtyWhileSaving { dirtyWhileSaving = false; schedule(after: 0.3) }
+    }
+
     @objc private func statusChanged() {
         Self.cacheLock.lock(); Self.rootCache.removeAll(); Self.cacheLock.unlock()
         reloadHead(resolveRoot: true)
     }
-    @objc private func textChanged() { schedule(after: 0.3) }
+    @objc private func textChanged() {
+        // Power saver: the live diff waits for the next save / git change instead of running 0.75 s after each keystroke.
+        if PowerState.liveGitDiff { schedule(after: 0.3) } else { dirtyWhileSaving = true }
+    }
+    private var dirtyWhileSaving = false
 
     /// Re-reads HEAD for this file off the main thread, then recomputes markers.
     func reloadHead(resolveRoot: Bool = false) {
@@ -209,7 +218,9 @@ final class GitGutterController {
         else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) }
     }
 
-    private func recompute() {
+    private func recompute() { Perf.measure("gitgutter.recompute") { recomputeImpl() } }
+
+    private func recomputeImpl() {
         guard let tv = textView, let gutter else { return }
         guard let head else {
             hunks = []

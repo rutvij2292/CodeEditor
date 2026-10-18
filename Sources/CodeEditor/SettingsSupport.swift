@@ -148,6 +148,7 @@ enum SettingsDefaults {
         SessionStore.reopenOnLaunch = true
         Formatter.formatOnSave = false
         ProjectIndex.includeVendor = false
+        Prefs.reset(["powerSaver"])
     }
 
     static func restoreEditor() {

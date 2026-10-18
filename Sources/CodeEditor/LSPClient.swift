@@ -43,8 +43,8 @@ final class LSPClient {
 
     private struct Pending { let completion: (Result) -> Void; let queue: DispatchQueue; var timeout: DispatchWorkItem? }
 
-    let queue = DispatchQueue(label: "codeeditor.lsp.client")
-    private let writeQueue = DispatchQueue(label: "codeeditor.lsp.write")
+    let queue = DispatchQueue(label: "codeeditor.lsp.client", qos: .utility)
+    private let writeQueue = DispatchQueue(label: "codeeditor.lsp.write", qos: .utility)
     private var process: Process?
     private var stdin: FileHandle?
     private var buffer = Data()
@@ -70,6 +70,7 @@ final class LSPClient {
         p.executableURL = URL(fileURLWithPath: executable)
         p.arguments = arguments
         p.environment = environment
+        p.qualityOfService = .utility        // efficiency cores: servers index for minutes and must not wake the performance cores
         if let cwd { p.currentDirectoryURL = cwd }
         let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
         p.standardInput = inPipe

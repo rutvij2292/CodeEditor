@@ -421,6 +421,7 @@ final class SideBySideDiffView: NSView, NSTextViewDelegate {
             }
             if alpha <= 0 { t.invalidate() }
         }
+        tick.tolerance = 0.01
         RunLoop.main.add(tick, forMode: .common)
         flashTimer = tick
         for p in [left, right] { p.text.flash = (block, 1); p.text.needsDisplay = true }

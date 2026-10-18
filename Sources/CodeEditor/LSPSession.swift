@@ -180,32 +180,55 @@ final class LSPSession: NSResponder {
         flushWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.flushChanges() }
         flushWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + PowerState.shared.scaled(0.12), execute: work)
         scheduleSignatureCheck()
     }
 
+    private var flushCount = 0
+    private var lastEditLocation = 0
+
+    /// Whether the mirror still equals the buffer. A full compare of a 700 KB file on every flush cost ~5 ms, so big files
+    /// compare lengths plus the text around the last edit, and everything every 16th flush.
+    private func shadowMatches(_ sh: LSPShadow, _ current: NSString) -> Bool {
+        guard sh.length == current.length else { return false }
+        flushCount += 1
+        if sh.length < 20_000 || flushCount % 16 == 0 { return sh.matches(current) }
+        let from = max(0, min(lastEditLocation, sh.length) - 300)
+        let r = NSRange(location: from, length: min(600, sh.length - from))
+        return sh.text.substring(with: r) == current.substring(with: r)
+    }
+
     /// Sends any pending edit now (full-text sync; valid for servers declaring incremental sync too).
-    func flushChanges() {
+    func flushChanges() { Perf.measure("lsp.flush") { flushChangesImpl() } }
+
+    private func flushChangesImpl() {
         flushWork?.cancel()
         guard hasUnsentChanges else { return }
         hasUnsentChanges = false
         version += 1
-        let current = text as NSString
+        // The live storage string (no copy): `text` bridges a full copy of the buffer on every call.
+        let current: NSString = tab?.textView.textStorage?.mutableString ?? ("" as NSString)
         // Incremental changes are only trusted while the mirror still equals the editor text (any edit that
         // bypassed the storage notification, a gap, or too many queued edits falls back to full sync).
         var incremental: [[String: Any]]?
-        if let sh = shadow, !shadowStale, sh.matches(current) { incremental = pendingChanges }
-        let fullChanges: [[String: Any]] = [["text": text]]
+        if let sh = shadow, !shadowStale, shadowMatches(sh, current) { incremental = pendingChanges }
+        var fullCache: [[String: Any]]?
+        func fullChanges() -> [[String: Any]] {
+            if let fullCache { return fullCache }
+            let c: [[String: Any]] = [["text": text]]
+            fullCache = c
+            return c
+        }
         for inst in instances where opened.contains(inst.key) {
             let useInc = inst.syncKind == 2 && incremental != nil
-            let changes = useInc ? incremental! : fullChanges
+            let changes = useInc ? incremental! : fullChanges()
             if useInc { incrementalSends += 1 } else { fullSends += 1 }
             LSPSession.didChangeObserver?(uri, changes)
             inst.client?.notify("textDocument/didChange", [
                 "textDocument": ["uri": uri, "version": version], "contentChanges": changes,
             ] as [String: Any])
         }
-        if shadow != nil, shadowStale || !(shadow?.matches(current) ?? false) { shadow = LSPShadow(current); shadowStale = false }
+        if let sh = shadow, shadowStale || !shadowMatches(sh, current) { shadow = LSPShadow(current); shadowStale = false }
         pendingChanges.removeAll()
         for inst in instances where inst.usesPullDiagnostics && opened.contains(inst.key) {
             requestDiagnostics(from: inst)
@@ -298,6 +321,7 @@ final class LSPSession: NSResponder {
 
     /// Records the edit into the shadow (computing the LSP range from the pre-edit mirror).
     private func trackEdit(_ storage: NSTextStorage, edited: NSRange, delta: Int) {
+        lastEditLocation = edited.location
         guard shadow != nil, !shadowStale else { return }
         let oldRange = NSRange(location: edited.location, length: edited.length - delta)
         guard oldRange.length >= 0, NSMaxRange(edited) <= storage.length,
@@ -356,9 +380,18 @@ final class LSPDiagnosticOverlay: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let session, let tv = session.textView, let lm = tv.layoutManager, let tc = tv.textContainer else { return }
+        let all = session.allDiagnostics
+        guard !all.isEmpty else { return }
         let origin = tv.textContainerOrigin
         let length = tv.textStorage?.length ?? 0
-        for d in session.allDiagnostics.sorted(by: { $0.severity > $1.severity }) {
+        // Only diagnostics intersecting the dirty rect cost anything: asking the layout manager for rects of every
+        // diagnostic of a big file on every draw used to dominate scroll/typing frames.
+        var local = dirtyRect.insetBy(dx: -4, dy: -4)
+        local.origin.x -= origin.x; local.origin.y -= origin.y
+        let visibleGlyphs = lm.glyphRange(forBoundingRect: local, in: tc)
+        let visible = lm.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
+        for d in all.sorted(by: { $0.severity > $1.severity }) {
+            guard NSMaxRange(d.range) >= visible.location, d.range.location <= NSMaxRange(visible) else { continue }
             let cr = NSIntersectionRange(d.range, NSRange(location: 0, length: length))
             guard cr.length > 0 else { continue }
             let gr = lm.glyphRange(forCharacterRange: cr, actualCharacterRange: nil)

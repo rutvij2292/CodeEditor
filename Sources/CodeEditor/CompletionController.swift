@@ -95,7 +95,7 @@ final class CompletionController: NSObject {
         debounce?.invalidate()
         if manual { request(trigger: character, manual: true) }
         else {
-            debounce = Timer.scheduledTimer(withTimeInterval: CompletionSystem.debounce, repeats: false) { [weak self] _ in
+            debounce = Timer.scheduledTimer(withTimeInterval: PowerState.shared.scaled(CompletionSystem.debounce), repeats: false) { [weak self] _ in
                 self?.request(trigger: character, manual: false)
             }
         }
@@ -196,7 +196,9 @@ final class CompletionController: NSObject {
 
     // MARK: - Request / merge
 
-    private func request(trigger: String?, manual: Bool) {
+    private func request(trigger: String?, manual: Bool) { Perf.measure("completion.request") { requestImpl(trigger: trigger, manual: manual) } }
+
+    private func requestImpl(trigger: String?, manual: Bool) {
         generation += 1
         let g = generation
         providers.forEach { $0.cancel() }
@@ -311,7 +313,9 @@ final class CompletionController: NSObject {
         return qi == q.count ? out : []
     }
 
-    private func present() {
+    private func present() { Perf.measure("completion.present") { presentImpl() } }
+
+    private func presentImpl() {
         let previous = ranked.indices.contains(selected) ? ranked[selected].item.label + ranked[selected].item.kind.rawValue : nil
         ranked = rank()
         if ranked.isEmpty { hidePopup(); return }

@@ -172,6 +172,7 @@ final class AboutPane: SettingsPane {
     override func viewDidAppear() {
         super.viewDidAppear()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
+        timer?.tolerance = 1
     }
 
     override func viewDidDisappear() { super.viewDidDisappear(); timer?.invalidate(); timer = nil }
