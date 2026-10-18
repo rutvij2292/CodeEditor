@@ -60,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         CompletionSystem.symbolProvider = { [weak self] in self?.active?.symbolEntries ?? [] }
         LanguageServers.start()
         LanguageServers.openLocation = { [weak self] url, line, _ in self?.active?.open(url, line: line) }
+        PowerState.shared.start()
         BracketColorizer.start()
         GitGutter.start()
         Formatter.start()
@@ -115,6 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         Verification.scheduleIfRequested(app: self)
         SelfTest.run(app: self)
+        Bench.run(app: self)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

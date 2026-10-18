@@ -63,6 +63,7 @@ final class FormatProcess {
         let p = Process()
         p.executableURL = exe
         p.arguments = args
+        p.qualityOfService = .utility
         p.currentDirectoryURL = cwd
         p.environment = env
         let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()

@@ -603,6 +603,8 @@ final class LanguageServerManager {
         }
         for config in LanguageServerConfig.configs(for: url) {
             guard LanguageServerPrefs.isEnabled(config.id) else { continue }
+            // Power saver: do not start the heavy auxiliary Tailwind server (it is started on the next file open once saver ends).
+            if config.id == "tailwind", PowerState.shared.saver, !AppEnv.headless { continue }
             if !config.reportMissing, config.launch == nil, resolveExecutable(config.executables) == nil { continue }
             guard let root = projectRoot(for: url, config: config) else { continue }
             let inst = instance(for: config, root: root)
@@ -752,7 +754,7 @@ final class LanguageServerManager {
             self.statusChanged()
         }
         inst.idleWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + idleTimeout, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + (PowerState.shared.saver ? min(idleTimeout, 180) : idleTimeout), execute: work)
     }
 
     /// Stops every server now (tests / explicit user action).
@@ -771,14 +773,17 @@ final class LanguageServerManager {
 
     private func ensureTimer() {
         guard rssTimer == nil else { return }
-        rssTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        rssTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             guard let self else { return }
             for s in self.sessions.values where s.tab == nil { self.detach(s) }
-            for i in self.instances.values { i.refreshRSS() }
-            self.statusChanged()
+            // Memory readouts are only worth waking up for while the app is in front.
+            if NSApp.isActive || AppEnv.headless {
+                for i in self.instances.values { i.refreshRSS() }
+                self.statusChanged()
+            }
             if self.instances.isEmpty { self.rssTimer?.invalidate(); self.rssTimer = nil }
         }
-        rssTimer?.tolerance = 2
+        rssTimer?.tolerance = 5
     }
 
     func statuses() -> [LanguageServerStatus] {

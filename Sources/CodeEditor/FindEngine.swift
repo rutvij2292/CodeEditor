@@ -513,7 +513,7 @@ final class FindEngine {
             if !mask.isEmpty { list = list.filter { mask.allows($0.rel) } }
             let sink = FindSink(token: token, batch: batch)
             let counter = FindCounter()
-            let workers = max(1, ProcessInfo.processInfo.activeProcessorCount - 1)
+            let workers = PowerState.shared.maxWorkers
             let total = list.count
             let statsLock = NSLock()
             var scannedTotal = 0, matchedTotal = 0

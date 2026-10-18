@@ -76,8 +76,47 @@ final class Highlighter {
 
     /// Re-parses if the text changed since the last parse (always a full parse when
     /// `textDidEdit` was never called), then repaints the visible range.
-    func reparse() {
+    func reparse() { Perf.measure("highlight.reparse") { reparseImpl() } }
+
+    private static let parseQueue = DispatchQueue(label: "highlight.parse", qos: .userInitiated)
+    private var asyncParsing = false
+
+    /// First parse of a big file runs on a background queue (its own Parser, a snapshot of the text): the editor shows the
+    /// plain text immediately and colours arrive when the tree is ready. Any edit in the meantime falls back to the
+    /// regular synchronous path.
+    private func startAsyncInitialParse(_ ns: NSString, language: Language) {
+        asyncParsing = true
+        let snapshot = ns.copy() as! NSString
+        let length = ns.length
+        Highlighter.parseQueue.async { [weak self] in
+            let parser = Parser()
+            try? parser.setLanguage(language)
+            parser.includedRanges = [Highlighter.fullRange]
+            let t = parser.parse(tree: nil as MutableTree?, readBlock: Highlighter.reader(snapshot))
+            let table = LineTable(snapshot)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.asyncParsing = false
+                if !self.sawEdits, self.tree == nil, let current = self.text, current.length == length, let t {
+                    self.tree = t
+                    self.lines = table
+                    self.trackedLength = length
+                    self.treeStale = false
+                    self.apply(margin: true)
+                } else {
+                    self.reparse()
+                }
+            }
+        }
+    }
+
+    private func reparseImpl() {
         guard let ns = text else { return }
+        if asyncParsing { return }
+        if tree == nil, !sawEdits, ns.length > 40_000, let language = root.language, root.parser != nil {
+            startAsyncInitialParse(ns, language: language)
+            return
+        }
         let afterEdit = treeStale && sawEdits
         if root.parser != nil, treeStale || tree == nil || !sawEdits {
             parseRoot(ns)
@@ -147,7 +186,9 @@ final class Highlighter {
 
     // MARK: Parsing
 
-    private func makeReader(_ ns: NSString) -> Parser.ReadBlock {
+    private func makeReader(_ ns: NSString) -> Parser.ReadBlock { Highlighter.reader(ns) }
+
+    private static func reader(_ ns: NSString) -> Parser.ReadBlock {
         return { byteOffset, _ in
             let index = byteOffset / 2
             let length = ns.length
@@ -230,7 +271,9 @@ final class Highlighter {
         return id
     }
 
-    private func paintWindow(_ win: NSRange, _ ns: NSString) {
+    private func paintWindow(_ win: NSRange, _ ns: NSString) { Perf.measure("highlight.paint") { paintWindowImpl(win, ns) } }
+
+    private func paintWindowImpl(_ win: NSRange, _ ns: NSString) {
         guard let lm = textView?.layoutManager, win.length > 0 else { return }
         let canvas = Canvas(win)
         if let lexer = root.lexer {

@@ -86,7 +86,7 @@ final class TabBracketState: NSObject, NSLayoutManagerDelegate {
     private var observers: [NSObjectProtocol] = []
 
     // Rescan pipeline
-    private let queue = DispatchQueue(label: "bracket.scan", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "bracket.scan", qos: .utility)
     private let lock = NSLock()
     private struct Job { var text: [UInt16]; var acc: EditAcc?; var fresh: Bool; var id: Int; var logCount: Int }
     private var slot: Job?                       // guarded by lock
@@ -184,7 +184,7 @@ final class TabBracketState: NSObject, NSLayoutManagerDelegate {
         editLog.append((r.location, oldLen, r.length))
         if pendingAcc == nil { pendingAcc = EditAcc(location: r.location, oldLength: oldLen, newLength: r.length) }
         else { pendingAcc!.merge(location: r.location, oldLength: oldLen, newLength: r.length) }
-        scheduleScan(delay: r.length + oldLen > 20_000 ? 0.15 : 0.06)
+        scheduleScan(delay: PowerState.shared.scaled(r.length + oldLen > 20_000 ? 0.15 : 0.06))
     }
 
     private func scheduleScan(delay: TimeInterval) {
@@ -195,8 +195,11 @@ final class TabBracketState: NSObject, NSLayoutManagerDelegate {
         else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) }
     }
 
-    private func snapshotAndScan() {
+    private func snapshotAndScan() { Perf.measure("bracket.snapshot") { snapshotAndScanImpl() } }
+
+    private func snapshotAndScanImpl() {
         guard let tv = textView else { return }
+        if PowerState.deferWhileHidden(tv, { [weak self] in self?.snapshotAndScan() }) { return }
         let ns = tv.string as NSString
         var units = [UInt16](repeating: 0, count: ns.length)
         units.withUnsafeMutableBufferPointer { ns.getCharacters($0.baseAddress!, range: NSRange(location: 0, length: ns.length)) }
@@ -225,7 +228,9 @@ final class TabBracketState: NSObject, NSLayoutManagerDelegate {
         DispatchQueue.main.async { [weak self] in self?.install(model, job: job) }
     }
 
-    private func install(_ fresh: BracketModel, job: Job) {
+    private func install(_ fresh: BracketModel, job: Job) { Perf.measure("bracket.install") { installImpl(fresh, job: job) } }
+
+    private func installImpl(_ fresh: BracketModel, job: Job) {
         var m = fresh
         for (loc, o, n) in editLog[min(job.logCount, editLog.count)...] { m.applyEdit(location: loc, oldLength: o, newLength: n) }
         if job.id == latestJob { editLog.removeAll() }

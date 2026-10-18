@@ -188,6 +188,21 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
     private(set) var isReadOnly = false
     /// Over the 5 MB limit: Highlighter, BracketColorizer, LSP sync and Completion must skip this tab.
     private(set) var isLargeFile = false
+    /// A line over `longLineLimit` characters (minified bundles): TextKit 1 lays out and draws a whole line fragment at once,
+    /// so such files get soft wrap and the same feature set as large files.
+    private(set) var longLines = false
+    static let longLineLimit = 20_000
+
+    static func hasLongLine(_ text: String) -> Bool {
+        var text = text
+        return text.withUTF8 { buf in
+            var run = 0
+            for b in buf {
+                if b == 10 { run = 0 } else { run += 1; if run > longLineLimit { return true } }
+            }
+            return false
+        }
+    }
     /// Decoded with replacement characters: never written back.
     private(set) var isLossyDecoded = false
     private var saveInFlight = false
@@ -274,7 +289,8 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         encoding = loaded.encoding
         hasBOM = loaded.bom
         isLossyDecoded = loaded.lossy
-        isLargeFile = loaded.large
+        longLines = Self.hasLongLine(loaded.text)
+        isLargeFile = loaded.large || longLines
         isReadOnly = loaded.readOnly
         eol = Self.detectLineEnding(text)
         // Classic TextKit 1 stack: the highlighter and ruler both need NSLayoutManager.
@@ -285,7 +301,9 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         storage.addLayoutManager(layout)
         self.storage = storage
         layout.addTextContainer(container)
-        if loaded.large { layout.allowsNonContiguousLayout = true }
+        // Non-contiguous layout: only the visible region is laid out on open/jump (the rest is estimated), instead of the whole file.
+        layout.allowsNonContiguousLayout = loaded.large || LayerTuning.nonContiguous
+        if let bg = LayerTuning.backgroundLayout { layout.backgroundLayoutEnabled = bg }
         textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
         super.init()
 
@@ -341,9 +359,18 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         pane = EditorPane(content: EditorContainer(scrollView: scrollView, gutter: GutterView(textView: textView, scrollView: scrollView)),
                           breadcrumbs: breadcrumbs.bar)
         view = pane
+        LayerTuning.apply([textView, scrollView.contentView, scrollView])
         pane.setBreadcrumbsVisible(Prefs.showBreadcrumbs)
         if isReadOnly {
             showLargeFileBanner()
+        } else if longLines {
+            pane.showBanner("Very long lines: soft wrap is on; highlighting, completion and language features are off.", actions: [])
+            // Same state as CodeTextView.applySoftWrap(true) minus its whole-container ensureLayout/sizeToFit (seconds for 2 MB).
+            textView.isHorizontallyResizable = false
+            textView.autoresizingMask = [.width]
+            container.widthTracksTextView = true
+            scrollView.hasHorizontalScroller = false
+            container.containerSize = NSSize(width: 800, height: CGFloat.greatestFiniteMagnitude)
         } else if isLargeFile {
             pane.showBanner("Large file: highlighting, completion and language features are off.", actions: [])
         }
@@ -405,7 +432,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
         guard editedMask.contains(.editedCharacters) else { return }
-        highlighter?.textDidEdit(range: editedRange, changeInLength: delta)
+        Perf.measure("highlight.textDidEdit") { highlighter?.textDidEdit(range: editedRange, changeInLength: delta) }
     }
 
     @objc private func selectionChanged() { breadcrumbs.noteSelection() }

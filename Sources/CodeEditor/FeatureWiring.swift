@@ -42,7 +42,7 @@ extension ProjectWindow {
         registerToolPanel(id: "problems", title: "Problems", view: problems.view)
         problemsObserver = NotificationCenter.default.addObserver(forName: LanguageServers.problemsDidChange, object: nil, queue: .main) { [weak self] _ in
             guard let self, let root = self.root else { return }
-            self.problemsPanel?.reload()
+            if self.bottom.isVisible, self.bottom.selectedID == "problems" { self.problemsPanel?.reload() }   // rebuilt on show otherwise
             let files = LanguageServers.problems(forRoot: root)
             let errors = files.reduce(0) { $0 + $1.errorCount }, warnings = files.reduce(0) { $0 + $1.warningCount }
             self.setToolPanelBadge(errors + warnings > 0 ? (errors > 0 ? "\(errors)" : "\(warnings)") : nil, for: "problems")

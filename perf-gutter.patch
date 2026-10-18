@@ -1,0 +1,101 @@
+--- Sources/CodeEditor/Gutter.swift	2026-10-18 17:35:57
++++ Sources/CodeEditor/Gutter.swift	2026-10-18 19:36:32
+@@ -14,6 +14,10 @@
+     private static let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+     private static let boldFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
+     private static let digitWidth = ("0" as NSString).size(withAttributes: [.font: font]).width
++    private static let labelHeight = ("0" as NSString).size(withAttributes: [.font: font]).height
++    private static let labelAscent = font.ascender + (labelHeight - (font.ascender - font.descender)) / 2
++    private var labelCache: [Int: CTLine] = [:]
++    private var cachedColors: (NSColor, NSColor)?
+     private static let barWidth: CGFloat = 3
+     private static let rightPad: CGFloat = 10      // text right edge -> gutter right edge (room for the bars)
+     private static let leftPad: CGFloat = 8
+@@ -54,17 +58,25 @@
+     @objc private func refresh() { needsDisplay = true }
+     @objc private func textChanged() { updateLineCount(); needsDisplay = true }
+ 
++    /// Offset of the first character of every line (rebuilt on text change); lets `draw` find the first visible line
++    /// number with a binary search instead of re-scanning the text from the start on every frame.
++    private var lineStarts: [Int] = [0]
++    private var lineStartsLength = 0
++
+     private func updateLineCount() {
+-        guard let s = textView?.string as NSString? else { return }
+-        var n = 1, pos = 0
++        guard let s = textView?.textStorage?.mutableString else { return }
++        var starts = [0], pos = 0
+         let len = s.length
+         var buf = [unichar](repeating: 0, count: 8192)
+         while pos < len {
+             let chunk = min(buf.count, len - pos)
+             s.getCharacters(&buf, range: NSRange(location: pos, length: chunk))
+-            for i in 0..<chunk where buf[i] == 10 { n += 1 }
++            for i in 0..<chunk where buf[i] == 10 { starts.append(pos + i + 1) }
+             pos += chunk
+         }
++        lineStarts = starts
++        lineStartsLength = len
++        let n = starts.count
+         lineCount = n
+         let w = Self.width(forDigits: String(n).count)
+         if w != preferredWidth {
+@@ -86,29 +98,45 @@
+         lineInfos.removeAll(keepingCapacity: true)
+         guard let tv = textView,
+               let layout = tv.layoutManager, let container = tv.textContainer else { return }
+-        let text = tv.string as NSString
++        let text = (tv.textStorage?.mutableString ?? (tv.string as NSString)) as NSString   // no per-frame copy of the buffer
+         let inset = tv.textContainerInset.height
+         let visible = layout.glyphRange(forBoundingRect: tv.visibleRect, in: container)
+         let firstChar = layout.characterIndexForGlyph(at: visible.location)
+ 
++        if lineStartsLength != text.length { updateLineCount() }   // text replaced without a change notification
+         var line = 1
+-        var i = 0
+-        while i < firstChar {
+-            let r = text.range(of: "\n", options: [], range: NSRange(location: i, length: firstChar - i))
+-            if r.location == NSNotFound { break }
+-            line += 1
+-            i = NSMaxRange(r)
++        if lineStarts.last.map({ $0 <= text.length }) ?? false, lineStarts.count > 1 {
++            var lo = 0, hi = lineStarts.count - 1
++            while lo < hi {
++                let mid = (lo + hi + 1) / 2
++                if lineStarts[mid] <= firstChar { lo = mid } else { hi = mid - 1 }
++            }
++            line = lo + 1
+         }
+ 
+         let caret = min(tv.selectedRange().location, text.length)
+-        let plain: [NSAttributedString.Key: Any] = [.font: Self.font, .foregroundColor: Theme.gutter]
+-        let active: [NSAttributedString.Key: Any] = [.font: Self.boldFont, .foregroundColor: Theme.foreground]
++        let gutterColor = Theme.gutter, foreground = Theme.foreground
++        if cachedColors?.0 != gutterColor || cachedColors?.1 != foreground { labelCache.removeAll(); cachedColors = (gutterColor, foreground) }
+         let textRight = bounds.width - Self.rightPad
++        let ctx = NSGraphicsContext.current?.cgContext
++        // Labels are cached CTLines (monospaced digits: width = digits x digitWidth): no per-label NSString measuring/layout.
+         func drawLabel(_ n: Int, y0: CGFloat, height: CGFloat, isActive: Bool) {
+-            let label = "\(n)" as NSString
+-            let attrs = isActive ? active : plain
+-            let size = label.size(withAttributes: attrs)
+-            label.draw(at: NSPoint(x: textRight - size.width, y: y0 + (height - size.height) / 2), withAttributes: attrs)
++            guard let ctx else { return }
++            let key = isActive ? -n : n
++            let ctLine: CTLine
++            if let c = labelCache[key] { ctLine = c } else {
++                if labelCache.count > 800 { labelCache.removeAll(keepingCapacity: true) }
++                let attrs: [NSAttributedString.Key: Any] = isActive ? [.font: Self.boldFont, .foregroundColor: foreground]
++                                                                   : [.font: Self.font, .foregroundColor: gutterColor]
++                ctLine = CTLineCreateWithAttributedString(NSAttributedString(string: "\(n)", attributes: attrs))
++                labelCache[key] = ctLine
++            }
++            let width = Self.digitWidth * CGFloat(String(n).utf8.count)
++            ctx.saveGState()
++            ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)         // this view is flipped
++            ctx.textPosition = CGPoint(x: textRight - width, y: y0 + (height - Self.labelHeight) / 2 + Self.labelAscent)
++            CTLineDraw(ctLine, ctx)
++            ctx.restoreGState()
+         }
+ 
+         var glyph = visible.location

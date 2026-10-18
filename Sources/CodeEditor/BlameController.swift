@@ -180,11 +180,14 @@ final class BlameController {
         mapDebounce?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.recomputeMap() }
         mapDebounce = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + (isAnnotating ? 0.12 : 0.25), execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + PowerState.shared.scaled(isAnnotating ? 0.12 : 0.25), execute: work)
     }
 
-    private func recomputeMap() {
+    private func recomputeMap() { Perf.measure("blame.recomputeMap") { recomputeMapImpl() } }
+
+    private func recomputeMapImpl() {
         guard let loaded, let tv = textView else { mapValid = false; publish(); return }
+        if PowerState.deferWhileHidden(tv, { [weak self] in self?.recomputeMap() }) { return }
         let rev = textRevision
         let text = tv.string
         let base = loaded.base
@@ -322,9 +325,12 @@ final class BlameController {
     private(set) var inlineText: String?
     private var inlineCommitIndex: Int?
 
-    func updateInline() {
+    func updateInline() { Perf.measure("blame.inline") { updateInlineImpl() } }
+
+    private func updateInlineImpl() {
         inlineTimer = nil
-        guard Prefs.inlineBlame, let tab, !tab.isLargeFile, let tv = textView, let loaded, mapValid, !isUnavailable else {
+        if PowerState.deferWhileHidden(textView, { [weak self] in self?.updateInline() }) { return }
+        guard Prefs.inlineBlame, PowerState.liveBlame, let tab, !tab.isLargeFile, let tv = textView, let loaded, mapValid, !isUnavailable else {
             if chip != nil { hideChip() }
             inlineText = nil
             return

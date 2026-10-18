@@ -16,6 +16,7 @@ final class StatusBar: NSView {
     private let language = StatusBar.label()
     private let server = StatusBar.label()
     private let notice = StatusBar.label()
+    private let powerLabel = StatusBar.label()
     private var noticeTimer: Timer?
     private let topLine = NSView()
     private let terminalButton = NSButton()
@@ -46,7 +47,13 @@ final class StatusBar: NSView {
         let terminalBox = NSStackView(views: [terminalDot, terminalButton])
         terminalBox.spacing = 3
         terminalBox.alignment = .centerY
-        let right = NSStackView(views: [server, language, indent, lineEnding, encoding, position, terminalBox])
+        powerLabel.stringValue = "\u{1F343} Power saver"
+        powerLabel.toolTip = "Power saver is on: longer debounces, inline blame and live git diff paused (Settings > General > Energy)"
+        powerLabel.isHidden = !PowerState.shared.saver
+        NotificationCenter.default.addObserver(forName: PowerState.didChange, object: nil, queue: .main) { [weak self] _ in
+            self?.powerLabel.isHidden = !PowerState.shared.saver
+        }
+        let right = NSStackView(views: [powerLabel, server, language, indent, lineEnding, encoding, position, terminalBox])
         right.spacing = 14
         notice.setContentHuggingPriority(.init(1), for: .horizontal)
         notice.setContentCompressionResistancePriority(.init(1), for: .horizontal)

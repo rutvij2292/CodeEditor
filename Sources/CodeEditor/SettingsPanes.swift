@@ -110,6 +110,12 @@ final class GeneralPane: SettingsPane {
         checkbox("Format files on save", label: "Formatting", help: "Uses Pint, PHP-CS-Fixer, Prettier or the language server, whichever the project provides.",
                  get: { Formatter.formatOnSave }, set: { Formatter.formatOnSave = $0 })
 
+        section("Energy")
+        popup("Power saver", ["Automatic", "Always", "Off"],
+              help: "Automatic: on in Low Power Mode, when the Mac runs hot, or on battery at 20% or less. Power saver lengthens debounces, pauses inline blame and live git diff, and shuts idle language servers down sooner.",
+              get: { ["auto", "always", "off"].firstIndex(of: Prefs.powerSaver) ?? 0 },
+              set: { Prefs.powerSaver = ["auto", "always", "off"][$0] })
+
         section("Projects")
         checkbox("Restore windows on launch", label: "Startup", get: { SessionStore.reopenOnLaunch }, set: { SessionStore.reopenOnLaunch = $0 })
         checkbox("Include vendor in Go to File", label: "Search",

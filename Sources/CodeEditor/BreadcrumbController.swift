@@ -38,7 +38,7 @@ final class BreadcrumbController: NSObject, NSMenuDelegate {
         debounce?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.refresh() }
         debounce = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.debounceDelay, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + PowerState.shared.scaled(Self.debounceDelay), execute: work)
     }
 
     private var grammarKey: String? {
@@ -56,8 +56,11 @@ final class BreadcrumbController: NSObject, NSMenuDelegate {
     }
 
     /// Recomputes the segments now (the debounce target; also called directly by tests and on show).
-    func refresh() {
+    func refresh() { Perf.measure("breadcrumb.refresh") { refreshImpl() } }
+
+    private func refreshImpl() {
         debounce?.cancel(); debounce = nil
+        if PowerState.deferWhileHidden(tab?.textView, { [weak self] in self?.refresh() }) { return }
         refreshCount += 1
         guard let tab, Prefs.showBreadcrumbs else { return }
         var segments = pathSegments

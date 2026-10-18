@@ -133,7 +133,10 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
 
         bottom.onVisibilityChange = { [weak self] visible in self?.applyBottomVisibility(visible) }
         bottom.onEscape = { [weak self] in self?.focusEditor() }
-        bottom.onWillShow = { [weak self] id in if id == "git" { self?.ensureGitPanel() } }
+        bottom.onWillShow = { [weak self] id in
+            if id == "git" { self?.ensureGitPanel() }
+            if id == "problems" { self?.problemsPanel?.reload() }
+        }
         bottom.register(id: "git", title: "Git", view: gitHost)
 
         window.contentViewController = rootSplit
@@ -176,7 +179,13 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         gitRootResolved = false
         gitHost.subviews.forEach { $0.removeFromSuperview() }
         bottom.setPersistence(key: AppEnv.headless ? nil : url.path)
-        watcher = AppEnv.headless ? nil : FSWatcher(path: url.path) { [weak self] paths in self?.filesChanged(paths) }
+        let watchRoot = url
+        let heavy = ["node_modules", ".build", "storage/framework", "storage/logs", "bootstrap/cache", "public/build", "dist", ".next"]
+            + (ProjectIndex.includeVendor ? [] : ["vendor"])
+        watcher = AppEnv.headless ? nil : FSWatcher(
+            path: url.path, excluded: heavy.map { url.appendingPathComponent($0).path },
+            filter: { paths in paths.filter { $0.contains("/.git/") || !ProjectIndex.isSkipped(path: $0, under: watchRoot) } }
+        ) { [weak self] paths in self?.filesChanged(paths) }
         // FSEvents replaces polling; poll slowly only when the watcher could not start.
         fallbackTimer?.invalidate()
         fallbackTimer = nil
@@ -184,6 +193,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             fallbackTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
                 self?.editors.values.forEach { $0.reloadIfChangedOnDisk() }
             }
+            fallbackTimer?.tolerance = 2
         }
         updateTitle()
         GitRepo.repoRoot(for: url) { [weak self] repo in
@@ -214,7 +224,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         }
         if content {
             if let root { LaravelNavigator.invalidate(root: root); FastTier.invalidate(root: root) }
-            tree.refresh()
+            tree.refreshIfAffected(paths)
             index?.refresh(force: true) { [weak self] in self?.symbols?.rebuild() }
             editors.values.forEach { $0.reloadIfChangedOnDisk() }
         }
@@ -566,7 +576,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     private func didSelect(_ id: String) {
         if let previous = lastSelectedID, previous != id { editors[previous]?.autoSave(.tabSwitch) }
         lastSelectedID = id
-        problemsPanel?.reload()
+        // The Problems tree is rebuilt only while it is on screen (it re-expands every row: ~5 ms per tab switch otherwise).
+        if bottom.isVisible, bottom.selectedID == "problems" { problemsPanel?.reload() }
         mru.removeAll { $0 == id }
         mru.insert(id, at: 0)
         if !navigating {

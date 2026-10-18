@@ -346,7 +346,7 @@ final class CodeTextView: NSTextView {
 
     // MARK: - Helpers
 
-    private var ns: NSString { string as NSString }
+    private var ns: NSString { (textStorage?.mutableString ?? NSMutableString(string: string)) as NSString }
 
     private func isWordUnit(_ c: unichar) -> Bool {
         c == 95 || Unicode.Scalar(UInt32(c)).map { CharacterSet.alphanumerics.contains($0) } ?? false
