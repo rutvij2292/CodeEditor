@@ -355,13 +355,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
     /// The editor font from the shared preferences (`Prefs.editorFontName` / `editorFontSize`; system monospaced when the
     /// family is empty or unknown). Mirrors what the settings package's dynamic `Theme.font` returns: once that lands on main
     /// the integrator can replace the body with `Theme.font` so there is a single source of truth.
-    static func currentFont() -> NSFont {
-        let size = CGFloat(Prefs.editorFontSize)
-        let name = Prefs.editorFontName
-        if !name.isEmpty, let font = NSFont(name: name, size: size) { return font }
-        if !name.isEmpty, let font = NSFontManager.shared.font(withFamily: name, traits: [], weight: 5, size: size) { return font }
-        return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
-    }
+    static func currentFont() -> NSFont { Theme.font }
 
     /// Tab characters render exactly `size` columns wide (AppKit's default is ~3.6) and the line height follows the preference.
     private static func paragraphStyle(for indent: IndentSettings) -> NSParagraphStyle {

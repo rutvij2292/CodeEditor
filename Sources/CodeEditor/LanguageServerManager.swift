@@ -31,6 +31,7 @@ struct LanguageServerConfig {
     func languageId(for url: URL) -> String { languageIdOverride?(url) ?? languageId(forExtension: url.pathExtension.lowercased()) }
 
     static func licenceKey() -> String? {
+        if let k = IntelephenseLicence.current() { return k }      // Keychain first (Settings › Languages)
         if let k = UserDefaults.standard.string(forKey: "intelephenseLicenceKey")?.trimmingCharacters(in: .whitespacesAndNewlines),
            !k.isEmpty { return k }
         let file = NSHomeDirectory() + "/intelephense/licence.txt"

@@ -63,6 +63,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         BracketColorizer.start()
         GitGutter.start()
         Formatter.start()
+        // Breadcrumb callbacks resolve their project window lazily (the tab isn't registered with a window yet when it opens).
+        EditorEvents.onOpen { [weak self] tab in
+            func owner() -> ProjectWindow? { self?.windows.first { $0.editors.values.contains { $0 === tab } } }
+            tab.projectRoot = { owner()?.root }
+            tab.onOpenURL = { url in owner()?.open(url) }
+        }
         LaravelNavigator.start()
         LaravelNavigator.openLocation = { [weak self] url, line, column in
             guard let w = self?.active else { return }
@@ -234,6 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func renameSymbol(_ sender: Any?) { active.map { Self.renameHandler?($0) } }
     @objc func formatDocument(_ sender: Any?) { active.map { Self.formatHandler?($0) } }
     @objc func toggleReopenWindows(_ sender: Any?) { SessionStore.reopenOnLaunch.toggle() }
+    @objc func focusBreadcrumbs(_ sender: Any?) { active?.current?.focusBreadcrumbs() }
     @objc func showTerminal(_ sender: Any?) { active?.showTerminal() }
     @objc func restartLanguageServers(_ sender: Any?) {
         if let root = active?.root { LanguageServers.restartAll(forRoot: root) }

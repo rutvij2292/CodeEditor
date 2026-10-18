@@ -126,6 +126,7 @@ enum MainMenu {
             item("Recent Files", #selector(AppDelegate.recentFiles(_:)), "e", target: a),
             item("Search Everywhere", #selector(AppDelegate.searchEverywhere(_:)), "", target: a),
             item("Find Action…", #selector(AppDelegate.findAction(_:)), "a", [.command, .shift], target: a),
+            item("Focus Breadcrumbs", #selector(AppDelegate.focusBreadcrumbs(_:)), up, [.command, .option], target: a),
             item("Go to Line…", #selector(AppDelegate.goToLine(_:)), "l", target: a),
             sep,
             item("Next Problem", #selector(AppDelegate.nextProblem(_:)), f2, [], target: a),
