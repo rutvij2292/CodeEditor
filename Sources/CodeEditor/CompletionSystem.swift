@@ -19,6 +19,7 @@ enum CompletionSystem {
         started = true
         registerBuiltins()
         EditorEvents.onOpen { tab in
+            guard !tab.isLargeFile else { return }
             controllers[ObjectIdentifier(tab)] = CompletionController(tab: tab)
         }
         EditorEvents.onClose { tab in

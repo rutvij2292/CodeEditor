@@ -15,7 +15,7 @@ enum LaravelNavigator {
     static func start() {
         guard !started else { return }
         started = true
-        EditorEvents.onOpen { tab in attach(tab) }
+        EditorEvents.onOpen { tab in if !tab.isLargeFile { attach(tab) } }
         EditorEvents.onClose { tab in detach(tab) }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .flagsChanged, .keyDown]) { event in
             switch event.type {

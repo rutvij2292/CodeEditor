@@ -94,8 +94,10 @@ enum Formatter {
     static func start() {
         guard !started else { return }
         started = true
+        // The login-shell PATH lookup can take seconds with a heavy .zshrc; do it once in the background so the first format/save is instant.
+        if !AppEnv.headless { DispatchQueue.global(qos: .utility).async { _ = FormatTools.resolveLoginPATH() } }
         EditorEvents.onWillSave { tab, proceed in
-            guard formatOnSave, !tab.textView.hasMarkedText(), !tab.isReadOnly,
+            guard formatOnSave, !tab.textView.hasMarkedText(), !tab.isReadOnly, !tab.isLargeFile,
                   tab.textView.string.utf8.count <= maxBytes,
                   FormatTools.detect(for: tab.url) != nil, !saving.contains(ObjectIdentifier(tab)) else { proceed(); return }
             let id = ObjectIdentifier(tab)

@@ -19,7 +19,7 @@ final class BracketColorizer: NSObject, NSMenuItemValidation {
         let d = UserDefaults.standard
         d.register(defaults: [defaultsKey: true])
         enabled = AppEnv.headless ? true : d.bool(forKey: defaultsKey)
-        EditorEvents.onOpen { tab in shared.attach(tab) }
+        EditorEvents.onOpen { tab in if !tab.isLargeFile { shared.attach(tab) } }
         EditorEvents.onClose { tab in shared.detach(tab) }
         NotificationCenter.default.addObserver(shared, selector: #selector(themeChanged), name: Theme.didChange, object: nil)
     }

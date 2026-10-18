@@ -13,6 +13,7 @@ enum GitGutter {
         guard !started else { return }
         started = true
         EditorEvents.onOpen { tab in
+            guard !tab.isLargeFile else { return }
             let c = GitGutterController(tab: tab)
             controllers[ObjectIdentifier(tab)] = c
             c.begin()

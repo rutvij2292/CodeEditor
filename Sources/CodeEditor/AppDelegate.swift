@@ -201,6 +201,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func formatDocument(_ sender: Any?) { active.map { Self.formatHandler?($0) } }
     @objc func toggleReopenWindows(_ sender: Any?) { SessionStore.reopenOnLaunch.toggle() }
     @objc func toggleFormatOnSave(_ sender: Any?) { Formatter.formatOnSave.toggle() }
+    @objc func toggleAutoSaveFocus(_ sender: Any?) { AutoSave.focusLossEnabled.toggle() }
+    @objc func toggleAutoSaveTabSwitch(_ sender: Any?) { AutoSave.tabSwitchEnabled.toggle() }
+    @objc func showLocalHistory(_ sender: Any?) { active?.showLocalHistory() }
 
     /// Cmd-Opt-L: the project's real formatter (Pint / Prettier / LSP); if none applies, the editor's safe re-indent.
     @objc func reformatCode(_ sender: Any?) {
@@ -226,6 +229,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case #selector(toggleReopenWindows(_:)): item.state = SessionStore.reopenOnLaunch ? .on : .off
         case #selector(toggleIncludeVendor(_:)): item.state = ProjectIndex.includeVendor ? .on : .off
         case #selector(toggleFormatOnSave(_:)): item.state = Formatter.formatOnSave ? .on : .off
+        case #selector(toggleAutoSaveFocus(_:)): item.state = AutoSave.focusLossEnabled ? .on : .off
+        case #selector(toggleAutoSaveTabSwitch(_:)): item.state = AutoSave.tabSwitchEnabled ? .on : .off
         default: break
         }
         return true
