@@ -11,6 +11,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/CodeEditor" "$APP/Contents/MacOS/CodeEditor"
 cp -R "$BIN_DIR"/*.bundle "$APP/Contents/Resources/"
+mkdir -p "$APP/Contents/Resources/Fonts"
+cp Fonts/*.ttf Fonts/OFL.txt "$APP/Contents/Resources/Fonts/"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

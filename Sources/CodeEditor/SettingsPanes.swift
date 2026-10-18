@@ -1,20 +1,25 @@
 import AppKit
 
 extension SettingsPane {
-    /// Popup of installed monospaced families ("System Monospaced" first). The list loads off the main thread.
+    /// Popup of installed monospaced families: bundled "JetBrains Mono" first (stored as ""), then "System Monospaced",
+    /// then the rest. The list loads off the main thread.
     func fontFamilyPopup(label: String, get: @escaping () -> String, set: @escaping (String) -> Void) -> NSPopUpButton {
         let p = NSPopUpButton(frame: .zero, pullsDown: false)
         p.translatesAutoresizingMaskIntoConstraints = false
         p.widthAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true
         p.setAccessibilityLabel(label)
         var families: [String] = []
+        func title(for stored: String) -> String {
+            stored.isEmpty ? FontRegistry.bundledFamily : stored
+        }
         func rebuild() {
             p.removeAllItems()
+            p.addItem(withTitle: FontRegistry.bundledFamily)
             p.addItem(withTitle: FontCatalog.systemMonospaced)
-            p.addItems(withTitles: families)
+            p.addItems(withTitles: families.filter { $0 != FontRegistry.bundledFamily })
             let cur = get()
-            if !cur.isEmpty, !families.contains(cur) { p.addItem(withTitle: cur) }
-            p.selectItem(withTitle: cur.isEmpty ? FontCatalog.systemMonospaced : cur)
+            if !cur.isEmpty, p.item(withTitle: cur) == nil { p.addItem(withTitle: cur) }
+            p.selectItem(withTitle: title(for: cur))
         }
         rebuild()
         FontCatalog.monospacedFamilies { list in families = list; rebuild() }
@@ -23,8 +28,67 @@ extension SettingsPane {
             set(p.indexOfSelectedItem == 0 ? "" : (p.titleOfSelectedItem ?? ""))
         }
         p.action = #selector(SettingsAction.fire(_:))
-        onRefresh { let cur = get(); p.selectItem(withTitle: cur.isEmpty ? FontCatalog.systemMonospaced : cur) }
+        onRefresh { p.selectItem(withTitle: title(for: get())) }
         return p
+    }
+}
+
+/// Sample PHP rendered with the real highlighter, so scheme changes are visible without opening a file.
+final class SchemePreview: NSView {
+    private let textView = NSTextView(frame: .zero)
+    private var highlighter: Highlighter?
+    static let sample = """
+    <?php
+    /** @param int|null $id  The user id */
+    #[Route('/users')]
+    final class Demo extends Base
+    {
+        public const MAX = 10;
+        public function show(User $user, ?int $id = null): string
+        {
+            $name = $user?->name ?? 'guest'; // fallback
+            return Str::title("Hi {$name}") . self::MAX;
+        }
+    }
+    """
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.borderWidth = 1
+        textView.isEditable = false
+        textView.isSelectable = false
+        textView.drawsBackground = true
+        textView.textContainerInset = NSSize(width: 8, height: 6)
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = false
+        textView.textContainer?.containerSize = NSSize(width: 2000, height: 10_000)
+        textView.setAccessibilityLabel("Colour scheme preview")
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(textView)
+        NSLayoutConstraint.activate([
+            textView.leadingAnchor.constraint(equalTo: leadingAnchor), textView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            textView.topAnchor.constraint(equalTo: topAnchor), textView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        textView.string = Self.sample
+        highlighter = Highlighter(textView: textView, extension: "php")
+        restyle()
+        NotificationCenter.default.addObserver(self, selector: #selector(restyle), name: Theme.didChange, object: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc func restyle() {
+        let font = NSFont(descriptor: Theme.font.fontDescriptor, size: 12) ?? Theme.font
+        let para = NSMutableParagraphStyle()
+        para.lineHeightMultiple = CGFloat(Prefs.lineHeightMultiple)
+        let attrs = Theme.textAttributes(paragraph: para).merging([.font: font]) { _, new in new }
+        textView.textStorage?.setAttributes(attrs, range: NSRange(location: 0, length: (textView.string as NSString).length))
+        textView.backgroundColor = Theme.background
+        layer?.borderColor = Theme.palette.divider.cgColor
+        layer?.backgroundColor = Theme.background.cgColor
+        highlighter?.apply()
     }
 }
 
@@ -76,6 +140,19 @@ final class EditorSettingsPane: SettingsPane {
     private let preview = NSTextField(labelWithString: "")
 
     override func build() {
+        section("Color scheme")
+        popup("Light", Theme.lightSchemes.map(\.title), help: "Used when the app appearance is Light (General > Theme).",
+              get: { Theme.lightSchemes.firstIndex { $0.id == Prefs.lightScheme } ?? 0 },
+              set: { Prefs.lightScheme = Theme.lightSchemes[$0].id })
+        popup("Dark", Theme.darkSchemes.map(\.title), help: "Used when the app appearance is Dark.",
+              get: { Theme.darkSchemes.firstIndex { $0.id == Prefs.darkScheme } ?? 0 },
+              set: { Prefs.darkScheme = Theme.darkSchemes[$0].id })
+        let swatch = SchemePreview(frame: .zero)
+        swatch.translatesAutoresizingMaskIntoConstraints = false
+        swatch.widthAnchor.constraint(equalToConstant: rowWidth - SettingsPane.labelWidth - 10).isActive = true
+        swatch.heightAnchor.constraint(equalToConstant: 236).isActive = true
+        row("Preview", swatch)
+
         section("Font")
         row("Font family", fontFamilyPopup(label: "Editor font family", get: { Prefs.editorFontName }, set: { Prefs.editorFontName = $0 }))
         number("Size", range: 8...36, step: 1, unit: "pt", slider: true, get: { Prefs.editorFontSize }, set: { Prefs.editorFontSize = $0 })
