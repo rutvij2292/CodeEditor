@@ -17,11 +17,18 @@ enum Prefs {
     }
 
     // MARK: Editor
-    /// Font family for code ("" = system monospaced).
+    /// Font family for code ("" = bundled JetBrains Mono; "System Monospaced" = the system font).
     static var editorFontName: String { get { get("editorFontName", "") } set { set("editorFontName", newValue) } }
     static var editorFontSize: Double { get { get("editorFontSize", 13) } set { set("editorFontSize", min(36, max(8, newValue))) } }
     /// Line height multiple (1.0 = font default).
-    static var lineHeightMultiple: Double { get { get("lineHeightMultiple", 1.0) } set { set("lineHeightMultiple", min(2, max(0.9, newValue))) } }
+    static var lineHeightMultiple: Double { get { get("lineHeightMultiple", 1.1) } set { set("lineHeightMultiple", min(2, max(0.9, newValue))) } }
+    /// Colour scheme: "auto" follows the appearance using `lightScheme` / `darkScheme`; an explicit scheme id
+    /// ("intellijLight", "lightLite", "darcula", "ourDark") forces that scheme (and its light/dark appearance).
+    static var colorScheme: String { get { get("colorScheme", "auto") } set { set("colorScheme", newValue) } }
+    static var lightScheme: String { get { get("lightScheme", "intellijLight") } set { set("lightScheme", newValue) } }   // intellijLight | lightLite
+    static var darkScheme: String { get { get("darkScheme", "darcula") } set { set("darkScheme", newValue) } }           // darcula | ourDark
+    /// Programming ligatures (JetBrains Mono has them; PhpStorm's default is off).
+    static var editorLigatures: Bool { get { get("editorLigatures", false) } set { set("editorLigatures", newValue) } }
     static var showLineNumbers: Bool { get { get("showLineNumbers", true) } set { set("showLineNumbers", newValue) } }
     static var showIndentGuides: Bool { get { get("showIndentGuides", true) } set { set("showIndentGuides", newValue) } }
     static var highlightCurrentLine: Bool { get { get("highlightCurrentLine", true) } set { set("highlightCurrentLine", newValue) } }
@@ -63,7 +70,7 @@ enum Prefs {
     // MARK: Maintenance (Settings window)
     /// Every key above, for "Restore Defaults" and tests.
     static let allKeys: [String] = [
-        "editorFontName", "editorFontSize", "lineHeightMultiple", "showLineNumbers", "showIndentGuides", "highlightCurrentLine",
+        "editorFontName", "editorFontSize", "lineHeightMultiple", "colorScheme", "lightScheme", "darkScheme", "editorLigatures", "showLineNumbers", "showIndentGuides", "highlightCurrentLine",
         "softWrap", "bracketPairColorization", "showBreadcrumbs", "foldingEnabled", "foldImportsOnOpen", "inlineBlame",
         "defaultIndentSize", "defaultIndentUsesTabs",
         "terminalDock", "terminalFontName", "terminalFontSize", "terminalCursorStyle", "terminalScrollback", "terminalShell",

@@ -109,14 +109,45 @@ enum Languages {
 
     private static let jsonPunctuation = #"["{" "}" "[" "]" ","] @punctuation.json"#
 
+    /// PhpStorm-style distinctions on top of the upstream PHP queries. Later patterns win over earlier ones when a
+    /// span is captured twice with the same number of name components, so order matters here.
     private static let phpExtras = [
         "(class_declaration name: (name) @type)", "(interface_declaration name: (name) @type)",
         "(trait_declaration name: (name) @type)", "(enum_declaration name: (name) @type)",
         "(base_clause (name) @type)", "(base_clause (qualified_name) @type)",
         "(class_interface_clause (name) @type)", "(class_interface_clause (qualified_name) @type)",
-        "(attribute (name) @attribute)", "(attribute (qualified_name) @attribute)",
-        "(argument name: (name) @attribute)",
+        // `$var`: both the `$` and the name carry the variable colour (upstream paints `$` as an operator).
+        "(variable_name \"$\" @variable.php)", "(variable_name (name) @variable.php)",
+        #"((variable_name "$" @variable.builtin (name) @_n @variable.builtin) (#eq? @_n "this"))"#,
+        // Parameters (declaration sites), promoted constructor properties, named arguments.
+        #"(simple_parameter name: (variable_name ["$" (name)] @variable.parameter.php))"#,
+        #"(variadic_parameter name: (variable_name ["$" (name)] @variable.parameter.php))"#,
+        #"(property_promotion_parameter name: (variable_name ["$" (name)] @variable.parameter.php))"#,
+        "(argument name: (name) @variable.parameter.named)",
+        // Members: instance / nullsafe / static properties, class constants, enum cases.
+        "(property_element (variable_name [\"$\" (name)] @property.declared))",
+        "(member_access_expression name: (name) @property)",
+        "(nullsafe_member_access_expression name: (name) @property)",
+        #"(scoped_property_access_expression name: (variable_name ["$" (name)] @property.static))"#,
+        #"(class_constant_access_expression "::" . (name) @constant.class (#not-eq? @constant.class "class"))"#,
+        #"(class_constant_access_expression "::" . (name) @keyword (#eq? @keyword "class"))"#,
+        "(enum_case name: (name) @constant.class)",
+        // Calls: `$obj->m()` / `$obj?->m()` vs `Class::m()`, `__construct` is a normal method name.
+        "(method_declaration name: (name) @function.method.declaration)",
+        "(member_call_expression name: (name) @function.method.call)",
+        "(nullsafe_member_call_expression name: (name) @function.method.call)",
+        "(scoped_call_expression name: (name) @function.method.static)",
+        "(escape_sequence) @string.escape",
+        // Attributes `#[Route(...)]` (name only).
+        "(attribute (name) @meta.annotation)", "(attribute (qualified_name) @meta.annotation)",
     ]
+
+    private static let htmlExtras = #"["<" ">" "</" "/>"] @tag.delimiter"#
+
+    private static let bladeExtras = #"""
+    [(directive) (directive_start) (directive_end)] @keyword.directive
+    ["{{" "}}" "{!!" "!!}"] @punctuation.special
+    """#
 
     private static let htmlInjections = #"""
     ((script_element (start_tag) @_t (raw_text) @injection.content)
@@ -185,11 +216,11 @@ enum Languages {
         case "php": return g(tree_sitter_php(), hl: [read("PHP", "highlights.scm"), commentKinds] + phpExtras, inj: phpInjections)
         case "php_only": return g(tree_sitter_php_only(), hl: [read("PHP", "highlights.scm"), commentKinds] + phpExtras, inj: Array(phpInjections.dropFirst()))
         case "blade":
-            return g(tree_sitter_blade(), hl: [html, read("Blade", "highlights.scm")],
+            return g(tree_sitter_blade(), hl: [html, htmlExtras, read("Blade", "highlights.scm"), bladeExtras],
                      inj: [htmlInjections, frameworkAttrs, bladeInjections])
-        case "html": return g(tree_sitter_html(), hl: [html], inj: [htmlInjections])
+        case "html": return g(tree_sitter_html(), hl: [html, htmlExtras], inj: [htmlInjections])
         case "vue":
-            let grammar = g(tree_sitter_html(), hl: [html], inj: [htmlInjections, frameworkAttrs])
+            let grammar = g(tree_sitter_html(), hl: [html, htmlExtras], inj: [htmlInjections, frameworkAttrs])
             grammar.findsInterpolations = true
             return grammar
         case "js": return g(tree_sitter_javascript(), hl: [js, commentKinds], inj: [jsInjections])

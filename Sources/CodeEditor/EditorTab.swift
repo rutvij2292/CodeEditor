@@ -307,7 +307,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         textView.useTabs = indent.useTabs
         textView.tabColumns = indent.size
         textView.defaultParagraphStyle = paragraph
-        textView.typingAttributes = [.font: Self.currentFont(), .foregroundColor: Theme.foreground, .paragraphStyle: paragraph]
+        textView.typingAttributes = Theme.textAttributes(paragraph: paragraph)
         textView.textContainerInset = NSSize(width: 6, height: 6)
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
@@ -410,7 +410,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         textView.textColor = Theme.foreground
         textView.backgroundColor = Theme.background
         textView.insertionPointColor = Theme.foreground
-        textView.typingAttributes = [.font: Self.currentFont(), .foregroundColor: Theme.foreground, .paragraphStyle: paragraph]
+        textView.typingAttributes = Theme.textAttributes(paragraph: paragraph)
         textView.textStorage?.addAttribute(.foregroundColor, value: Theme.foreground,
                                            range: NSRange(location: 0, length: textView.textStorage?.length ?? 0))
         scrollView.backgroundColor = Theme.background

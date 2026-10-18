@@ -222,7 +222,7 @@ final class Highlighter {
             var attrs: [NSAttributedString.Key: Any] = [.foregroundColor: style.color]
             if let bg = style.background { attrs[.backgroundColor] = bg }
             if style.italic { attrs[.obliqueness] = 0.2 }
-            if style.bold { attrs[.strokeWidth] = -2.5 }
+            if style.bold { attrs[.strokeWidth] = -4 }
             styleAttrs.append(attrs)
             id = UInt16(styleAttrs.count - 1)
         }
@@ -277,6 +277,7 @@ final class Highlighter {
             let cursor = query.execute(in: tree)
             cursor.setRange(win)
             var items: [(len: Int, comps: Int, pattern: Int, range: NSRange, id: UInt16)] = []
+            let tagID = styleID("comment.doc.tag")
             for match in cursor where match.allowed(in: ctx) {
                 for capture in match.captures {
                     let comps = capture.nameComponents
@@ -284,6 +285,11 @@ final class Highlighter {
                     let id = styleID(comps.joined(separator: "."))
                     let r = capture.range
                     items.append((r.length, comps.count, match.patternIndex, r, id))
+                    if comps.count == 2, comps[1] == "doc", first == "comment", id != 0 {
+                        for tag in Highlighter.docTagRanges(in: r, text) {
+                            items.append((tag.length, 3, match.patternIndex, tag, tagID))
+                        }
+                    }
                 }
             }
             // Outer spans first, inner (more specific) last; ties: longer capture name, later pattern.
@@ -300,6 +306,30 @@ final class Highlighter {
         for injection in injections(of: grammar, tree: tree, text: text, window: win, offset: offset, ctx, canvas) {
             paint(injection, text: text, offset: offset, depth: depth + 1, canvas)
         }
+    }
+
+    /// `@param`, `@return`, `{@link ...}` style tags inside a doc comment (cheap hand scan, no regex).
+    private static func docTagRanges(in r: NSRange, _ text: NSString) -> [NSRange] {
+        guard r.length < 20_000, NSMaxRange(r) <= text.length else { return [] }
+        var out: [NSRange] = []
+        var i = r.location
+        let end = NSMaxRange(r)
+        while i < end {
+            if text.character(at: i) == 0x40 /* @ */ {
+                var j = i + 1
+                while j < end {
+                    let ch = text.character(at: j)
+                    let word = (ch >= 0x61 && ch <= 0x7A) || (ch >= 0x41 && ch <= 0x5A) || (ch >= 0x30 && ch <= 0x39) || ch == 0x2D || ch == 0x5F || ch == 0x3A
+                    if !word { break }
+                    j += 1
+                }
+                if j > i + 1, i == r.location || [0x20, 0x09, 0x0A, 0x2A, 0x7B].contains(text.character(at: i - 1)) {
+                    out.append(NSRange(location: i, length: j - i))
+                }
+                i = j
+            } else { i += 1 }
+        }
+        return out
     }
 
     private struct Injection {
