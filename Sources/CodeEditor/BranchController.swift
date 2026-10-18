@@ -152,6 +152,9 @@ final class BranchController: NSObject {
             case .checkout: checkout(e.name)
             case .newFrom: newBranch(from: e.name)
             case .checkoutAndRebase: checkoutAndRebase(e)
+            case .checkoutAndUpdate: checkoutAndUpdate(e)
+            case .diffWorkingTree: diffWorkingTree(e)
+            case .newWorktree: newWorktree(e)
             case .rebaseOnto: rebaseCurrent(onto: e)
             case .merge: merge(e)
             case .compare: compare(e)
@@ -286,6 +289,46 @@ final class BranchController: NSObject {
              fail: { [weak self] err in
                 if let f = err as? CheckoutFailure, case .localChanges = f { self?.handleCheckoutFailure(err, target: e.name) } else { self?.report(error: err, title: "Rebase failed") }
              })
+    }
+
+    private func checkoutAndUpdate(_ e: BranchEntry) {
+        let target = e.name
+        work("Updating \(target)…", { repo in
+            try repo.checkoutTarget(target)
+            let info = try repo.branchInfo()
+            if info.upstream != nil, !info.detached { try repo.git(["pull", "--no-rebase", "--no-edit"]) }
+        }, ok: { [weak self] in self?.flash("Checked out and updated \(target)") },
+             fail: { [weak self] err in self?.handleCheckoutFailure(err, target: target) })
+    }
+
+    private func diffWorkingTree(_ e: BranchEntry) {
+        work("Comparing…", { repo in
+            BranchComparison(other: e.name, onlyInOther: [], onlyInCurrent: [], files: try repo.workingTreeChanges(against: e.name))
+        }, ok: { [weak self] cmp in
+            guard let self, let repo = self.repo else { return }
+            let w = BranchCompareWindow(repo: repo, comparison: cmp, current: "Working Tree", workingTree: true)
+            self.compareWindows.append(w)
+            if !AppEnv.headless { w.show() }
+        })
+    }
+
+    /// `git worktree add` into a folder the user picks (save panel; default sibling of the project).
+    private func newWorktree(_ e: BranchEntry) {
+        guard let window, let repo, !AppEnv.headless else { return }
+        let panel = NSSavePanel()
+        panel.title = "New Worktree from “\(e.name)”"
+        panel.prompt = "Create Worktree"
+        panel.directoryURL = repo.root.deletingLastPathComponent()
+        panel.nameFieldStringValue = repo.root.lastPathComponent + "-" + e.shortName.replacingOccurrences(of: "/", with: "-")
+        panel.beginSheetModal(for: window) { [weak self] resp in
+            guard resp == .OK, let url = panel.url, let self else { return }
+            let remotes = self.lastList.remotes
+            self.work("Adding worktree…", { try $0.addWorktree(at: url.path, for: e, remotes: remotes) },
+                      ok: { [weak self] in
+                          self?.flash("Worktree created at \(url.path)")
+                          NSWorkspace.shared.activateFileViewerSelecting([url])
+                      })
+        }
     }
 
     private func rebaseCurrent(onto e: BranchEntry) {

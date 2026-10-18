@@ -9,13 +9,15 @@ final class BranchCompareWindow: NSObject, NSTableViewDataSource, NSTableViewDel
     private let repo: GitRepo
     private let cmp: BranchComparison
     private let current: String
+    private let workingTree: Bool
     private var commitRows: [CommitRow] = []
     private let commitTable = NSTableView()
     private let fileTable = NSTableView()
     private let diff = SideBySideDiffView(frame: NSRect(x: 0, y: 0, width: 640, height: 600))
     private let hint = NSTextField(labelWithString: "Select a file to see the diff")
 
-    init(repo: GitRepo, comparison: BranchComparison, current: String) {
+    init(repo: GitRepo, comparison: BranchComparison, current: String, workingTree: Bool = false) {
+        self.workingTree = workingTree
         self.repo = repo
         self.cmp = comparison
         self.current = current
@@ -23,11 +25,11 @@ final class BranchCompareWindow: NSObject, NSTableViewDataSource, NSTableViewDel
                           backing: .buffered, defer: false)
         super.init()
         window.isReleasedWhenClosed = false
-        window.title = "Compare “\(comparison.other)” with “\(current)”"
-        commitRows.append(.header("In \(comparison.other), not in \(current)  (\(comparison.onlyInOther.count))"))
+        window.title = workingTree ? "“\(comparison.other)” vs Working Tree" : "Compare “\(comparison.other)” with “\(current)”"
+        if !workingTree { commitRows.append(.header("In \(comparison.other), not in \(current)  (\(comparison.onlyInOther.count))"))
         commitRows += comparison.onlyInOther.map { .commit($0) }
         commitRows.append(.header("In \(current), not in \(comparison.other)  (\(comparison.onlyInCurrent.count))"))
-        commitRows += comparison.onlyInCurrent.map { .commit($0) }
+        commitRows += comparison.onlyInCurrent.map { .commit($0) } }
 
         func configure(_ t: NSTableView, _ id: String) {
             let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
@@ -87,13 +89,14 @@ final class BranchCompareWindow: NSObject, NSTableViewDataSource, NSTableViewDel
         let f = cmp.files[r]
         let repo = self.repo, other = cmp.other
         DispatchQueue.global(qos: .userInitiated).async {
-            let old = (try? repo.content(of: f.oldPath ?? f.path, at: "HEAD")) ?? nil
-            let new = (try? repo.content(of: f.path, at: other)) ?? nil
+            let wt = self.workingTree
+            let old = wt ? ((try? repo.content(of: f.oldPath ?? f.path, at: other)) ?? nil) : ((try? repo.content(of: f.oldPath ?? f.path, at: "HEAD")) ?? nil)
+            let new = wt ? (try? String(contentsOf: repo.root.appendingPathComponent(f.path), encoding: .utf8)) : ((try? repo.content(of: f.path, at: other)) ?? nil)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.hint.isHidden = true
                 self.diff.isHidden = false
-                self.diff.show(old: old ?? "", new: new ?? "", oldTitle: self.current, newTitle: other,
+                self.diff.show(old: old ?? "", new: new ?? "", oldTitle: self.workingTree ? other : self.current, newTitle: self.workingTree ? "Working Tree" : other,
                                fileExtension: (f.path as NSString).pathExtension)
             }
         }

@@ -240,6 +240,61 @@ enum SelfTestBranches {
             check("pull into current merges the remote branch", fm.fileExists(atPath: work.appendingPathComponent("o.txt").path))
         } else { check("origin/feature/a listed", false) }
 
+        // checkout and update / working-tree diff / worktree
+        sh(r, ["checkout", "-q", "main"])
+        sh(r, ["reset", "-q", "--hard", "origin/main"])
+        sh(other, ["checkout", "-q", "main"]); sh(other, ["pull", "-q"])
+        commit(other, "upd.txt", "u\n", "upstream moved"); sh(other, ["push", "-q"])
+        sh(r, ["fetch", "-q"])
+        sh(r, ["checkout", "-q", "-b", "elsewhere", "v1"])
+        sh(r, ["branch", "--set-upstream-to=origin/main", "elsewhere"])
+        _ = try? r.checkoutAndUpdate("main")
+        check("checkout and update switches and pulls", (try? r.branchList())?.current == "main" && fm.fileExists(atPath: work.appendingPathComponent("upd.txt").path))
+        write(r, "g.txt", "wt change\n")
+        let wtc = (try? r.workingTreeChanges(against: "v1")) ?? []
+        check("working tree diff lists changed files", wtc.contains { $0.path == "g.txt" } && wtc.contains { $0.path == "upd.txt" })
+        sh(r, ["checkout", "-q", "--", "g.txt"])
+        let wtDir = base.appendingPathComponent("wt-feature")
+        if let e = ((try? r.branchList())?.local.first { $0.name == "feature/a" }) {
+            check("worktree add for a local branch", (try? r.addWorktree(at: wtDir.path, for: e, remotes: ["origin"])) != nil && fm.fileExists(atPath: wtDir.appendingPathComponent("a.txt").path))
+        } else { check("feature/a exists for worktree", false) }
+        if let e = ((try? r.branchList())?.remote.first { $0.name == "origin/feature/remote-only" }) {
+            let d2 = base.appendingPathComponent("wt-remote")
+            _ = try? r.addWorktree(at: d2.path, for: e, remotes: ["origin"])
+            check("worktree add for a remote branch tracks it", fm.fileExists(atPath: d2.appendingPathComponent("ro.txt").path))
+        }
+
+        // popup tree flattening
+        func entry(_ n: String, remote: String? = nil, current: Bool = false) -> BranchEntry {
+            var e = BranchEntry(name: n, isRemote: remote != nil); e.remote = remote; e.isCurrent = current; return e
+        }
+        var tl = BranchList()
+        tl.local = [entry("main", current: true), entry("feature/a"), entry("feature/b"), entry("bugfix/x"), entry("solo")]
+        tl.remote = [entry("origin/main", remote: "origin"), entry("origin/feature/a", remote: "origin")]
+        tl.remotes = ["origin"]; tl.tags = ["v1"]; tl.recent = ["feature/b", "solo"]
+        var keys: [String] = []
+        var st = BranchCollapseState()
+        var sig = BranchTree.flatten(tl, favorites: [], groupByPrefix: true, showTags: false, state: st, keys: &keys).map(\.signature)
+        check("tree: Recent grouped by prefix", sig.prefix(5).elementsEqual(["▾ Recent", "  ▾ feature", "    b", "  solo", "▾ Local"]))
+        check("tree: local folders sorted, plain branches after, current first", Array(sig.dropFirst(5).prefix(9)) == ["  ▾ bugfix", "    x", "  ▾ feature", "    a", "    b", "  main *", "  solo", "▾ Remote", "  ▾ origin"])
+        check("tree: remote prefix folders collapsed by default", sig.suffix(3).elementsEqual(["  ▾ origin", "    ▸ feature (1)", "    main"]))
+        let flat = BranchTree.flatten(tl, favorites: ["solo"], groupByPrefix: false, showTags: true, state: st, keys: &keys).map(\.signature)
+        check("tree: no prefix grouping, favourites first, tags section collapsed", flat.contains("  feature/a") && !flat.contains { $0.contains("▾ feature") } && flat.last == "▸ Tags (1)"
+              && flat.firstIndex(of: "  solo")! < flat.firstIndex(of: "  feature/a")!)
+        BranchTree.toggle("local", currentlyCollapsed: false, state: &st)
+        sig = BranchTree.flatten(tl, favorites: [], groupByPrefix: true, showTags: false, state: st, keys: &keys).map(\.signature)
+        check("tree: collapsing Local hides its rows", sig.contains("▸ Local (5)") && !sig.contains("  main *"))
+        BranchTree.toggle("local", currentlyCollapsed: true, state: &st)
+        BranchTree.toggle("remote:origin/feature", currentlyCollapsed: true, state: &st)
+        sig = BranchTree.flatten(tl, favorites: [], groupByPrefix: true, showTags: false, state: st, keys: &keys).map(\.signature)
+        check("tree: expanding a default-collapsed folder shows its branches", sig.contains("      a") && sig.contains("▾ Local"))
+        let collapsedAll = BranchTree.collapseAll(tl, favorites: [], groupByPrefix: true, showTags: false)
+        sig = BranchTree.flatten(tl, favorites: [], groupByPrefix: true, showTags: false, state: collapsedAll, keys: &keys).map(\.signature)
+        check("tree: collapse all leaves only the sections", sig == ["▸ Recent (2)", "▸ Local (5)", "▸ Remote (2)"])
+        let expandedAll = BranchTree.expandAll(tl, favorites: [], groupByPrefix: true, showTags: false)
+        sig = BranchTree.flatten(tl, favorites: [], groupByPrefix: true, showTags: false, state: expandedAll, keys: &keys).map(\.signature)
+        check("tree: expand all opens every folder", !sig.contains { $0.hasPrefix("▸") || $0.contains("▸ ") })
+
         // favourites persist per repo
         check("favourites start empty", BranchFavorites.all(for: work).isEmpty)
         BranchFavorites.toggle("main", for: work)

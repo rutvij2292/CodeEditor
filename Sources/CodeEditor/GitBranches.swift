@@ -345,3 +345,36 @@ extension GitRepo {
 
     static func resetFetchThrottle() { fetchLock.lock(); lastFetch = [:]; fetchLock.unlock() }
 }
+
+// MARK: checkout and update / worktrees / working-tree diff
+
+extension GitRepo {
+    /// Checks the branch out, then pulls its upstream (fast-forward when possible, merge otherwise).
+    func checkoutAndUpdate(_ target: String) throws {
+        try checkoutTarget(target)
+        let info = try branchInfo()
+        if info.upstream != nil, !info.detached { try git(["pull", "--no-rebase", "--no-edit"]) }
+    }
+
+    /// `git worktree add` for a local branch, or a new tracking branch for a remote one.
+    func addWorktree(at path: String, for entry: BranchEntry, remotes: [String]) throws {
+        if entry.isRemote {
+            let local = localName(forRemote: entry.name, remotes: remotes)
+            if localBranchExists(local) { try git(["worktree", "add", path, local]); return }
+            try git(["worktree", "add", "--track", "-b", local, path, entry.name])
+        } else {
+            try git(["worktree", "add", path, entry.name])
+        }
+    }
+
+    /// Files that differ between `rev` and the working tree (tracked files).
+    func workingTreeChanges(against rev: String) throws -> [GitFileChange] {
+        var files: [GitFileChange] = []
+        for line in try text(["diff", "--name-status", "-M", rev]).split(separator: "\n") {
+            let p = line.split(separator: "\t").map(String.init)
+            guard p.count >= 2 else { continue }
+            files.append(GitFileChange(status: String(p[0].prefix(1)), path: p.last!, oldPath: p.count > 2 ? p[1] : nil))
+        }
+        return files
+    }
+}
