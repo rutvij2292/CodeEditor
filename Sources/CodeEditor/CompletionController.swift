@@ -153,6 +153,11 @@ final class CompletionController: NSObject {
         let flags = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let cmd = flags.contains(.command), ctrl = flags.contains(.control), shift = flags.contains(.shift)
         let code = e.keyCode
+        // Ctrl-Space (or Ctrl-Option-Space, in case macOS reserves Ctrl-Space for input-source switching) opens suggestions now.
+        if code == 49, ctrl, !cmd {
+            trigger(manual: true)
+            return true
+        }
         if isOpen {
             switch code {
             case 126: move(-1); return true
