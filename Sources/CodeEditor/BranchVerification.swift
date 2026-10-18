@@ -7,12 +7,17 @@ enum BranchVerification {
 
     /// Called ~0.4 s after launch; waits for the Git root to resolve, then drives the UI.
     static func start(_ picker: String, _ w: ProjectWindow) {
+        if AppEnv.value("CE_BRANCH_TALL") != nil { BranchPopup.maxHeight = 1000 }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
             switch picker {
-            case "branches": w.showBranchPopup()
-            case "branch-actions":
+            case "branches", "branch-expanded":
+                if let r = w.gitRoot { BranchFavorites.toggle("main", for: r) }
                 w.showBranchPopup()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { BranchPopup.selectTitle("feature/login-form"); BranchPopup.pressRight() }
+                if picker == "branch-expanded" { DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { BranchPopup.pressToggleAll(); BranchPopup.pressToggleAll() } }
+            case "branch-actions":
+                if let r = w.gitRoot { BranchFavorites.toggle("main", for: r) }
+                w.showBranchPopup()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { BranchPopup.selectTitle(AppEnv.value("CE_BRANCH_ROW") ?? "login-form"); BranchPopup.pressRight() }
             case "branch-search":
                 w.showBranchPopup()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { BranchPopup.type("log") }
@@ -20,6 +25,27 @@ enum BranchVerification {
                 w.branches.loadBranchList { _ in
                     w.branches.newBranch(from: nil)
                     NewBranchSheet.setName(AppEnv.value("CE_BRANCH_NAME") ?? "feature/login-form")
+                }
+            case "branch-keys":
+                w.showBranchPopup()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    func log(_ s: String) { fputs("keys: \(s)\n", stderr) }
+                    BranchPopup.selectTitle("feature"); BranchPopup.pressLeft()
+                    log("left on expanded folder collapses -> rows contain login-form: \(BranchPopup.shownTitles.contains("login-form"))")
+                    BranchPopup.pressRight()
+                    log("right on collapsed folder expands -> \(BranchPopup.shownTitles.contains("login-form"))")
+                    BranchPopup.selectTitle("login-form"); BranchPopup.pressRight()
+                    log("right on branch opens menu: \(BranchPopup.menuOpen) first=\(BranchPopup.menuTitles.first ?? "")")
+                    BranchPopup.pressDown(); BranchPopup.pressDown()
+                    for _ in 0..<9 { BranchPopup.pressDown() }
+                    BranchPopup.pressRight()
+                    log("right on submenu row opens child; escape closes only child: ")
+                    BranchPopup.pressEscape()
+                    log("menu still open after first escape: \(BranchPopup.menuOpen)")
+                    BranchPopup.pressLeft()
+                    log("left closes the menu: open=\(!BranchPopup.menuOpen) popup=\(BranchPopup.isShown)")
+                    BranchPopup.pressEscape()
+                    log("escape closes popup: \(!BranchPopup.isShown)")
                 }
             case "branch-dirty": w.branches.checkout("bugfix/null-pointer")
             case "branch-delete":
@@ -37,7 +63,7 @@ enum BranchVerification {
         w.branches.widget.snapshot(to: path("widget_light"), dark: false)
         w.branches.widget.snapshot(to: path("widget_dark"), dark: true)
         switch picker {
-        case "branches", "branch-actions", "branch-search": BranchPopup.snapshot(to: path("popup"))
+        case "branches", "branch-expanded", "branch-actions", "branch-search": BranchPopup.snapshot(to: path("popup"))
         case "branch-new": NewBranchSheet.snapshot(to: path("sheet"))
         default: if let v = BranchNotice.lastView { Verification.render(v, to: path("notice")) }
         }
