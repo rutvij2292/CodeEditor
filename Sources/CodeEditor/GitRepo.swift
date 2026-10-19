@@ -386,6 +386,16 @@ final class GitRepo {
         return (remote, false)
     }
 
+    enum PushTags { case all, followCurrent }
+
+    /// Pushes HEAD to `remote`/`target` (the PhpStorm Push dialog). `setUpstream` makes `remote/target` the upstream.
+    func push(remote: String, target: String, setUpstream: Bool, tags: PushTags?) throws {
+        var args = ["push"]
+        if setUpstream { args.append("-u") }
+        switch tags { case .all?: args.append("--tags"); case .followCurrent?: args.append("--follow-tags"); case nil: break }
+        try git(args + [remote, "HEAD:refs/heads/\(target)"])
+    }
+
     func push() throws {
         let info = try branchInfo()
         let target = try pushTarget(info)

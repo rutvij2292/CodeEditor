@@ -1499,11 +1499,10 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
                 case .success(let p):
                     if p.commits.isEmpty, !p.newBranch { self.showNote("Nothing to push: \(p.branch) is up to date with \(p.upstream ?? "its remote")."); return }
                     if GitDialogs.skipPushPreview, !forcePreview { self.perform({ try $0.push() }); return }
-                    let (alert, dontAsk) = GitDialogs.pushAlert(p)
-                    self.present(alert) { resp in
-                        guard resp == .alertFirstButtonReturn else { return }
-                        if dontAsk.state == .on { GitDialogs.skipPushPreview = true }
-                        self.perform({ try $0.push() })
+                    PushWindow.present(over: self.panel.window, repo: self.repo, preview: p) { [weak self] req in
+                        guard let self, let req else { return }
+                        if req.dontAskAgain { GitDialogs.skipPushPreview = true }
+                        self.perform({ try $0.push(remote: req.remote, target: req.target, setUpstream: req.setUpstream, tags: req.tags) })
                     }
                 }
             }
