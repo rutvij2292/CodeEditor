@@ -162,6 +162,19 @@ private final class GitRowCell: NSTableCellView {
     required init?(coder: NSCoder) { fatalError() }
 
     private var shown: NSControl.StateValue = .off
+    private var rowColor: NSColor?, dirColor: NSColor = Theme.gutter
+
+    /// On the accent-coloured selection the status colours vanish (blue on blue): switch to white text there.
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet { applySelectionColors() }
+    }
+
+    private func applySelectionColors() {
+        let selected = backgroundStyle == .emphasized
+        name.textColor = selected ? .white : (rowColor ?? Theme.foreground)
+        if let rowColor { badge.textColor = selected ? .white : rowColor }
+        dir.textColor = selected ? NSColor.white.withAlphaComponent(0.75) : dirColor
+    }
 
     private func setState(_ s: NSControl.StateValue) {
         shown = s
@@ -186,6 +199,7 @@ private final class GitRowCell: NSTableCellView {
         name.textColor = Theme.foreground
         dir.stringValue = "\(group.rows.count) file\(group.rows.count == 1 ? "" : "s")"
         dir.textColor = Theme.gutter
+        rowColor = nil; dirColor = Theme.gutter
         showButtons(false)
     }
 
@@ -201,6 +215,8 @@ private final class GitRowCell: NSTableCellView {
         name.textColor = color
         dir.stringValue = path.deletingLastPathComponent
         dir.textColor = Theme.gutter
+        rowColor = color; dirColor = Theme.gutter
+        applySelectionColors()
         showButtons(row.kind == .conflicts)
     }
 }
