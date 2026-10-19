@@ -118,6 +118,9 @@ extension SelfTest {
                   server: "Intelephense · 121 MB  |  JSON · 40 MB  |  TypeScript · 482 MB  |  Vue · 62 MB", encoding: "UTF-8")
         sb.setClaude(.waiting)
         check("status bar: terminal toggle is visible with long server labels", sb.terminalButtonFullyVisible)
+        check("status bar: servers shown as a count", sb.serverText == "\u{2699}\u{FE0E} 4")
+        check("status bar: hover lists each server and the total memory",
+              sb.serverTip.contains("Intelephense · 121 MB") && sb.serverTip.contains("Vue · 62 MB") && sb.serverTip.hasSuffix("Total: 705 MB"))
 
         do {   // window floor: the status bar must not set the window's minimum width (it used to: 700+ pt, wider than a laptop screen)
             let t = ProjectWindow()

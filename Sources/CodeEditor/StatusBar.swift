@@ -134,9 +134,33 @@ final class StatusBar: NSView {
         setTitle(encoding, line == nil ? "" : (encodingName ?? "UTF-8"))
         lineEnding.stringValue = eol ?? ""
         language.stringValue = languageName ?? ""
-        server.stringValue = serverText
+        setServers(serverText)
         setTitle(branch, branchName ?? "")
     }
+
+    /// Language servers as a compact count ("⚙︎ 5") instead of a long line of names and sizes; hovering lists each server with its
+    /// memory and the total. `text` is the manager's summary, one "Name · 121 MB" entry per server joined by "  |  ".
+    func setServers(_ text: String) {
+        let entries = text.components(separatedBy: "  |  ").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !entries.isEmpty else { server.stringValue = ""; server.toolTip = nil; return }
+        var totalMB = 0.0
+        if let rx = try? NSRegularExpression(pattern: #"(\d+(?:\.\d+)?)\s*(MB|GB)"#) {
+            for e in entries {
+                let ns = e as NSString
+                if let m = rx.firstMatch(in: e, range: NSRange(location: 0, length: ns.length)), let v = Double(ns.substring(with: m.range(at: 1))) {
+                    totalMB += ns.substring(with: m.range(at: 2)) == "GB" ? v * 1024 : v
+                }
+            }
+        }
+        let busy = entries.contains { $0.contains("indexing") || $0.contains("starting") || $0.contains("%") }
+        server.stringValue = "\u{2699}\u{FE0E} \(entries.count)" + (busy ? " \u{2026}" : "")
+        var tip = "Language servers (\(entries.count))\n" + entries.map { "  " + $0 }.joined(separator: "\n")
+        if totalMB > 0 { tip += "\nTotal: " + (totalMB >= 1024 ? String(format: "%.1f GB", totalMB / 1024) : String(format: "%.0f MB", totalMB)) }
+        server.toolTip = tip
+    }
+
+    var serverText: String { server.stringValue }
+    var serverTip: String { server.toolTip ?? "" }
 
     func setViewer(visible: Bool, text: String) {
         viewerButton.isHidden = !visible
