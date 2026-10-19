@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// Throwaway repositories imitating GitHub: a bare "origin" with hand-made `refs/pull/N/head` refs, a developer clone and work clones.
 enum PRTestEnv {
@@ -87,6 +87,27 @@ enum SelfTestPR {
             mv.acceptAllOurs()
         }
         SelfTest.check("merge view: loading file after file never traps and accepts all", true)
+
+        // Arrows follow the change's state (PhpStorm): unresolved -> apply/ignore, resolved -> only a reset button.
+        let host = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        let m2 = MergeView(frame: NSRect(x: 0, y: 0, width: 1000, height: 600))
+        host.contentView = m2
+        m2.show(base: "x\n", ours: "x1\n", theirs: "x2\n", oursTitle: "ours", theirsTitle: "theirs", fileExtension: "txt")
+        m2.layoutSubtreeIfNeeded()
+        func st(_ left: Bool) -> String {
+            guard let g = m2.gutterState(hunk: 0, left: left) else { return "none" }
+            return "\(g.apply ? "A" : "-")\(g.ignore ? "I" : "-")\(g.reset ? "R" : "-")"
+        }
+        SelfTest.check("merge view: unresolved conflict offers apply on both sides", st(true) == "A--" && st(false) == "A--")
+        m2.applyOurs(0)
+        SelfTest.check("merge view: accepting left removes arrows on BOTH sides, offers reset on the left", st(true) == "--R" && st(false) == "---" && m2.remainingConflicts == 0)
+        m2.resetHunk(0)
+        SelfTest.check("merge view: reset brings the arrows and the conflict back", st(true) == "A--" && st(false) == "A--" && m2.remainingConflicts == 1)
+        m2.revertToBase(0)
+        SelfTest.check("merge view: discarding removes the arrows too", st(true) == "--R" && st(false) == "---" && m2.remainingConflicts == 0)
+        m2.resetHunk(0)
+        m2.applyTheirs(0)
+        SelfTest.check("merge view: accepting right puts the reset on the right", st(true) == "---" && st(false) == "--R")
     }
 
     static func run() {

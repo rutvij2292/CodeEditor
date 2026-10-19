@@ -3,13 +3,15 @@ import AppKit
 /// Ribbon + action buttons between two panes (ours|result or result|theirs).
 private final class MergeGutter: NSView {
     enum Side { case left, right }
-    enum Action { case apply, ignore }
+    enum Action { case apply, ignore, reset }
     struct Item {
         var hunk: Int
         var sideY: CGFloat, sideH: CGFloat
         var resY: CGFloat, resH: CGFloat
         var color: NSColor
         var canApply: Bool, canIgnore: Bool
+        /// A resolved change offers only this: back to its unresolved state (PhpStorm's "Reset resolved change").
+        var canReset = false
     }
 
     let side: Side
@@ -24,6 +26,10 @@ private final class MergeGutter: NSView {
         var out: [(Action, NSRect)] = []
         let y = it.sideY + 1
         let apply = it.canApply, ignore = it.canIgnore
+        if it.canReset {
+            let x: CGFloat = side == .left ? 3 : bounds.width - 19
+            return [(.reset, NSRect(x: x, y: y, width: 16, height: 16))]
+        }
         if side == .left {
             var x: CGFloat = 3
             if apply { out.append((.apply, NSRect(x: x, y: y, width: 16, height: 16))); x += 18 }
@@ -59,7 +65,7 @@ private final class MergeGutter: NSView {
                 let pill = NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4)
                 DiffColors.chrome.setFill(); pill.fill()
                 DiffColors.separator.setStroke(); pill.stroke()
-                let text = (action == .ignore ? "\u{00D7}" : (side == .left ? "\u{00BB}" : "\u{00AB}")) as NSString
+                let text = (action == .ignore ? "\u{00D7}" : action == .reset ? "\u{21B6}" : (side == .left ? "\u{00BB}" : "\u{00AB}")) as NSString
                 let size = text.size(withAttributes: glyph)
                 text.draw(at: NSPoint(x: r.midX - size.width / 2, y: r.midY - size.height / 2), withAttributes: glyph)
             }
@@ -105,13 +111,14 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
     private let oursTitle = DiffUI.label(), resultTitle = DiffUI.label(), theirsTitle = DiffUI.label()
     private let counter = DiffUI.label(12, weight: .medium)
     private let applyButton = NSButton(title: "Apply", target: nil, action: nil)
-    private let yoursButton = NSButton(title: "Accept Yours", target: nil, action: nil)
-    private let theirsButton = NSButton(title: "Accept Theirs", target: nil, action: nil)
+    private let yoursButton = NSButton(title: "Accept Left", target: nil, action: nil)
+    private let theirsButton = NSButton(title: "Accept Right", target: nil, action: nil)
     private let prevButton = NSButton(), nextButton = NSButton()
     private let nonConflictingPopup = NSPopUpButton(frame: .zero, pullsDown: true)
     private var oursRowHunk: [Int] = [], theirsRowHunk: [Int] = []
 
     private var hunks: [MHunk] = []
+    private var initialStates: [PickState] = []
     private var hasBase = true
     private var edges: [Int] = [0]
     private var oursSpans: [Span] = [], theirsSpans: [Span] = []
@@ -279,6 +286,7 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
         theirsPane.setText(theirs, maxLineNumber: maxLines)
         result.setText("", maxLineNumber: maxLines)
         loadResult(initial)
+        initialStates = hunks.indices.map { snapshot($0) }
         maxColumns = 0
         for text in [ours, theirs] + initial { for line in text.split(separator: "\n", omittingEmptySubsequences: false) { maxColumns = max(maxColumns, DiffUI.columns(String(line))) } }
         oursPane.gutter.rowCount = Self.lineCount(ours)
@@ -347,7 +355,7 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
             guard text != h.base || h.conflict else { continue }
             let sp = spans[k]
             guard sp.start <= range.upperBound, sp.start + sp.count >= range.lowerBound else { continue }
-            out.append(DiffBand(row: sp.start, count: sp.count, color: bandColor(h, text)))
+            out.append(DiffBand(row: sp.start, count: sp.count, color: h.resolved ? bandColor(h, text).withAlphaComponent(0.4) : bandColor(h, text)))
         }
         return out
     }
@@ -385,7 +393,13 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
             let ry = inset + CGFloat(rs[k].start) * lh - ro, rh = CGFloat(rs[k].count) * lh
             guard max(sy, ry) + max(sh, rh) >= 0, min(sy, ry) <= height else { continue }
             let current = resultText(k)
-            let color = (h.conflict && !h.resolved) ? DiffColors.conflict : bandColor(h, text)
+            if h.resolved {
+                // Dealt with (accepted, ignored or edited): no more arrows, just a faded ribbon and one reset button.
+                out.append(.init(hunk: k, sideY: sy, sideH: sh, resY: ry, resH: rh, color: bandColor(h, text).withAlphaComponent(0.4),
+                                 canApply: false, canIgnore: false, canReset: side == resetSide(k)))
+                continue
+            }
+            let color = h.conflict ? DiffColors.conflict : bandColor(h, text)
             out.append(.init(hunk: k, sideY: sy, sideH: sh, resY: ry, resH: rh, color: color,
                              canApply: current != text, canIgnore: current != h.base && text != h.base))
         }
@@ -393,6 +407,24 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
     }
 
     // MARK: actions
+
+    /// The gutter that carries a resolved change's reset button: where its text came from (left unless only theirs was taken).
+    private func resetSide(_ k: Int) -> MergeGutter.Side {
+        let h = hunks[k]
+        let tookOurs = h.oursChecked.contains(true), tookTheirs = h.theirsChecked.contains(true)
+        return tookTheirs && !tookOurs ? .right : .left
+    }
+
+    /// Back to the state the change had when the merge opened (PhpStorm: "Reset resolved change"); undoable.
+    func resetHunk(_ k: Int) {
+        guard hunks.indices.contains(k), initialStates.indices.contains(k) else { return }
+        restore(k, initialStates[k])
+    }
+
+    /// What the gutter currently offers for a change: tests and accessibility.
+    func gutterState(hunk k: Int, left: Bool) -> (apply: Bool, ignore: Bool, reset: Bool)? {
+        gutterItems(left ? .left : .right).first { $0.hunk == k }.map { ($0.canApply, $0.canIgnore, $0.canReset) }
+    }
 
     private func rowMap(_ spans: [Span]) -> [Int] {
         var out = [Int](repeating: -1, count: (spans.last.map { $0.start + $0.count } ?? 0))
@@ -403,6 +435,7 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
     private func gutterAction(_ k: Int, _ side: MergeGutter.Side, _ action: MergeGutter.Action, _ event: NSEvent) {
         switch action {
         case .ignore: revertToBase(k)
+        case .reset: resetHunk(k)
         case .apply:
             if event.modifierFlags.contains(.option) { applyBoth(k, theirsFirst: side == .right) }
             else if side == .left { applyOurs(k) } else { applyTheirs(k) }

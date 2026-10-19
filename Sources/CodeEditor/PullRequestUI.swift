@@ -503,7 +503,7 @@ final class PRResolverController: NSObject, NSWindowDelegate, NSTableViewDataSou
         commitButton.isHidden = committed
         abortButton.isEnabled = !committed || true
         if committed { /* keep hint from push errors */ }
-        else if !ready { setHint("Resolve every file, then commit. Pick lines with the arrows in the gutters, or use Accept Yours / Theirs.", .info) }
+        else if !ready { setHint("Resolve every file, then commit. Pick lines with the arrows in the gutters, or use Accept Left / Right.", .info) }
         else if session.pushRemote == nil { setHint("All resolved. This PR comes from a fork we can't push to automatically. Commit, then push from the fork.", .info) }
         else { setHint(session.isFork ? "Ready. Pushing to a fork works only if the author allowed maintainer edits." : "All files resolved. Ready to commit and push to \(session.headRefName ?? "the PR branch").", .ok) }
     }
