@@ -48,6 +48,7 @@ enum Verification {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + ((picker == "git" || picker == "git-log" || BranchVerification.isBranchPicker(picker) || picker == "find" || picker == "problems" || picker == "commit") ? 3.5 : picker == "http" ? 4.5 : picker == "completion" ? 2.2 : 1.6)) {
             if let w = app.active?.window.contentView { render(w, to: shot) }
+            if let frame = app.active?.window.contentView?.superview { render(frame, to: shot.replacingOccurrences(of: ".png", with: "_frame.png")) }
             if picker == "completion", let w = app.active, let tab = w.current {
                 let popupPath = shot.replacingOccurrences(of: ".png", with: "_popup.png")
                 CompletionPopup.shared.snapshot(to: popupPath)

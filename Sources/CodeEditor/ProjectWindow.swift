@@ -38,6 +38,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     private var gitSummary = ""
     /// Title-bar branch widget, branch popup and branch actions (BranchController.swift).
     lazy var branches = BranchController(project: self)
+    private(set) lazy var toolbar = ProjectToolbar(window: window)
     private(set) var statusKinds: [String: VCSKind] = [:]
     let mainSplit = NSSplitViewController()
     let rootSplit = NSSplitViewController()
@@ -74,6 +75,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         window.minSize = NSSize(width: 640, height: 400)
         window.delegate = self
         window.title = Brand.name
+        _ = toolbar
 
         tabs.onSelect = { [weak self] id in self?.didSelect(id) }
         tabs.onClose = { [weak self] id in self?.close(id) }
@@ -493,6 +495,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         for e in tabs.entries { applyTint(e.id) }
         gitSummary = info.map { StatusBar.gitSummary(branch: $0.name, ahead: $0.ahead, behind: $0.behind, changes: changes.count) } ?? ""
         branches.apply(info: info, changes: changes.count)
+        toolbar.setGitAvailable(info != nil)
         refreshStatus()
     }
 
@@ -954,7 +957,10 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
 
     func toggleToolPanel(_ id: String) { bottom.toggle(id) }
 
-    func setToolPanelBadge(_ text: String?, for id: String) { bottom.setBadge(text, for: id) }
+    func setToolPanelBadge(_ text: String?, for id: String) {
+        bottom.setBadge(text, for: id)
+        if id == "claude-changes" { toolbar.setClaudeBadge(text) }
+    }
 
     private func applyBottomVisibility(_ visible: Bool) {
         if AppEnv.headless { bottomItem.isCollapsed = !visible } else { bottomItem.animator().isCollapsed = !visible }

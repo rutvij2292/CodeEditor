@@ -198,6 +198,7 @@ enum MainMenu {
             item("Split View", #selector(ViewerSystem.showSplit(_:)), target: ViewerSystem.shared),
             item("Preview Only", #selector(ViewerSystem.showPreview(_:)), target: ViewerSystem.shared),
             sep,
+            toggleItem("Toolbar", "showToolbar", a),
             toggleItem("Breadcrumbs", "showBreadcrumbs", a),
             toggleItem("Inline Git Blame", "inlineBlame", a),
             toggleItem("Indent Guides", "showIndentGuides", a),

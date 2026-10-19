@@ -34,6 +34,7 @@ enum Prefs {
     static var highlightCurrentLine: Bool { get { get("highlightCurrentLine", true) } set { set("highlightCurrentLine", newValue) } }
     static var softWrap: Bool { get { get("softWrap", false) } set { set("softWrap", newValue) } }          // existing key
     static var rainbowBrackets: Bool { get { get("bracketPairColorization", true) } set { set("bracketPairColorization", newValue) } }  // existing key
+    static var showToolbar: Bool { get { get("showToolbar", true) } set { set("showToolbar", newValue) } }
     static var showBreadcrumbs: Bool { get { get("showBreadcrumbs", true) } set { set("showBreadcrumbs", newValue) } }
     static var foldingEnabled: Bool { get { get("foldingEnabled", true) } set { set("foldingEnabled", newValue) } }
     /// Fold `use` imports / license header comments when a file opens.
@@ -88,7 +89,7 @@ enum Prefs {
     /// Every key above, for "Restore Defaults" and tests.
     static let allKeys: [String] = [
         "editorFontName", "editorFontSize", "lineHeightMultiple", "colorScheme", "lightScheme", "darkScheme", "editorLigatures", "showLineNumbers", "showIndentGuides", "highlightCurrentLine",
-        "softWrap", "bracketPairColorization", "showBreadcrumbs", "foldingEnabled", "foldImportsOnOpen", "highlightOccurrences", "inlineBlame", "powerSaver", "gpuAssist",
+        "softWrap", "bracketPairColorization", "showBreadcrumbs", "showToolbar", "foldingEnabled", "foldImportsOnOpen", "highlightOccurrences", "inlineBlame", "powerSaver", "gpuAssist",
         "defaultIndentSize", "defaultIndentUsesTabs",
         "terminalDock", "terminalFontName", "terminalFontSize", "terminalCursorStyle", "terminalScrollback", "terminalShell",
         "terminalAgents", "terminalNotifyOnIdle", "claudeBridgeEnabled", "completionMinChars", "completionDelayMs", "intelephenseLicenceConfigured",

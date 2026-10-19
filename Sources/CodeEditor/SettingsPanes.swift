@@ -202,6 +202,7 @@ final class EditorSettingsPane: SettingsPane {
         checkbox("Line numbers", label: "Show", get: { Prefs.showLineNumbers }, set: { Prefs.showLineNumbers = $0 })
         checkbox("Indent guides", get: { Prefs.showIndentGuides }, set: { Prefs.showIndentGuides = $0 })
         checkbox("Highlight current line", get: { Prefs.highlightCurrentLine }, set: { Prefs.highlightCurrentLine = $0 })
+        checkbox("Toolbar", get: { Prefs.showToolbar }, set: { Prefs.showToolbar = $0 })
         checkbox("Breadcrumbs", get: { Prefs.showBreadcrumbs }, set: { Prefs.showBreadcrumbs = $0 })
         checkbox("Rainbow brackets", get: { BracketColorizer.enabled }, set: { setRainbowBrackets($0) })
         checkbox("Inline Git blame", get: { Prefs.inlineBlame }, set: { Prefs.inlineBlame = $0 })
