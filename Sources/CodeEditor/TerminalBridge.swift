@@ -188,6 +188,19 @@ extension ProjectWindow {
         return text
     }
 
+    /// Opens the Ask Claude chat for the selected code (answered by the Claude Code CLI login, no API key).
+    func askClaudeAboutSelection() {
+        guard let root, let editor = current else { statusBar.flash("Open a file and select some code first"); return }
+        let tv = editor.textView
+        let sel = tv.selectedRange()
+        guard sel.length > 0 else { statusBar.flash("Select some code to ask Claude about"); return }
+        let ns = tv.string as NSString
+        let r = TerminalBridge.lineRange(in: ns, selection: sel)
+        let ctx = ClaudeAskPanel.Context(path: TerminalBridge.relativePath(editor.url, root: root), startLine: r.start, endLine: r.end,
+                                         code: ns.substring(with: sel))
+        ClaudeAskPanel.present(over: window, context: ctx, cwd: nil) { [weak self] text in self?.sendToTerminal(text) }
+    }
+
     @discardableResult
     func sendProblems() -> String? {
         guard let root, let editor = current else { return nil }

@@ -121,6 +121,17 @@ final class CodeTextView: NSTextView {
         NotificationCenter.default.post(name: Self.softWrapDidChange, object: nil)
     }
 
+    /// Right-click on a selection offers the Claude chat (answered by the Claude Code login, not an API key).
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event)
+        if selectedRange().length > 0, let menu, !menu.items.contains(where: { $0.action == #selector(AppDelegate.askClaudeAboutSelection(_:)) }) {
+            let item = NSMenuItem(title: "Ask Claude About Selection…", action: #selector(AppDelegate.askClaudeAboutSelection(_:)), keyEquivalent: "")
+            menu.insertItem(item, at: 0)
+            menu.insertItem(.separator(), at: 1)
+        }
+        return menu
+    }
+
     override func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleSoftWrap(_:)) { item.state = Self.softWrapEnabled ? .on : .off; return true }
         if let a = item.action, Self.foldActions.contains(a) { return Prefs.foldingEnabled && !folds.regions.isEmpty }

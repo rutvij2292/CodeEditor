@@ -88,6 +88,7 @@ enum MainMenu {
             item("Send @File to Terminal", #selector(AppDelegate.sendFileToTerminal(_:)), "k", [.command, .option], target: a),
             item("Send Selection Reference to Terminal", #selector(AppDelegate.sendSelectionReferenceToTerminal(_:)), "k", [.command, .option, .control], target: a),
             item("Send Selection Text to Terminal", #selector(AppDelegate.sendSelectionTextToTerminal(_:)), "k", [.command, .option, .shift], target: a),
+            item("Ask Claude About Selection…", #selector(AppDelegate.askClaudeAboutSelection(_:)), "/", [.command, .option], target: a),
             item("Send Selection to Claude (@mention)", #selector(AppDelegate.sendSelectionToClaude(_:)), "j", [.command, .option], target: a),
         ]))
 

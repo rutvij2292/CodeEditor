@@ -323,6 +323,9 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private let diffMessage = NSTextField(labelWithString: "")
     private let messageView = GitCommitTextView()
     private let commitButton = NSButton(title: "Commit", target: nil, action: nil)
+    private let draftButton = NSButton(title: "Draft with Claude", target: nil, action: nil)
+    private var draftProcess: Process?
+    private var drafting = false
     private let commitPushButton = NSButton(title: "Commit and Push", target: nil, action: nil)
     private let amendCheck = NSButton(checkboxWithTitle: "Amend", target: nil, action: nil)
     private let countLabel = NSTextField(labelWithString: "")
@@ -577,9 +580,16 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         commitButton.action = #selector(commitTapped)
         commitButton.bezelColor = .controlAccentColor
         commitPushButton.action = #selector(commitPushTapped)
+        draftButton.bezelStyle = .rounded
+        draftButton.controlSize = .regular
+        draftButton.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Draft with Claude")
+        draftButton.imagePosition = .imageLeading
+        draftButton.target = self
+        draftButton.action = #selector(draftTapped)
+        draftButton.toolTip = "Write the commit message from the selected changes with your Claude Code login (no API key). Click again to cancel."
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let actions = NSStackView(views: [amendCheck, countLabel, spacer, commitPushButton, commitButton])
+        let actions = NSStackView(views: [amendCheck, countLabel, spacer, draftButton, commitPushButton, commitButton])
         actions.orientation = .horizontal
         actions.spacing = 8
         actions.translatesAutoresizingMaskIntoConstraints = false
@@ -1548,6 +1558,72 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
                 self.messageView.needsDisplay = true
             }
         }
+    }
+
+    // MARK: Claude draft
+
+    private static let draftDiffCap = 60_000
+
+    @objc private func draftTapped() {
+        if drafting { if draftProcess?.isRunning == true { draftProcess?.terminate() }; draftProcess = nil; setDrafting(false); return }
+        let selected = changes.filter { checked.contains($0.path) && !$0.isConflict }
+        guard !selected.isEmpty else { showError(GitError(message: "Select the files to commit first")); return }
+        guard ClaudeCLI.executable() != nil else {
+            showError(GitError(message: "Claude Code is not installed. Install it and sign in (`claude`) to draft messages without an API key."))
+            return
+        }
+        flushPendingWrite()
+        setDrafting(true)
+        let repo = repo, branch = info.name
+        let paths = checkedPaths()
+        let untracked = selected.filter(\.isUntracked).map(\.path)
+        reader.async { [weak self] in
+            let stat = (try? repo.text(["diff", "HEAD", "--stat", "--"] + paths)) ?? ""
+            var diff = (try? repo.text(["diff", "HEAD", "--"] + paths)) ?? ""
+            for path in untracked {
+                let url = repo.root.appendingPathComponent(path)
+                guard let data = try? Data(contentsOf: url), data.count < 200_000, let text = String(data: data, encoding: .utf8) else {
+                    diff += "\nnew file (binary or large): \(path)\n"; continue
+                }
+                diff += "\nnew file: \(path)\n" + text.components(separatedBy: "\n").prefix(80).map { "+" + $0 }.joined(separator: "\n") + "\n"
+            }
+            if diff.utf8.count > Self.draftDiffCap { diff = String(decoding: Array(diff.utf8.prefix(Self.draftDiffCap)), as: UTF8.self) + "\n[diff truncated]" }
+            let subjects = ((try? repo.text(["log", "-n", "8", "--format=%s"])) ?? "").split(separator: "\n").map(String.init)
+            let prompt = ClaudeCLI.commitPrompt(branch: branch, recentSubjects: subjects,
+                                                stat: stat.isEmpty ? paths.joined(separator: "\n") : stat, diff: diff)
+            DispatchQueue.main.async {
+                guard let self, self.drafting else { return }                  // cancelled while the diff was being read
+                self.draftProcess = ClaudeCLI.run(prompt: prompt, model: "haiku", completion: { [weak self] result in
+                    guard let self, self.drafting else { return }
+                    self.draftProcess = nil
+                    self.setDrafting(false)
+                    switch result {
+                    case .success(let raw): self.applyDraft(ClaudeCLI.cleanCommitMessage(raw))
+                    case .failure(let f): if f.message != "Cancelled" { self.showError(GitError(message: f.message)) }
+                    }
+                })
+            }
+        }
+    }
+
+    private func setDrafting(_ on: Bool) {
+        drafting = on
+        draftButton.title = on ? "Cancel" : "Draft with Claude"
+        draftButton.image = NSImage(systemSymbolName: on ? "stop.circle" : "sparkles", accessibilityDescription: nil)
+        messageView.isEditable = !on
+        if on { showNote("Claude is drafting the message…") }
+        else if bannerIsNote { banner.isHidden = true; panel.needsLayout = true }
+    }
+
+    /// Replaces the message through the text system so Cmd-Z restores whatever was there before.
+    private func applyDraft(_ text: String) {
+        guard !text.isEmpty else { return }
+        let whole = NSRange(location: 0, length: (messageView.string as NSString).length)
+        if messageView.shouldChangeText(in: whole, replacementString: text) {
+            messageView.replaceCharacters(in: whole, with: text)
+            messageView.didChangeText()
+        }
+        focusCommitMessage()
     }
 
     @objc private func commitTapped() { commit(push: false) }
