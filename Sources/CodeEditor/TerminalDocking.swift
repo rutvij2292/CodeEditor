@@ -105,6 +105,7 @@ extension ProjectWindow {
                 if termDock.width < TerminalDockMath.minTerminal {
                     termDock.width = TerminalDockMath.defaultWidth(total: mainSplit.splitView.bounds.width, sidebar: sidebarWidth)
                 }
+                growWindowForTerminal()
                 setTerminalCollapsed(false)
                 applyTerminalWidth()
             }
@@ -113,6 +114,21 @@ extension ProjectWindow {
         }
         updateTerminalAttention()
         scheduleSessionSave()
+    }
+
+    /// Opening the terminal in a window too narrow for it (editor < 400 pt) would immediately auto-collapse it again: widen the
+    /// window by what is missing instead, never beyond the screen, keeping the left edge unless that pushes it off screen.
+    private func growWindowForTerminal() {
+        guard !AppEnv.headless, !window.styleMask.contains(.fullScreen), let screen = window.screen ?? NSScreen.main else { return }
+        let total = mainSplit.splitView.bounds.width
+        let wanted = max(termDock.width, TerminalDockMath.minTerminal)
+        let needed = sidebarWidth + TerminalDockMath.minEditor + wanted + TerminalDockMath.divider * 2
+        guard total > 0, total < needed else { return }
+        let visible = screen.visibleFrame
+        var frame = window.frame
+        frame.size.width = min(frame.width + (needed - total), visible.width)
+        frame.origin.x = max(visible.minX, min(frame.origin.x, visible.maxX - frame.width))
+        window.setFrame(frame, display: true, animate: false)
     }
 
     func hideTerminal() {

@@ -119,6 +119,29 @@ extension SelfTest {
         sb.setClaude(.waiting)
         check("status bar: terminal toggle is visible with long server labels", sb.terminalButtonFullyVisible)
 
+        do {   // window floor: the status bar must not set the window's minimum width (it used to: 700+ pt, wider than a laptop screen)
+            let t = ProjectWindow()
+            if let u = w.current?.url { t.open(u) }
+            t.statusBar.update(line: 1044, column: 1, selected: 0, indent: "4 spaces", language: "Vue", lineEnding: "LF",
+                               branch: "feature/ta_track_download · 3 changes",
+                               server: "Intelephense · 121 MB  |  JSON · 40 MB  |  TypeScript · 482 MB  |  Vue · 62 MB", encoding: "UTF-8")
+            t.statusBar.setClaude(.connected(1))
+            t.window.minSize = .zero; t.window.contentMinSize = .zero
+            t.window.setContentSize(NSSize(width: 300, height: 600))
+            t.window.contentView?.layoutSubtreeIfNeeded()
+            check("window: content minimum width is small (<= 420 pt) with a file open and long status labels", (t.window.contentView?.frame.width ?? 9999) <= 420)
+            t.showTerminal()
+            t.window.setContentSize(NSSize(width: 300, height: 600))
+            t.window.contentView?.layoutSubtreeIfNeeded()
+            check("window: with the terminal docked right the content minimum stays <= 760 pt", (t.window.contentView?.frame.width ?? 9999) <= 760)
+            for width in [320.0, 500.0, 880.0] {
+                let bar = StatusBar(frame: NSRect(x: 0, y: 0, width: width, height: 22))
+                bar.update(line: 1044, column: 1, selected: 0, indent: "4 spaces", language: "Vue", lineEnding: "LF", branch: "feature/ta_track_download · 3 changes",
+                           server: "Intelephense · 121 MB  |  JSON · 40 MB  |  TypeScript · 482 MB  |  Vue · 62 MB", encoding: "UTF-8")
+                check("status bar: terminal toggle visible at \(Int(width)) pt", bar.terminalButtonFullyVisible)
+            }
+        }
+
         do {   // commit panel dividers can be dragged (they used to refuse every drag)
             let gp = GitPanelController(root: URL(fileURLWithPath: NSTemporaryDirectory())) { _ in }
             let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)

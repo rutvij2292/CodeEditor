@@ -74,7 +74,13 @@ final class StatusBar: NSView {
         right.setContentCompressionResistancePriority(.init(400), for: .horizontal)
         terminalBox.setContentCompressionResistancePriority(.required, for: .horizontal)
         terminalBox.setContentHuggingPriority(.required, for: .horizontal)
+        // The stacks must not set the window's minimum width (their clipping resistance defaults to required): when space is
+        // short the low-priority labels above truncate first and the rest is simply clipped.
+        branch.lineBreakMode = .byTruncatingMiddle
+        branch.setContentCompressionResistancePriority(.init(350), for: .horizontal)
+        right.setClippingResistancePriority(.init(250), for: .horizontal)
         let row = NSStackView(views: [branch, notice, right, terminalBox])
+        row.setClippingResistancePriority(.init(250), for: .horizontal)
         row.spacing = 14
         row.distribution = .fill
         row.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 12)
