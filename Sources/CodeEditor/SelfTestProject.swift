@@ -168,6 +168,46 @@ extension SelfTest {
             }
         }
 
+        // Image viewer: which files open as images, multi-size icons, enlargement of tiny images.
+        let imageFormats = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "icns", "tif", "tiff", "heic", "heif", "avif", "jp2", "tga", "psd", "pdf"]
+        let notImages = ["php", "js", "ts", "json", "md", "txt", "svg", "vue", "css", "html", "lock", "env", "gz"]
+        check("image viewer: common image formats open as images", imageFormats.allSatisfy { ImageViewerView.canView(URL(fileURLWithPath: "/p/file.\($0)")) })
+        check("image viewer: code and text (incl. SVG) stay in the editor", notImages.allSatisfy { !ImageViewerView.canView(URL(fileURLWithPath: "/p/file.\($0)")) })
+        do {
+            func pngData(_ px: Int, _ color: NSColor) -> Data {
+                let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                           isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+                color.setFill(); NSRect(x: 0, y: 0, width: px, height: px).fill()
+                NSGraphicsContext.restoreGraphicsState()
+                return rep.representation(using: .png, properties: [:])!
+            }
+            func le16(_ v: Int) -> [UInt8] { [UInt8(v & 255), UInt8((v >> 8) & 255)] }
+            func le32(_ v: Int) -> [UInt8] { le16(v & 0xffff) + le16((v >> 16) & 0xffff) }
+            let small = pngData(16, .red), big = pngData(48, .green)
+            var ico: [UInt8] = le16(0) + le16(1) + le16(2)
+            let headerEnd = 6 + 32
+            ico += [16, 16, 0, 0] + le16(1) + le16(32) + le32(small.count) + le32(headerEnd)
+            ico += [48, 48, 0, 0] + le16(1) + le16(32) + le32(big.count) + le32(headerEnd + small.count)
+            let imgDir = FileManager.default.temporaryDirectory.appendingPathComponent("ce-img-\(getpid())")
+            try? FileManager.default.createDirectory(at: imgDir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: imgDir) }
+            let icoURL = imgDir.appendingPathComponent("multi.ico")
+            try? (Data(ico) + small + big).write(to: icoURL)
+            let viewer = ImageViewerView(url: icoURL)
+            let hostWin = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+            hostWin.contentView = viewer
+            viewer.layoutSubtreeIfNeeded()
+            check("image viewer: multi-size ico lists its sizes and starts on the largest", viewer.sizeCount == 2 && viewer.shownPixelWidth == 48 && viewer.infoText.contains("2 sizes"))
+            let pdfURL = imgDir.appendingPathComponent("doc.pdf")
+            let page = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+            try? page.dataWithPDF(inside: page.bounds).write(to: pdfURL)
+            let pdfViewer = ImageViewerView(url: pdfURL)
+            check("image viewer: a PDF opens with its page count", pdfViewer.sizeCount == 1 && pdfViewer.infoText.contains("1 page"))
+            check("image viewer: a 48 px icon is enlarged to fill the view (not left as a speck)", viewer.displayScale >= 8)
+        }
+
         // Bookmarks and TODO scan.
         let bm = FileManager.default.temporaryDirectory.appendingPathComponent("ce-bm-\(getpid())")
         try? FileManager.default.createDirectory(at: bm, withIntermediateDirectories: true)
