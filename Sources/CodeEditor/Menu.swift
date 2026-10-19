@@ -4,7 +4,7 @@ import AppKit
 enum MainMenu {
     private static func fn(_ code: Int) -> String { String(UnicodeScalar(UInt32(code))!) }
     private static let up = fn(NSUpArrowFunctionKey), down = fn(NSDownArrowFunctionKey)
-    private static let f12 = fn(NSF12FunctionKey), f1 = fn(NSF1FunctionKey), f2 = fn(NSF2FunctionKey)
+    private static let f12 = fn(NSF12FunctionKey), f1 = fn(NSF1FunctionKey), f2 = fn(NSF2FunctionKey), f3 = fn(NSF3FunctionKey)
     private static let f6 = fn(NSF6FunctionKey), f7 = fn(NSF7FunctionKey)
     private static let backspace = "\u{7f}"
 
@@ -127,6 +127,10 @@ enum MainMenu {
         ]))
 
         main.addItem(menu("Navigate", [
+            item("Toggle Bookmark", #selector(AppDelegate.toggleBookmark(_:)), f3, [], target: a),
+            item("Next Bookmark", #selector(AppDelegate.nextBookmark(_:)), f3, [.option], target: a),
+            item("Previous Bookmark", #selector(AppDelegate.previousBookmark(_:)), f3, [.option, .shift], target: a),
+            sep,
             item("Go to File…", #selector(AppDelegate.goToFile(_:)), "o", [.command, .shift], target: a),
             item("Go to Class…", #selector(AppDelegate.goToClass(_:)), "o", target: a),
             item("Go to Symbol…", #selector(AppDelegate.goToSymbol(_:)), "o", [.command, .option], target: a),
@@ -181,6 +185,8 @@ enum MainMenu {
             item("Commit Panel", #selector(AppDelegate.commitChanges(_:)), "0", target: a),
             item("Find Tool Window", #selector(AppDelegate.showFindTool(_:)), "3", target: a),
             item("Problems Tool Window", #selector(AppDelegate.showProblemsTool(_:)), "6", target: a),
+            item("TODO Tool Window", #selector(AppDelegate.showTodoTool(_:)), "5", target: a),
+            item("Bookmarks Tool Window", #selector(AppDelegate.showBookmarksTool(_:)), f3, [.command], target: a),
             item("Claude Changes Tool Window", #selector(AppDelegate.showClaudeChangesTool(_:)), "", target: a),
             item("Git Tool Window", #selector(AppDelegate.showGitTool(_:)), "", target: a),
             sep,

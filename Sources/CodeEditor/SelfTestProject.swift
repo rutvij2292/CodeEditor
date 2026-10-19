@@ -112,6 +112,26 @@ extension SelfTest {
         check("window: Cmd-9 toggles git panel on", w.bottom.isVisible && w.bottom.selectedID == "git")
         w.bottom.hide()
 
+        // Bookmarks and TODO scan.
+        let bm = FileManager.default.temporaryDirectory.appendingPathComponent("ce-bm-\(getpid())")
+        try? FileManager.default.createDirectory(at: bm, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: bm) }
+        let store = BookmarkStore(root: bm)
+        store.toggle(path: "/p/a.php", line: 10); store.toggle(path: "/p/a.php", line: 3); store.toggle(path: "/p/b.php", line: 1)
+        check("bookmarks: toggle on and lines per file", store.lines(in: "/p/a.php") == [3, 10] && store.lines(in: "/p/b.php") == [1])
+        check("bookmarks: toggle off", !store.toggle(path: "/p/b.php", line: 1) && store.lines(in: "/p/b.php").isEmpty)
+        check("bookmarks: next wraps around", store.neighbour(of: "/p/a.php", line: 3, forward: true)?.line == 10
+              && store.neighbour(of: "/p/a.php", line: 10, forward: true)?.line == 3)
+        check("bookmarks: previous wraps around", store.neighbour(of: "/p/a.php", line: 3, forward: false)?.line == 10)
+        check("bookmarks: persisted per project", BookmarkStore(root: bm).marks.count == 2)
+        let ms = [FindMatch(url: bm.appendingPathComponent("a.php"), line: 2, column: 4, length: 4, lineText: "  // TODO: first"),
+                  FindMatch(url: bm.appendingPathComponent("a.php"), line: 4, column: 4, length: 5, lineText: "/* FIXME broken */")]
+        let rows = TodoScanner.rows(from: ms, base: bm.path)
+        check("todo rows: tag, trimmed text and relative path", rows.map(\.tag) == ["TODO", "FIXME"] && rows[0].primary == "// TODO: first"
+              && rows[0].secondary == "a.php:2" && rows[1].line == 4)
+        check("todo scan pattern matches whole words only", (try? NSRegularExpression(pattern: TodoScanner.pattern))
+              .map { $0.numberOfMatches(in: "TODOS TODO XXXX HACK", range: NSRange(location: 0, length: 20)) } == 2)
+
         // Split editor: two tabs side by side, one view each (no duplicated buffers); closing one unsplits.
         let host = TabHost(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
         let v1 = NSView(), v2 = NSView(), v3 = NSView()

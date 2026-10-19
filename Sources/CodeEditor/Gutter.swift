@@ -46,6 +46,8 @@ final class GutterView: NSView {
     /// 1-based lines that get a ▶ run marker (HTTP client files) and the click handler.
     var playLines: Set<Int> = [] { didSet { if playLines != oldValue { invalidate() } } }
     var onPlayClick: ((Int) -> Void)?
+    /// Bookmarked lines (1-based): a small ribbon in the left strip (BookmarkStore).
+    var bookmarkLines: Set<Int> = [] { didSet { if bookmarkLines != oldValue { invalidate() } } }
     /// Run/status icons at the left edge, keyed by 1-based line (tests: TestGutter.swift). Setting redraws.
     var lineIcons: [Int: GutterLineIcon] = [:] { didSet { if lineIcons != oldValue { invalidate() } } }
     var onIconClick: ((Int) -> Void)?
@@ -313,8 +315,21 @@ final class GutterView: NSView {
         }
         drawChevrons(caret: caret)
         drawMarkers()
+        drawBookmarks()
         drawPlayMarkers()
         drawLineIcons()
+    }
+
+    private func drawBookmarks() {
+        guard !bookmarkLines.isEmpty else { return }
+        Theme.hex(0x4E7FD6).setFill()
+        for row in rows where bookmarkLines.contains(row.line) && lineIcons[row.line] == nil {
+            let midY = row.y0 + row.firstHeight / 2
+            let p = NSBezierPath()
+            p.move(to: NSPoint(x: 2, y: midY - 5)); p.line(to: NSPoint(x: 9, y: midY - 5)); p.line(to: NSPoint(x: 9, y: midY + 5))
+            p.line(to: NSPoint(x: 5.5, y: midY + 2.5)); p.line(to: NSPoint(x: 2, y: midY + 5)); p.close()
+            p.fill()
+        }
     }
 
     private func drawPlayMarkers() {

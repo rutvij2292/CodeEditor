@@ -259,6 +259,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func focusEditor(_ sender: Any?) { active?.focusEditor() }
     @objc func splitEditorRight(_ sender: Any?) { active?.splitEditorRight() }
     @objc func unsplitEditor(_ sender: Any?) { active?.unsplitEditor() }
+    @objc func showTodoTool(_ sender: Any?) { active?.showTodo() }
+    @objc func showBookmarksTool(_ sender: Any?) { active?.showBookmarks() }
+    @objc func toggleBookmark(_ sender: Any?) { active?.toggleBookmark() }
+    @objc func nextBookmark(_ sender: Any?) { active?.jumpToBookmark(forward: true) }
+    @objc func previousBookmark(_ sender: Any?) { active?.jumpToBookmark(forward: false) }
     @objc func toggleGit(_ sender: Any?) { active?.toggleGitPanel() }
     @objc func showFileHistory(_ sender: Any?) { active?.showFileHistory() }
     @objc func showBranches(_ sender: Any?) { active?.showBranchPopup() }

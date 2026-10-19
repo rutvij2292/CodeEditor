@@ -21,6 +21,9 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     /// Claude Code CLI integration (ClaudeBridge.swift).
     var claudeBridge: ClaudeBridge?
     var changeReview: ChangeReviewStore?
+    var bookmarks: BookmarkStore?
+    var bookmarkPanelRebuild: (() -> Void)?
+    var todoRescan: (() -> Void)?
     var changeReviewPanel: ChangeReviewPanel?
     var changeReviewGutter: ChangeReviewGutter?
     /// Right/bottom dock state of the terminal (see TerminalDocking.swift).
@@ -557,6 +560,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             tabs.select(id)
         }
         if let line { editors[id]?.textView.goToLine(line) }
+        syncBookmarkGutters()
         if let root { RecentFiles.add(url, in: root) }
         window.makeFirstResponder(editors[id]?.textView)
         scheduleSessionSave()
