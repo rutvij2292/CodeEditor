@@ -248,6 +248,11 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
 
     func show(base: String?, ours: String, theirs: String, oursTitle: String, theirsTitle: String, fileExtension: String) {
         extensionName = fileExtension
+        // A second file replaces the first: drop the old result tracking before any text storage edit below, or the edit
+        // handler runs old edges against the new hunks (index out of range when the new file has more hunks).
+        resetting = true
+        edges = [0]
+        programmaticHunk = nil
         self.oursTitle.stringValue = oursTitle
         self.theirsTitle.stringValue = theirsTitle
         hasBase = base != nil
@@ -593,7 +598,7 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
 
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
-        guard editedMask.contains(.editedCharacters), !resetting, edges.count > 1 else { return }
+        guard editedMask.contains(.editedCharacters), !resetting, edges.count > 1, edges.count == hunks.count + 1 else { return }
         let n = hunks.count
         if let k = programmaticHunk {
             for i in (k + 1)...n { edges[i] += delta }

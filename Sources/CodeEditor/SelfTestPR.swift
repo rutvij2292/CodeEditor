@@ -77,7 +77,21 @@ enum PRTestEnv {
 }
 
 enum SelfTestPR {
+    /// Regression: opening a second conflicted file in the merge view used to trap (old result edges vs the new hunks).
+    private static func mergeViewReloadChecks() {
+        let mv = MergeView(frame: NSRect(x: 0, y: 0, width: 900, height: 500))
+        let few = ("a\n", "a1\n", "a2\n")
+        let many = ("1\n2\n3\n4\n5\n6\n7\n8\n", "1x\n2\n3x\n4\n5x\n6\n7x\n8\n", "1y\n2\n3y\n4\n5y\n6\n7y\n8\n")
+        for (b, o, t) in [few, many, few, many, many] {
+            mv.show(base: b, ours: o, theirs: t, oursTitle: "ours", theirsTitle: "theirs", fileExtension: "txt")
+            mv.acceptAllOurs()
+        }
+        SelfTest.check("merge view: loading file after file never traps and accepts all", true)
+    }
+
     static func run() {
+        mergeViewReloadChecks()
+
         let check = SelfTest.check
         // parsing
         check("PR ref: plain number", PRReference.parse("123")?.number == 123)
