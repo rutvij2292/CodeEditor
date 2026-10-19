@@ -183,20 +183,20 @@ extension GitRepo {
 
     // MARK: push preview
 
+    /// Short name of the current branch's upstream ("origin/main"), nil when it has none.
+    func upstreamName() -> String? { (try? branchInfo())?.upstream }
+
     func pushPreview() throws -> GitPushPreview {
         let info = try branchInfo()
         if info.detached { throw GitError(message: "HEAD is detached; check out a branch to push") }
         if !hasHead { throw GitError(message: "Nothing to push: no commits yet") }
-        if let up = info.upstream,
+        if let up = info.upstream, (try? pushTarget(info).sameName) == true,
            let commits = try? logCommits(["@{u}..HEAD"], limit: 200) {
             let remote = up.split(separator: "/").first.map(String.init)
             return GitPushPreview(branch: info.name, upstream: up, remote: remote, commits: commits)
         }
-        let remotes = try text(["remote"]).split(separator: "\n").map(String.init)
-        guard let remote = remotes.contains("origin") ? "origin" : remotes.first else {
-            throw GitError(message: "No remote configured")
-        }
-        // no upstream: everything not yet on that remote
+        let remote = try pushTarget(info).remote
+        // no (same-named) upstream: everything not yet on that remote
         let commits = try logCommits(["HEAD", "--not", "--remotes=\(remote)"], limit: 200)
         return GitPushPreview(branch: info.name, upstream: nil, remote: remote, commits: commits)
     }

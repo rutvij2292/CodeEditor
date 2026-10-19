@@ -372,14 +372,25 @@ final class GitRepo {
     func fetch() throws { try git(["fetch", "--all", "--prune"]) }
     func pull() throws { try git(["pull", "--no-rebase", "--no-edit"]) }
 
-    func push() throws {
-        let info = try branchInfo()
-        if info.upstream != nil { try git(["push"]); return }
+    /// The remote a push should go to and whether the branch's upstream already is the same-named branch there. A branch
+    /// created from `origin/main` tracks `origin/main`, and pushing it to that upstream would either fail (git's `simple`
+    /// rule) or, worse, land the work on main: such a branch is published under its own name instead.
+    func pushTarget(_ info: BranchInfo) throws -> (remote: String, sameName: Bool) {
         let remotes = try text(["remote"]).split(separator: "\n").map(String.init)
+        if let up = info.upstream, let remote = remotes.first(where: { up.hasPrefix($0 + "/") }) {
+            return (remote, String(up.dropFirst(remote.count + 1)) == info.name)
+        }
         guard let remote = remotes.contains("origin") ? "origin" : remotes.first else {
             throw GitError(message: "No remote configured")
         }
-        try git(["push", "-u", remote, "HEAD"])
+        return (remote, false)
+    }
+
+    func push() throws {
+        let info = try branchInfo()
+        let target = try pushTarget(info)
+        if info.upstream != nil, target.sameName { try git(["push"]); return }
+        try git(["push", "-u", target.remote, "HEAD"])
     }
 
     // MARK: contents

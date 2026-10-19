@@ -302,7 +302,26 @@ enum SelfTestBranches {
         BranchFavorites.toggle("main", for: work)
         check("favourite toggles off", BranchFavorites.all(for: work).isEmpty)
         check("age labels", BranchAge.short(Date().timeIntervalSince1970 - 90) == "1m" && BranchAge.short(Date().timeIntervalSince1970 - 3 * 86_400) == "3d")
+        runNewBranchPush(origin: origin, base: base)
         runCherryPick()
+    }
+
+    /// A branch cut from origin/main tracks origin/main; pushing it must publish it under its own name, never onto main.
+    private static func runNewBranchPush(origin: URL, base: URL) {
+        let check = SelfTest.check
+        let w = clone(of: origin, into: base.appendingPathComponent("work-newbranch"))
+        sh(w, ["checkout", "-q", "-b", "improvement/new-thing", "origin/main"])
+        check("new branch from origin/main tracks origin/main", w.upstreamName() == "origin/main")
+        commit(w, "n.txt", "n\n", "new thing")
+        let mainBefore = sh(w, ["ls-remote", "origin", "refs/heads/main"])
+        let preview = try? w.pushPreview()
+        check("push preview treats it as a new branch", preview?.newBranch == true && preview?.commits.map(\.subject) == ["new thing"])
+        check("push succeeds", (try? w.push()) != nil)
+        check("pushed under its own name", sh(w, ["ls-remote", "origin", "refs/heads/improvement/new-thing"]).contains("refs/heads/improvement/new-thing"))
+        check("main was not touched", sh(w, ["ls-remote", "origin", "refs/heads/main"]) == mainBefore)
+        check("upstream now points at the same-named branch", w.upstreamName() == "origin/improvement/new-thing")
+        commit(w, "n.txt", "n2\n", "second")
+        check("later pushes are plain pushes", (try? w.push()) != nil && sh(w, ["rev-parse", "origin/improvement/new-thing"]) == sh(w, ["rev-parse", "HEAD"]))
     }
 
     /// Log of another ref, multi-commit cherry-pick order, conflict stop, merge-commit mainline.

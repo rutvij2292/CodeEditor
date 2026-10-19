@@ -278,8 +278,9 @@ extension GitRepo {
     /// Pushes a local branch, setting its upstream when it has none.
     func pushBranch(_ entry: BranchEntry) throws {
         let remotes = (try? text(["remote"]))?.split(separator: "\n").map(String.init) ?? []
-        if let up = entry.upstream, let remote = remotes.first(where: { up.hasPrefix($0 + "/") }) {
-            try git(["push", remote, "\(entry.name):\(up.dropFirst(remote.count + 1))"])
+        if let up = entry.upstream, let remote = remotes.first(where: { up.hasPrefix($0 + "/") }),
+           String(up.dropFirst(remote.count + 1)) == entry.name {
+            try git(["push", remote, "\(entry.name):\(entry.name)"])
             return
         }
         guard let remote = remotes.contains("origin") ? "origin" : remotes.first else { throw GitError(message: "No remote configured") }
