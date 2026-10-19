@@ -302,5 +302,55 @@ enum SelfTestBranches {
         BranchFavorites.toggle("main", for: work)
         check("favourite toggles off", BranchFavorites.all(for: work).isEmpty)
         check("age labels", BranchAge.short(Date().timeIntervalSince1970 - 90) == "1m" && BranchAge.short(Date().timeIntervalSince1970 - 3 * 86_400) == "3d")
+        runCherryPick()
+    }
+
+    /// Log of another ref, multi-commit cherry-pick order, conflict stop, merge-commit mainline.
+    private static func runCherryPick() {
+        let check = SelfTest.check
+        let fm = FileManager.default
+        let dir = tmp("cherry")
+        defer { try? fm.removeItem(at: dir) }
+        _ = try? GitRepo.execute(["init", "-q", "-b", "main"], in: dir)
+        let r = GitRepo(root: dir)
+        configure(r)
+        commit(r, "base.txt", "base\n", "base")
+        sh(r, ["checkout", "-q", "-b", "feature"])
+        commit(r, "a.txt", "a\n", "feat a")
+        commit(r, "b.txt", "b\n", "feat b")
+        commit(r, "c.txt", "c\n", "feat c")
+        sh(r, ["checkout", "-q", "main"])
+
+        let onFeature = (try? r.log(skip: 0, limit: 50, rev: "feature")) ?? []
+        let onMain = (try? r.log(skip: 0, limit: 50)) ?? []
+        check("log of another ref lists its commits", onFeature.map(\.subject) == ["feat c", "feat b", "feat a", "base"])
+        check("log defaults to the current branch", onMain.map(\.subject) == ["base"])
+        check("log search honours the ref", ((try? r.log(skip: 0, limit: 50, query: "feat b", rev: "feature")) ?? []).map(\.subject) == ["feat b"])
+
+        // pick a and c (oldest first) -> both land, b does not
+        let a = onFeature[2].hash, c = onFeature[0].hash
+        try? r.cherryPick([a, c])
+        let after = ((try? r.log(skip: 0, limit: 50)) ?? []).map(\.subject)
+        check("multi cherry-pick applies commits oldest first", after == ["feat c", "feat a", "base"])
+        check("cherry-pick left no operation behind", r.operationInProgress() == nil)
+
+        // conflict: same file edited differently
+        sh(r, ["checkout", "-q", "-b", "left", "main"]); commit(r, "x.txt", "left\n", "left x")
+        sh(r, ["checkout", "-q", "-b", "right", "main"]); commit(r, "x.txt", "right\n", "right x")
+        let rightHash = ((try? r.log(skip: 0, limit: 1)) ?? []).first?.hash ?? ""
+        sh(r, ["checkout", "-q", "left"])
+        check("conflicting cherry-pick throws", (try? r.cherryPick([rightHash])) == nil)
+        check("conflict leaves cherry-pick in progress", r.operationInProgress() == .cherryPick)
+        try? r.abortOperation(.cherryPick)
+        check("abort clears the cherry-pick", r.operationInProgress() == nil)
+
+        // merge commit needs a mainline
+        sh(r, ["checkout", "-q", "-b", "m1", "main"]); commit(r, "m1.txt", "1\n", "m1")
+        sh(r, ["checkout", "-q", "-b", "m2", "main"]); commit(r, "m2.txt", "2\n", "m2")
+        sh(r, ["merge", "-q", "--no-ff", "-m", "merge m1", "m1"])
+        let mergeHash = ((try? r.log(skip: 0, limit: 1)) ?? []).first?.hash ?? ""
+        check("merge commit reports two parents", r.parentHashes(mergeHash).count == 2)
+        sh(r, ["checkout", "-q", "main"])
+        check("merge cherry-pick with mainline succeeds", (try? r.cherryPick([mergeHash], mainline: 1)) != nil)
     }
 }

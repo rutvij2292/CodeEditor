@@ -1,7 +1,7 @@
 import AppKit
 
 enum GitLogAction {
-    case copyHash, checkout, createBranch, cherryPick, revert, reset(GitResetMode)
+    case copyHash, checkout, createBranch, cherryPick, cherryPickMany([GitCommit]), revert, reset(GitResetMode)
 }
 
 private final class LogTable: NSTableView {
@@ -15,6 +15,8 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private(set) var files: [GitFileChange] = []
     private(set) var exhausted = false
     private(set) var historyPath: String?
+    /// Ref the log walks from ("HEAD" = current branch); chosen with the Branch control.
+    private(set) var revision = "HEAD"
     var onAction: ((GitLogAction, GitCommit) -> Void)?
     /// Fired when a page (or the file list / diff of the selection) finished loading; used by tests and the panel.
     var onIdle: (() -> Void)?
@@ -22,6 +24,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private var repo: GitRepo
     private let reader = DispatchQueue(label: "git.log", qos: .userInitiated, attributes: .concurrent)
     private let search = NSSearchField()
+    private let branchButton = NSButton(title: "", target: nil, action: nil)
     private let historyBar = NSStackView()
     private let historyLabel = NSTextField(labelWithString: "")
     private let commitTable = LogTable()
@@ -59,6 +62,16 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         search.delegate = self
         search.translatesAutoresizingMaskIntoConstraints = false
 
+        branchButton.bezelStyle = .recessed
+        branchButton.controlSize = .small
+        branchButton.font = .systemFont(ofSize: 11, weight: .medium)
+        branchButton.imagePosition = .imageLeading
+        branchButton.image = NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: nil)
+        branchButton.target = self
+        branchButton.action = #selector(showBranchMenu(_:))
+        branchButton.translatesAutoresizingMaskIntoConstraints = false
+        updateBranchTitle()
+
         historyLabel.font = .systemFont(ofSize: 11, weight: .medium)
         historyLabel.lineBreakMode = .byTruncatingHead
         let clear = NSButton(title: "Show All", target: self, action: #selector(clearHistory))
@@ -81,7 +94,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         }
         commitTable.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
         commitTable.rowHeight = 20
-        commitTable.allowsMultipleSelection = false
+        commitTable.allowsMultipleSelection = true
         commitTable.dataSource = self
         commitTable.delegate = self
         commitTable.usesAlternatingRowBackgroundColors = false
@@ -97,10 +110,13 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         status.lineBreakMode = .byTruncatingTail
 
         let left = NSView()
-        for v in [search, historyBar, commitScroll, status] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; left.addSubview(v) }
+        for v in [branchButton, search, historyBar, commitScroll, status] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; left.addSubview(v) }
         NSLayoutConstraint.activate([
             search.topAnchor.constraint(equalTo: left.topAnchor, constant: 6),
-            search.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 8),
+            branchButton.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 8),
+            branchButton.centerYAnchor.constraint(equalTo: search.centerYAnchor),
+            branchButton.widthAnchor.constraint(lessThanOrEqualToConstant: 190),
+            search.leadingAnchor.constraint(equalTo: branchButton.trailingAnchor, constant: 8),
             search.trailingAnchor.constraint(equalTo: left.trailingAnchor, constant: -8),
             historyBar.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 4),
             historyBar.leadingAnchor.constraint(equalTo: left.leadingAnchor),
@@ -194,6 +210,11 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         return r >= 0 && r < commits.count ? commits[r] : nil
     }
 
+    /// Selected commits, oldest first (the order a cherry-pick sequence must apply them in).
+    var selectedCommitsOldestFirst: [GitCommit] {
+        commitTable.selectedRowIndexes.sorted(by: >).filter { $0 < commits.count }.map { commits[$0] }
+    }
+
     func focusSearch() { window?.makeFirstResponder(search) }
     var searchIsEditing: Bool { search.currentEditor() != nil && !search.stringValue.isEmpty }
 
@@ -204,10 +225,10 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         let gen = generation
         loading = true
         exhausted = false
-        let (q, p, f, n) = (query, historyPath, follow, pageSize)
+        let (q, p, f, n, rev) = (query, historyPath, follow, pageSize, revision)
         let repo = repo
         reader.async {
-            let r = Result { try repo.log(skip: 0, limit: n, query: q, path: p, follow: f) }
+            let r = Result { try repo.log(skip: 0, limit: n, query: q, path: p, follow: f, rev: rev) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.loading = false
@@ -234,6 +255,93 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         }
     }
 
+    // MARK: branch filter
+
+    /// Points the log at another ref ("HEAD", a branch, "origin/x" or a tag) and reloads from the top.
+    func setRevision(_ rev: String) {
+        revision = rev.isEmpty ? "HEAD" : rev
+        updateBranchTitle()
+        preferredFile = historyPath
+        reload()
+        commitTable.scrollRowToVisible(0)
+    }
+
+    private func updateBranchTitle() {
+        branchButton.title = revision == "HEAD" ? "HEAD" : revision
+        branchButton.toolTip = "Branch: \(branchButton.title)"
+    }
+
+    @objc private func showBranchMenu(_ sender: NSButton) {
+        let repo = repo
+        reader.async {
+            let list = try? repo.branchList()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.popBranchMenu(list ?? BranchList(), anchor: sender)
+            }
+        }
+    }
+
+    private func popBranchMenu(_ list: BranchList, anchor: NSView) {
+        let menu = NSMenu()
+        func item(_ title: String, rev: String, in m: NSMenu, checked: Bool = false, star: Bool = false) {
+            let i = NSMenuItem(title: title, action: #selector(branchMenuPicked(_:)), keyEquivalent: "")
+            i.target = self
+            i.representedObject = rev
+            i.state = checked || rev == revision ? .on : .off
+            if star { i.image = NSImage(systemSymbolName: "star.fill", accessibilityDescription: nil) }
+            m.addItem(i)
+        }
+        let select = NSMenuItem(title: "Select…", action: #selector(branchSelectPicker), keyEquivalent: "")
+        select.target = self
+        menu.addItem(select)
+        func submenu(_ title: String, _ names: [String]) {
+            let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            for n in names { item(n, rev: n, in: sub) }
+            parent.submenu = sub
+            parent.isEnabled = !names.isEmpty
+            menu.addItem(parent)
+        }
+        submenu("Recent", list.recent)
+        menu.addItem(.separator())
+        var favs = ["HEAD"]
+        let all = Set(list.local.map(\.name) + list.remote.map(\.name))
+        for f in ["main", "master", "origin/main", "origin/master"] where all.contains(f) { favs.append(f) }
+        for f in BranchFavorites.all(for: repo.root).sorted() where !favs.contains(f) { favs.append(f) }
+        for f in favs { item(f, rev: f, in: menu, star: true) }
+        menu.addItem(.separator())
+        submenu("Local", list.local.map(\.name))
+        for remote in list.remotes {
+            submenu("\(remote)/…", list.remote.filter { $0.remote == remote }.map(\.name))
+        }
+        if !list.tags.isEmpty { submenu("Tags", list.tags) }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: anchor.bounds.height + 2), in: anchor)
+    }
+
+    @objc private func branchMenuPicked(_ s: NSMenuItem) {
+        if let rev = s.representedObject as? String { setRevision(rev) }
+    }
+
+    @objc private func branchSelectPicker() {
+        guard let window else { return }
+        let repo = repo
+        reader.async {
+            let list = try? repo.branchList()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let list else { return }
+                var items = [PickerItem(title: "HEAD", detail: "current branch", symbol: "arrow.triangle.branch") { [weak self] in self?.setRevision("HEAD") }]
+                for b in list.local + list.remote {
+                    items.append(PickerItem(title: b.name, detail: b.subject, symbol: b.isRemote ? "cloud" : "arrow.triangle.branch") { [weak self] in
+                        self?.setRevision(b.name)
+                    })
+                }
+                for t in list.tags { items.append(PickerItem(title: t, detail: "tag", symbol: "tag") { [weak self] in self?.setRevision(t) }) }
+                QuickPicker.present(over: window, placeholder: "Show commits of branch or tag", items: items)
+            }
+        }
+    }
+
     func showHistory(path: String?) {
         historyPath = path
         follow = path != nil
@@ -255,10 +363,10 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         guard !loading, !exhausted else { return }
         loading = true
         let gen = generation
-        let (q, p, f, n, skip) = (query, historyPath, follow, pageSize, commits.count)
+        let (q, p, f, n, skip, rev) = (query, historyPath, follow, pageSize, commits.count, revision)
         let repo = repo
         reader.async {
-            let r = try? repo.log(skip: skip, limit: n, query: q, path: p, follow: f)
+            let r = try? repo.log(skip: skip, limit: n, query: q, path: p, follow: f, rev: rev)
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.loading = false
@@ -415,6 +523,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         let clicked = commitTable.clickedRow
         if clicked >= 0 { commitTable.selectRowIndexes([clicked], byExtendingSelection: false) }
         guard selectedCommit != nil else { return }
+        let picked = selectedCommitsOldestFirst
         func add(_ title: String, _ tag: Int, to m: NSMenu) {
             let i = NSMenuItem(title: title, action: #selector(menuPicked(_:)), keyEquivalent: "")
             i.target = self
@@ -426,8 +535,9 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         add("Checkout Revision…", 1, to: menu)
         add("Create Branch Here…", 2, to: menu)
         menu.addItem(.separator())
-        add("Cherry-Pick", 3, to: menu)
-        add("Revert Commit", 4, to: menu)
+        add(picked.count > 1 ? "Cherry-Pick \(picked.count) Commits…" : "Cherry-Pick…", 3, to: menu)
+        if picked.count == 1 { add("Revert Commit", 4, to: menu) }
+        guard picked.count == 1 else { return }
         let reset = NSMenuItem(title: "Reset Current Branch to Here", action: nil, keyEquivalent: "")
         let sub = NSMenu()
         add("Soft (keep changes staged)", 5, to: sub)
@@ -444,7 +554,9 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         case 0: action = .copyHash
         case 1: action = .checkout
         case 2: action = .createBranch
-        case 3: action = .cherryPick
+        case 3:
+            let picked = selectedCommitsOldestFirst
+            action = picked.count > 1 ? .cherryPickMany(picked) : .cherryPick
         case 4: action = .revert
         case 5: action = .reset(.soft)
         case 6: action = .reset(.mixed)

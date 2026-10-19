@@ -206,20 +206,20 @@ extension GitRepo {
         return parseCommits(try git(args, optionalLocks: true, input: stdin))
     }
 
-    /// One page of history for the current branch. `query` matches message, author or hash prefix (case-insensitive).
+    /// One page of history for `rev` (default: the current branch). `query` matches message, author or hash prefix (case-insensitive).
     /// `path` + `follow` lists the history of one file across renames.
-    func log(skip: Int, limit: Int, query: String? = nil, path: String? = nil, follow: Bool = false) throws -> [GitCommit] {
+    func log(skip: Int, limit: Int, query: String? = nil, path: String? = nil, follow: Bool = false, rev: String = "HEAD") throws -> [GitCommit] {
         guard hasHead else { return [] }
         let paths = path.map { [$0] } ?? []
         let q = query?.trimmingCharacters(in: .whitespaces) ?? ""
         if q.isEmpty {
-            return try logCommits(["HEAD"], skip: skip, limit: limit, extra: follow && path != nil ? ["--follow"] : [], paths: paths)
+            return try logCommits([rev], skip: skip, limit: limit, extra: follow && path != nil ? ["--follow"] : [], paths: paths)
         }
         // git ANDs --grep and --author, so collect both hash sets and show the union
         var hashes: [String] = []
         var seen = Set<String>()
         func collect(_ extra: [String]) throws {
-            var args = ["log", "--format=%H", "--max-count=5000", "-i", "--fixed-strings"] + extra + ["HEAD"]
+            var args = ["log", "--format=%H", "--max-count=5000", "-i", "--fixed-strings"] + extra + [rev]
             if !paths.isEmpty { args += ["--"] + paths }
             for h in try text(args).split(separator: "\n") where seen.insert(String(h)).inserted { hashes.append(String(h)) }
         }
@@ -284,6 +284,21 @@ extension GitRepo {
 
     func cherryPick(_ rev: String) throws {
         try git(["cherry-pick"] + (isMergeCommit(rev) ? ["-m", "1"] : []) + [rev])
+    }
+
+    /// Cherry-picks several commits in the given order (oldest first) as one sequence, so a conflict stops it and
+    /// Continue / Abort cover the rest. `mainline` picks the parent for a single merge commit.
+    func cherryPick(_ revs: [String], mainline: Int? = nil) throws {
+        guard !revs.isEmpty else { return }
+        var args = ["cherry-pick"]
+        if let mainline { args += ["-m", String(mainline)] }
+        try git(args + revs)
+    }
+
+    /// Parent hashes of a commit (empty for a root commit).
+    func parentHashes(_ rev: String) -> [String] {
+        let line = (try? text(["rev-list", "--parents", "-n", "1", rev])) ?? ""
+        return Array(line.split(whereSeparator: { $0 == " " || $0 == "\n" }).dropFirst().map(String.init))
     }
 
     func revertCommit(_ rev: String) throws {

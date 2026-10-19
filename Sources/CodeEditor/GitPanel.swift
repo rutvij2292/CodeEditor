@@ -1082,6 +1082,37 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         logView.showHistory(path: String(path.dropFirst(root.count + 1)))
     }
 
+    /// Asks before cherry-picking (target branch and commit list shown); a merge commit also asks which parent to keep.
+    private func confirmCherryPick(_ commits: [GitCommit]) {
+        let repo = repo
+        let target = (try? repo.branchInfo())?.name ?? "HEAD"
+        let merges = commits.filter { $0.parents.count > 1 }
+        if commits.count > 1, !merges.isEmpty {
+            present(GitDialogs.confirmAlert(title: "Cannot cherry-pick merge commits in a batch",
+                                            info: "Select “\(merges[0].subject)” on its own to choose which parent to keep.", button: "OK")) { _ in }
+            return
+        }
+        var info = "Apply onto “\(target)”, oldest first:\n\n"
+        info += commits.prefix(8).map { "\($0.shortHash)  \($0.subject)" }.joined(separator: "\n")
+        if commits.count > 8 { info += "\n… and \(commits.count - 8) more" }
+        if repo.hasLocalChanges() { info += "\n\nYou have uncommitted changes; git stops if they overlap with the picked commits." }
+        let alert = GitDialogs.confirmAlert(title: commits.count == 1 ? "Cherry-pick \(commits[0].shortHash)?" : "Cherry-pick \(commits.count) commits?",
+                                            info: info, button: "Cherry-Pick")
+        var parentPopup: NSPopUpButton?
+        if let m = merges.first {
+            let p = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
+            for (i, h) in repo.parentHashes(m.hash).enumerated() { p.addItem(withTitle: "Keep parent \(i + 1) (\(String(h.prefix(7))))") }
+            alert.accessoryView = p
+            parentPopup = p
+        }
+        present(alert) { [weak self] r in
+            guard r == .alertFirstButtonReturn else { return }
+            let hashes = commits.map(\.hash)
+            let mainline = parentPopup.map { $0.indexOfSelectedItem + 1 }
+            self?.perform({ try $0.cherryPick(hashes, mainline: mainline) }, resets: true)
+        }
+    }
+
     private func logAction(_ action: GitLogAction, _ c: GitCommit) {
         switch action {
         case .copyHash:
@@ -1100,7 +1131,8 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
                 guard r == .alertFirstButtonReturn, !name.isEmpty else { return }
                 self?.perform({ try $0.createBranch(name, at: c.hash, checkout: true) }, resets: true)
             }
-        case .cherryPick: perform({ try $0.cherryPick(c.hash) }, resets: true)
+        case .cherryPick: confirmCherryPick([c])
+        case .cherryPickMany(let list): confirmCherryPick(list)
         case .revert: perform({ try $0.revertCommit(c.hash) }, resets: true)
         case .reset(let mode):
             if mode == .hard {
