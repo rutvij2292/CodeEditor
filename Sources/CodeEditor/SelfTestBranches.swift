@@ -321,6 +321,11 @@ enum SelfTestBranches {
         commit(r, "c.txt", "c\n", "feat c")
         sh(r, ["checkout", "-q", "main"])
 
+        let gAll = (try? r.logCommits(["main", "feature"], limit: 50, extra: ["--topo-order"])) ?? []
+        let g = GitGraphLayout.rows(for: gAll)
+        check("graph: parents carry trailing-newline-free hashes", gAll.allSatisfy { $0.parents.allSatisfy { !$0.contains("\n") && $0.count == 40 } })
+        check("graph: a single chain stays in one lane", g.count == 4 && g.allSatisfy { $0.column == 0 && $0.laneCount == 1 })
+
         let onFeature = (try? r.log(skip: 0, limit: 50, rev: "feature")) ?? []
         let onMain = (try? r.log(skip: 0, limit: 50)) ?? []
         check("log of another ref lists its commits", onFeature.map(\.subject) == ["feat c", "feat b", "feat a", "base"])
@@ -352,5 +357,8 @@ enum SelfTestBranches {
         check("merge commit reports two parents", r.parentHashes(mergeHash).count == 2)
         sh(r, ["checkout", "-q", "main"])
         check("merge cherry-pick with mainline succeeds", (try? r.cherryPick([mergeHash], mainline: 1)) != nil)
+        let everything = GitGraphLayout.rows(for: (try? r.logCommits(["--all"], limit: 100, extra: ["--topo-order"])) ?? [])
+        check("graph: branches use several lanes and converge at their fork",
+              everything.map(\.laneCount).max() ?? 0 >= 3 && everything.contains { row in row.outs.contains { $0.lane != row.column } })
     }
 }

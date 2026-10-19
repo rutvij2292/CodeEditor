@@ -1101,6 +1101,13 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         showToolPanel("git") { [weak self] in self?.git?.showHistory(for: url) }
     }
 
+    /// Opens the Git tool on its Log tab.
+    func showGitLog() {
+        guard root != nil else { return }
+        ensureGitPanel()
+        showToolPanel("git") { [weak self] in self?.git?.showLog() }
+    }
+
     private func ensureGitPanel() {
         guard git == nil, root != nil else { return }
         let host = gitHost

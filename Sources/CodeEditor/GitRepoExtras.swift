@@ -193,7 +193,7 @@ extension GitRepo {
             let refs = f[5].split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             return GitCommit(hash: f[0].trimmingCharacters(in: .whitespacesAndNewlines), shortHash: f[1], author: f[2], relativeDate: f[3],
                              timestamp: TimeInterval(f[4]) ?? 0, refs: refs, subject: f[6],
-                             parents: f[7].split(separator: " ").map(String.init))
+                             parents: f[7].split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\r" }).map(String.init))
         }
     }
 
@@ -213,7 +213,7 @@ extension GitRepo {
         let paths = path.map { [$0] } ?? []
         let q = query?.trimmingCharacters(in: .whitespaces) ?? ""
         if q.isEmpty {
-            return try logCommits([rev], skip: skip, limit: limit, extra: follow && path != nil ? ["--follow"] : [], paths: paths)
+            return try logCommits([rev], skip: skip, limit: limit, extra: (follow && path != nil ? ["--follow"] : ["--topo-order"]), paths: paths)
         }
         // git ANDs --grep and --author, so collect both hash sets and show the union
         var hashes: [String] = []

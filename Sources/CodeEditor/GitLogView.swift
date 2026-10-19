@@ -42,12 +42,32 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private var fileToken = 0, diffToken = 0
     private var positioned = false
     private var preferredFile: String?
+    private var graphRows: [GitGraphRow] = []
+    private var myName = ""
+
+    /// The graph only makes sense for an unfiltered walk (a search or file history skips commits, so lanes would lie).
+    private var showsGraph: Bool { query.trimmingCharacters(in: .whitespaces).isEmpty && historyPath == nil }
+
+    private func commitsChanged() {
+        graphRows = showsGraph ? GitGraphLayout.rows(for: commits) : []
+        let col = commitTable.tableColumn(withIdentifier: NSUserInterfaceItemIdentifier("graph"))
+        col?.isHidden = !showsGraph
+        if showsGraph, let col { col.width = GitGraphCell.width(forLanes: graphRows.map(\.laneCount).max() ?? 1) }
+    }
+
+    private static let dateFormat: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "dd/MM/yy, h:mm a"
+        return f
+    }()
 
     init(repo: GitRepo) {
         self.repo = repo
         super.init(frame: .zero)
         build()
         applyTheme()
+        let r0 = repo
+        reader.async { let n = (try? r0.text(["config", "user.name"]))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""; DispatchQueue.main.async { [weak self] in self?.myName = n; self?.commitTable.reloadData() } }
         NotificationCenter.default.addObserver(self, selector: #selector(applyTheme), name: Theme.didChange, object: nil)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -84,16 +104,18 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         historyBar.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
         historyBar.isHidden = true
 
-        for (id, title, w) in [("subject", "Commit", 200), ("author", "Author", 80), ("date", "Date", 100), ("hash", "Hash", 60)] {
+        for (id, title, w) in [("graph", "", 60), ("subject", "Commit", 260), ("author", "Author", 120), ("date", "Date", 130)] {
             let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             c.title = title
             c.width = CGFloat(w)
-            c.minWidth = id == "subject" ? 100 : 50
+            c.minWidth = id == "subject" ? 100 : (id == "graph" ? 24 : 50)
+            if id == "graph" { c.maxWidth = 130 }
             c.resizingMask = id == "subject" ? .autoresizingMask : .userResizingMask
             commitTable.addTableColumn(c)
         }
         commitTable.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
-        commitTable.rowHeight = 20
+        commitTable.rowHeight = 22
+        commitTable.intercellSpacing = NSSize(width: 6, height: 0)
         commitTable.allowsMultipleSelection = true
         commitTable.dataSource = self
         commitTable.delegate = self
@@ -235,6 +257,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
                 switch r {
                 case .success(let page):
                     self.commits = page
+                    self.commitsChanged()
                     self.exhausted = page.count < n
                     self.commitTable.reloadData()
                     if let keep, let i = page.firstIndex(where: { $0.hash == keep }) {
@@ -247,6 +270,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
                     self.updateStatus()
                 case .failure(let e):
                     self.commits = []
+                    self.commitsChanged()
                     self.commitTable.reloadData()
                     self.clearSelectionUI(e.localizedDescription)
                 }
@@ -375,6 +399,10 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
                 let start = self.commits.count
                 self.commits += page
                 self.commitTable.insertRows(at: IndexSet(start..<(start + page.count)), withAnimation: [])
+                self.commitsChanged()
+                if let gi = self.commitTable.tableColumns.firstIndex(where: { $0.identifier.rawValue == "graph" }) {
+                    self.commitTable.reloadData(forRowIndexes: IndexSet(0..<self.commits.count), columnIndexes: [gi])   // later pages can add lanes
+                }
                 self.updateStatus()
                 self.onIdle?()
             }
@@ -495,6 +523,13 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         if row >= commits.count - 25 { loadMore() }
         let c = commits[row]
         switch col?.identifier.rawValue {
+        case "graph":
+            let gid = NSUserInterfaceItemIdentifier("cell.graph.view")
+            let g = t.makeView(withIdentifier: gid, owner: nil) as? GitGraphCell ?? { let v = GitGraphCell(); v.identifier = gid; return v }()
+            g.row = row < graphRows.count ? graphRows[row] : GitGraphRow()
+            g.isMerge = c.parents.count > 1
+            g.needsDisplay = true
+            return g
         case "subject":
             let s = NSMutableAttributedString()
             for ref in c.refs {
@@ -504,10 +539,17 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
                     .backgroundColor: Self.refColor(ref).withAlphaComponent(0.16)]))
                 s.append(NSAttributedString(string: " "))
             }
-            s.append(NSAttributedString(string: c.subject, attributes: [.foregroundColor: Theme.foreground, .font: NSFont.systemFont(ofSize: 12)]))
+            let isMerge = c.parents.count > 1
+            s.append(NSAttributedString(string: c.subject, attributes: [.foregroundColor: isMerge ? Theme.gutter : Theme.foreground, .font: NSFont.systemFont(ofSize: 12)]))
             cell.attributedStringValue = s
-        case "author": cell.stringValue = c.author; cell.textColor = Theme.foreground
-        case "date": cell.stringValue = c.relativeDate; cell.textColor = Theme.gutter
+        case "author":
+            let mine = !myName.isEmpty && c.author == myName
+            cell.stringValue = c.author
+            cell.textColor = c.parents.count > 1 ? Theme.gutter : Theme.foreground
+            cell.font = .systemFont(ofSize: 12, weight: mine ? .bold : .regular)
+        case "date":
+            cell.stringValue = Self.dateFormat.string(from: Date(timeIntervalSince1970: c.timestamp))
+            cell.textColor = Theme.gutter
         default:
             cell.stringValue = c.shortHash
             cell.textColor = Theme.gutter
