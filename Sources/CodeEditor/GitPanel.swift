@@ -270,7 +270,7 @@ private final class GitPanelView: NSView {
 
 // MARK: controller
 
-final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
+final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate, NSSplitViewDelegate {
     let view: NSView
     var onStatusChange: (() -> Void)?
     /// Set by the Commit window: opens the shared branch popup instead of the plain menu below.
@@ -606,9 +606,10 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         panel.right.setHoldingPriority(.init(260), forSubviewAt: 1)
         panel.split.isVertical = true
         panel.split.dividerStyle = .thin
-        outlineScroll.translatesAutoresizingMaskIntoConstraints = false
-        outlineScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
-        diffHost.heightAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
+        // Both dividers are frame-based and bounded by the delegate below (min list width 220, min diff height 100, ...):
+        // Auto Layout minimums inside the panes made the dividers refuse every drag.
+        panel.split.delegate = self
+        panel.right.delegate = self
         panel.split.addArrangedSubview(outlineScroll)
         panel.split.addArrangedSubview(panel.right)
         panel.split.setHoldingPriority(.init(260), forSubviewAt: 0)
@@ -1451,6 +1452,19 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         if let w = panel.window, w.isVisible { alert.beginSheetModal(for: w, completionHandler: completion) }
         else { completion(alert.runModal()) }
     }
+
+    // MARK: split limits
+
+    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        max(proposedMinimumPosition, splitView.isVertical ? 220 : 100)
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        let room = (splitView.isVertical ? splitView.bounds.width : splitView.bounds.height) - splitView.dividerThickness
+        return min(proposedMaximumPosition, room - (splitView.isVertical ? 260 : 110))
+    }
+
+    func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool { false }
 
     @objc private func dismissBanner() { banner.isHidden = true }
 

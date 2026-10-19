@@ -4,8 +4,11 @@ import AppKit
 /// pending count), Settings. Each button runs the same action as its menu item.
 final class ProjectToolbar: NSObject {
     private weak var window: NSWindow?
-    private var accessory: NSTitlebarAccessoryViewController?
-    private let stack = NSStackView()
+    /// The button row; the branch controller places it in the title bar next to the branch widget.
+    let view = NSStackView()
+    private var stack: NSStackView { view }
+    /// Called when the row appears, disappears or changes size.
+    var onLayout: (() -> Void)?
     private var buttons: [String: NSButton] = [:]
     private let badge = NSTextField(labelWithString: "")
     private var prefsObserver: NSObjectProtocol?
@@ -30,6 +33,7 @@ final class ProjectToolbar: NSObject {
             Item(id: "commit", symbol: "checkmark.circle", tip: "Commit… (⌘K)", action: #selector(AppDelegate.commitChanges(_:)), target: app),
             Item(id: "push", symbol: "arrow.up.circle", tip: "Push… (⇧⌘K)", action: #selector(AppDelegate.pushChanges(_:)), target: app),
             nil,
+            Item(id: "terminal", symbol: "terminal", tip: "Toggle Terminal (⌥F12)", action: #selector(AppDelegate.showTerminal(_:)), target: app),
             Item(id: "run", symbol: "play.fill", tip: "Run All Tests", action: #selector(TestActions.runAll(_:)), target: TestActions.shared),
             nil,
             Item(id: "search", symbol: "magnifyingglass", tip: "Search Everywhere (⇧⇧)", action: #selector(AppDelegate.searchEverywhere(_:)), target: app),
@@ -88,23 +92,17 @@ final class ProjectToolbar: NSObject {
 
     /// Shows / hides the bar to match `Prefs.showToolbar`.
     func sync() {
-        guard let window else { return }
         if Prefs.showToolbar {
-            if accessory == nil {
-                if buttons.isEmpty { build() }
-                let vc = NSTitlebarAccessoryViewController()
-                vc.view = stack
-                vc.layoutAttribute = .trailing
-                window.addTitlebarAccessoryViewController(vc)
-                accessory = vc
-            }
-            accessory?.isHidden = false
+            if buttons.isEmpty { build() }
+            stack.isHidden = false
+            stack.setFrameSize(stack.fittingSize)
         } else {
-            accessory?.isHidden = true
+            stack.isHidden = true
         }
+        onLayout?()
     }
 
-    var isVisible: Bool { accessory != nil && accessory?.isHidden == false }
+    var isVisible: Bool { !stack.isHidden && !buttons.isEmpty }
 
     /// Pending Claude change count on the sparkle button.
     func setClaudeBadge(_ text: String?) {

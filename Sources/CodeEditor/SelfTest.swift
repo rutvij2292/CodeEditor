@@ -21,6 +21,9 @@ enum SelfTest {
     }
 
     private static func runChecks(app: AppDelegate) {
+        // Hermetic: the host's battery / Low Power Mode must not switch the saver features these checks exercise.
+        Prefs.powerSaver = "off"
+        PowerState.shared.recompute()
         let fm = FileManager.default
         LocalHistory.root = fm.temporaryDirectory.appendingPathComponent("ce-selftest-history-\(getpid())")
         let dir = fm.temporaryDirectory.appendingPathComponent("ce-selftest-\(getpid())")

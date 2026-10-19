@@ -112,6 +112,36 @@ extension SelfTest {
         check("window: Cmd-9 toggles git panel on", w.bottom.isVisible && w.bottom.selectedID == "git")
         w.bottom.hide()
 
+        // Status bar: the terminal toggle stays on screen however long the server / language labels are.
+        let sb = StatusBar(frame: NSRect(x: 0, y: 0, width: 880, height: 22))
+        sb.update(line: 1044, column: 1, selected: 0, indent: "4 spaces", language: "Vue", lineEnding: "LF", branch: "feature/ta_track_download · 3 changes",
+                  server: "Intelephense · 121 MB  |  JSON · 40 MB  |  TypeScript · 482 MB  |  Vue · 62 MB", encoding: "UTF-8")
+        sb.setClaude(.waiting)
+        check("status bar: terminal toggle is visible with long server labels", sb.terminalButtonFullyVisible)
+
+        do {   // commit panel dividers can be dragged (they used to refuse every drag)
+            let gp = GitPanelController(root: URL(fileURLWithPath: NSTemporaryDirectory())) { _ in }
+            let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            gp.view.frame = NSRect(x: 0, y: 0, width: 1000, height: 700); gp.view.autoresizingMask = [.width, .height]
+            win.contentView = gp.view
+            gp.view.layoutSubtreeIfNeeded()
+            func find(_ v: NSView, vertical: Bool) -> NSSplitView? {
+                if let sv = v as? NSSplitView, sv.isVertical == vertical { return sv }
+                for c in v.subviews { if let r = find(c, vertical: vertical) { return r } }
+                return nil
+            }
+            if let sv = find(gp.view, vertical: true) {
+                sv.setPosition(300, ofDividerAt: 0); gp.view.layoutSubtreeIfNeeded()
+                let moved = abs(sv.subviews[0].frame.width - 300) < 2
+                sv.setPosition(600, ofDividerAt: 0); gp.view.layoutSubtreeIfNeeded()
+                check("commit panel: list / diff divider can be dragged both ways", moved && abs(sv.subviews[0].frame.width - 600) < 2)
+            } else { check("commit panel: list / diff divider exists", false) }
+            if let rv = find(gp.view, vertical: false) {
+                rv.setPosition(300, ofDividerAt: 0); gp.view.layoutSubtreeIfNeeded()
+                check("commit panel: diff / message divider can be dragged", abs(rv.subviews[0].frame.height - 300) < 3)
+            }
+        }
+
         // Bookmarks and TODO scan.
         let bm = FileManager.default.temporaryDirectory.appendingPathComponent("ce-bm-\(getpid())")
         try? FileManager.default.createDirectory(at: bm, withIntermediateDirectories: true)

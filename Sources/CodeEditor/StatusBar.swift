@@ -61,12 +61,21 @@ final class StatusBar: NSView {
         viewerButton.toolTip = "View mode: Source / Split / Preview (\u{2303}\u{2325}\u{2318}V)"
         viewerButton.isHidden = true
         claudeLabel.isHidden = true
-        let right = NSStackView(views: [claudeLabel, powerLabel, server, language, viewerButton, indent, lineEnding, encoding, position, terminalBox])
+        let right = NSStackView(views: [claudeLabel, powerLabel, server, language, viewerButton, indent, lineEnding, encoding, position])
         right.spacing = 14
         notice.setContentHuggingPriority(.init(1), for: .horizontal)
         notice.setContentCompressionResistancePriority(.init(1), for: .horizontal)
         notice.alignment = .center
-        let row = NSStackView(views: [branch, notice, right])
+        // Long, low-value labels give way first; the terminal toggle at the far right is never squeezed out.
+        server.setContentCompressionResistancePriority(.init(300), for: .horizontal)
+        language.setContentCompressionResistancePriority(.init(310), for: .horizontal)
+        claudeLabel.setContentCompressionResistancePriority(.init(320), for: .horizontal)
+        powerLabel.setContentCompressionResistancePriority(.init(330), for: .horizontal)
+        right.setContentCompressionResistancePriority(.init(400), for: .horizontal)
+        terminalBox.setContentCompressionResistancePriority(.required, for: .horizontal)
+        terminalBox.setContentHuggingPriority(.required, for: .horizontal)
+        let row = NSStackView(views: [branch, notice, right, terminalBox])
+        row.spacing = 14
         row.distribution = .fill
         row.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 12)
         row.translatesAutoresizingMaskIntoConstraints = false
@@ -153,6 +162,11 @@ final class StatusBar: NSView {
     var claudeText: String { claudeLabel.isHidden ? "" : claudeLabel.stringValue }
     var terminalDotVisible: Bool { !terminalDot.isHidden }
     func clickTerminalButton() { terminalTapped() }
+    /// Is the terminal toggle fully inside the bar (not clipped off the right edge by long labels)?
+    var terminalButtonFullyVisible: Bool {
+        layoutSubtreeIfNeeded()
+        return bounds.contains(terminalButton.convert(terminalButton.bounds, to: self))
+    }
 
     var encodingText: String { encoding.attributedTitle.string }
     var branchText: String { branch.attributedTitle.string }

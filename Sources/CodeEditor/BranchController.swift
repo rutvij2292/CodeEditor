@@ -29,8 +29,8 @@ final class BranchController: NSObject {
 
     /// Shows or hides the title-bar widget for a status snapshot (nil info = not a Git repository).
     func apply(info: GitRepo.BranchInfo?, changes: Int) {
-        guard let info else { setWidgetVisible(false); return }
         installAccessoryIfNeeded()
+        guard let info else { setWidgetVisible(false); return }
         widget.update(branch: info.name, detached: info.detached, ahead: info.ahead, behind: info.behind, dirty: changes > 0)
         setWidgetVisible(true)
     }
@@ -44,12 +44,34 @@ final class BranchController: NSObject {
         accessory = vc
     }
 
-    private func setWidgetVisible(_ on: Bool) { accessory?.isHidden = !on; widget.isHidden = !on }
-    var widgetVisible: Bool { accessory != nil && accessory?.isHidden == false }
+    private func setWidgetVisible(_ on: Bool) { widget.isHidden = !on; layoutHost() }
+    var widgetVisible: Bool { accessory != nil && !widget.isHidden }
+
+    /// The title-bar button row (ProjectToolbar) shares this accessory with the branch widget.
+    private weak var toolbarView: NSView?
+
+    func setToolbar(_ v: NSView) {
+        toolbarView = v
+        host.addSubview(v)
+        installAccessoryIfNeeded()
+        layoutHost()
+    }
+
+    func relayout() { layoutHost() }
 
     private func layoutHost() {
-        host.setFrameSize(NSSize(width: widget.frame.width + 14, height: 28))
-        widget.setFrameOrigin(NSPoint(x: 4, y: (28 - widget.frame.height) / 2))
+        var x: CGFloat = 4
+        if !widget.isHidden {
+            widget.setFrameOrigin(NSPoint(x: x, y: (28 - widget.frame.height) / 2))
+            x += widget.frame.width + 10
+        }
+        if let t = toolbarView, !t.isHidden {
+            let size = (t as? NSStackView)?.fittingSize ?? t.frame.size
+            t.setFrameSize(size)
+            t.setFrameOrigin(NSPoint(x: x, y: (28 - size.height) / 2))
+            x += size.width
+        }
+        host.setFrameSize(NSSize(width: x + 10, height: 28))
         accessory?.view.needsLayout = true
     }
 

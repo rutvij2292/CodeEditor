@@ -78,7 +78,9 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         window.minSize = NSSize(width: 640, height: 400)
         window.delegate = self
         window.title = Brand.name
-        _ = toolbar
+        toolbar.onLayout = { [weak self] in self?.branches.relayout() }
+        branches.setToolbar(toolbar.view)
+        toolbar.sync()
 
         tabs.onSelect = { [weak self] id in self?.didSelect(id) }
         tabs.onClose = { [weak self] id in self?.close(id) }
