@@ -517,6 +517,12 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         let id = url.standardizedFileURL.path
         if editors[id] == nil {
             if placeholders[id] != nil { tabs.select(id); return }
+            if ImageViewerView.canView(url) {
+                placeholders[id] = .unreadable   // viewer tabs close like placeholders: nothing to save
+                tabs.add(id: id, title: url.lastPathComponent, view: ImageViewerView(url: url))
+                scheduleSessionSave()
+                return
+            }
             guard let editor = EditorTab(url: url, options: options) else { showLoadProblem(url); return }
             editors[id] = editor
             editor.onDirtyChange = { [weak self, weak editor] in

@@ -72,6 +72,9 @@ final class KeyOutlineView: NSOutlineView {
     var onRename: (() -> Void)?
     var onDelete: (() -> Void)?
     var onNewFile: (() -> Void)?
+    var onCopy: (() -> Void)?
+    var onCut: (() -> Void)?
+    var onPaste: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
@@ -87,6 +90,9 @@ final class KeyOutlineView: NSOutlineView {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.function, .numericPad, .capsLock])
         if flags == .command, event.keyCode == 51 { onDelete?(); return true }
         if flags == .command, event.charactersIgnoringModifiers == "n" { onNewFile?(); return true }
+        if flags == .command, event.charactersIgnoringModifiers == "c" { onCopy?(); return true }
+        if flags == .command, event.charactersIgnoringModifiers == "x" { onCut?(); return true }
+        if flags == .command, event.charactersIgnoringModifiers == "v" { onPaste?(); return true }
         if flags == .shift, event.keyCode == 97 { onRename?(); return true }
         return super.performKeyEquivalent(with: event)
     }
@@ -132,6 +138,9 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         outline.onEscape = { [weak self] in self?.onEscape?() }
         outline.onRename = { [weak self] in self?.renameSelection() }
         outline.onDelete = { [weak self] in self?.trashSelection() }
+        outline.onCopy = { [weak self] in self?.copySelection(cut: false) }
+        outline.onCut = { [weak self] in self?.copySelection(cut: true) }
+        outline.onPaste = { [weak self] in self?.paste(into: self?.targetDirectory(for: self?.selectedURL)) }
         outline.onNewFile = { [weak self] in self?.newFile(in: self?.targetDirectory(for: self?.selectedURL)) }
         outline.registerForDraggedTypes([.fileURL])
         outline.setDraggingSourceOperationMask([.move, .copy], forLocal: true)
@@ -269,6 +278,10 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
             make("New File…", #selector(menuNewFile)),
             make("New Folder…", #selector(menuNewFolder)),
             .separator(),
+            make("Cut", #selector(menuCut), enabled: !isRoot),
+            make("Copy", #selector(menuCopy), enabled: !isRoot),
+            make("Paste", #selector(menuPaste), enabled: !pasteboardURLs().isEmpty),
+            .separator(),
             make("Rename…", #selector(menuRename), enabled: !isRoot),
             make("Duplicate", #selector(menuDuplicate), enabled: !isRoot),
             make("Move to Trash…", #selector(menuTrash), enabled: !isRoot),
@@ -300,6 +313,9 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     @objc private func menuNewFile() { newFile(in: targetDirectory(for: contextURL)) }
     @objc private func menuNewFolder() { newFolder(in: targetDirectory(for: contextURL)) }
+    @objc private func menuCut() { copySelection(cut: true) }
+    @objc private func menuCopy() { copySelection(cut: false) }
+    @objc private func menuPaste() { paste(into: targetDirectory(for: contextURL)) }
     @objc private func menuRename() { if let u = contextURL { beginRename(u) } }
     @objc private func menuDuplicate() { if let u = contextURL { duplicate(u) } }
     @objc private func menuTrash() { if let u = contextURL { trash(u) } }
@@ -427,6 +443,59 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         }
     }
 
+    // MARK: Copy / cut / paste
+
+    /// Files cut with Cmd-X; the next paste moves them (and clears this).
+    private var cutURLs: [URL] = []
+
+    private var selectedURLs: [URL] {
+        outline.selectedRowIndexes.compactMap { (outline.item(atRow: $0) as? FileNode)?.url }.filter { $0.path != root?.url.path }
+    }
+
+    private func pasteboardURLs() -> [URL] {
+        (NSPasteboard.general.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+    }
+
+    /// Puts the selected files on the pasteboard as file URLs, so they paste here, into Finder and into other apps.
+    func copySelection(cut: Bool) {
+        let chosen = selectedURLs
+        guard !chosen.isEmpty else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.writeObjects(chosen as [NSURL])
+        pb.addTypes([.string], owner: nil)
+        pb.setString(chosen.map(\.path).joined(separator: "\n"), forType: .string)
+        cutURLs = cut ? chosen : []
+    }
+
+    /// Copies (or, after Cut, moves) the pasteboard's files into `dir`. Pasting a copy beside its original makes
+    /// "name copy.ext"; a name clash elsewhere asks before replacing.
+    func paste(into dir: URL?) {
+        guard let dir else { return }
+        let urls = pasteboardURLs().filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !urls.isEmpty else { return }
+        let isCut = !cutURLs.isEmpty && Set(cutURLs.map(\.path)) == Set(urls.map(\.path))
+        if isCut {
+            performDrop(urls: urls, into: dir, move: true)
+            cutURLs = []
+            NSPasteboard.general.clearContents()
+            return
+        }
+        var rest: [URL] = []
+        var changes: [FileChange] = []
+        for url in urls {
+            if url.deletingLastPathComponent().standardizedFileURL.path == dir.standardizedFileURL.path {
+                do {
+                    let dest = FileOperations.copyName(for: url, in: dir)
+                    try FileManager.default.copyItem(at: url, to: dest)
+                    changes.append(.created(dest))
+                } catch { alert(error) }
+            } else { rest.append(url) }
+        }
+        if !changes.isEmpty { refresh(); changes.forEach { onChange?($0) }; if let u = changes.last, case .created(let url) = u { reveal(url) } }
+        if !rest.isEmpty { performDrop(urls: rest, into: dir, move: false) }
+    }
+
     // MARK: Drag and drop
 
     /// Moves (internal drags) or copies (from Finder) `urls` into `dir`, asking before replacing anything.
@@ -531,9 +600,8 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         cell.textField?.stringValue = node.url.lastPathComponent
         cell.textField?.isEditable = false
         cell.textField?.textColor = statusKinds[node.url.path]?.color ?? .labelColor
-        cell.imageView?.image = NSImage(systemSymbolName: node.isDirectory ? "folder.fill" : FileIcon.symbol(forExtension: ext),
-                                        accessibilityDescription: nil)
-        cell.imageView?.contentTintColor = node.isDirectory ? .systemBlue : FileIcon.tint(forExtension: ext)
+        cell.imageView?.image = FileIcon.treeImage(name: node.url.lastPathComponent, isDirectory: node.isDirectory)
+        cell.imageView?.contentTintColor = nil
         return cell
     }
 }

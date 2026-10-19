@@ -290,6 +290,7 @@ extension LSPSession {
         guard let tv = textView else { return }
         let p = tv.convert(event.locationInWindow, from: nil)
         let off = offsetUnderPoint(p)
+        updateLinkHighlight(flags: event.modifierFlags, point: p)
         if let anchor = hoverAnchor, let off, NSLocationInRange(off, anchor) { return }   // still over the same word
         hoverTimer?.invalidate()
         hoverToken += 1
@@ -306,6 +307,7 @@ extension LSPSession {
     }
 
     override func mouseExited(with event: NSEvent) {
+        clearLinkHighlight()
         hoverTimer?.invalidate()
         hoverAnchor = nil
         LSPPopups.hideHover()
@@ -527,7 +529,7 @@ enum LSPEvents {
 
     static func installMonitor(manager: LanguageServerManager) {
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .keyDown, .scrollWheel]) { event in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .keyDown, .scrollWheel, .flagsChanged]) { event in
             func session() -> LSPSession? {
                 guard let view = event.window?.contentView?.hitTest(event.locationInWindow) else { return nil }
                 var v: NSView? = view
@@ -536,7 +538,13 @@ enum LSPEvents {
                 return manager.sessions.values.first { $0.tab?.textView === tv }
             }
             switch event.type {
+            case .flagsChanged:
+                for s in manager.sessions.values {
+                    guard let tv = s.textView, let w = tv.window, event.window === w else { continue }
+                    s.updateLinkHighlight(flags: event.modifierFlags, point: tv.convert(w.mouseLocationOutsideOfEventStream, from: nil))
+                }
             case .leftMouseDown:
+                for s in manager.sessions.values { s.clearLinkHighlight() }
                 LSPPopups.hover.hide()
                 if event.modifierFlags.contains(.command), !event.modifierFlags.contains(.shift),
                    let s = session(), let tv = s.textView,
@@ -550,6 +558,7 @@ enum LSPEvents {
             case .scrollWheel:
                 LSPPopups.hover.hide(); LSPPopups.signature.hide()
             case .keyDown:
+                for s in manager.sessions.values { s.clearLinkHighlight() }
                 LSPPopups.hover.hide()
                 if event.keyCode == 53 { LSPPopups.signature.hide() }   // Escape
             default: break

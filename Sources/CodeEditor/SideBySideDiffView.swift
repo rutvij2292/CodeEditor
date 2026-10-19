@@ -97,6 +97,8 @@ final class SideBySideDiffView: NSView, NSTextViewDelegate {
     private let overview = DiffOverview()
     private let toast = DiffUI.label(11, weight: .medium)
     private var arrowWidth: NSLayoutConstraint!
+    private var equalWidth: NSLayoutConstraint!
+    private var leftHidden: NSLayoutConstraint!
 
     private var rows: [DiffEngine.Row] = []
     private var blocks: [Range<Int>] = []
@@ -150,6 +152,9 @@ final class SideBySideDiffView: NSView, NSTextViewDelegate {
         toast.layer?.cornerRadius = 6
         toast.alphaValue = 0
         arrowWidth = arrows.widthAnchor.constraint(equalToConstant: 1)
+        equalWidth = right.box.widthAnchor.constraint(equalTo: left.box.widthAnchor)
+        leftHidden = left.box.widthAnchor.constraint(equalToConstant: 0)
+        leftHidden.isActive = false
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: topAnchor), header.leadingAnchor.constraint(equalTo: leadingAnchor),
             header.trailingAnchor.constraint(equalTo: trailingAnchor), header.heightAnchor.constraint(equalToConstant: 28),
@@ -159,7 +164,7 @@ final class SideBySideDiffView: NSView, NSTextViewDelegate {
             arrows.topAnchor.constraint(equalTo: left.box.topAnchor), arrows.bottomAnchor.constraint(equalTo: bottomAnchor),
             right.box.leadingAnchor.constraint(equalTo: arrows.trailingAnchor),
             right.box.topAnchor.constraint(equalTo: left.box.topAnchor), right.box.bottomAnchor.constraint(equalTo: bottomAnchor),
-            right.box.widthAnchor.constraint(equalTo: left.box.widthAnchor),
+            equalWidth, leftHidden,
             overview.leadingAnchor.constraint(equalTo: right.box.trailingAnchor), overview.trailingAnchor.constraint(equalTo: trailingAnchor),
             overview.widthAnchor.constraint(equalToConstant: 14),
             overview.topAnchor.constraint(equalTo: left.box.topAnchor), overview.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -203,6 +208,11 @@ final class SideBySideDiffView: NSView, NSTextViewDelegate {
 
     func show(old: String, new: String, oldTitle: String, newTitle: String, fileExtension: String) {
         extensionName = fileExtension
+        // A new file has nothing to compare against: show just the file, full width (PhpStorm).
+        let single = old.isEmpty && !new.isEmpty
+        equalWidth.isActive = !single
+        leftHidden.isActive = single
+        for v in [left.box, leftTitle, arrows] as [NSView] { v.isHidden = single }
         leftTitle.stringValue = oldTitle
         rightTitle.stringValue = newTitle
         editWork?.cancel()

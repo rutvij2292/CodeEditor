@@ -191,6 +191,15 @@ extension SelfTest {
         try? fm.removeItem(at: outside)
         w.tree.confirmOverwrite = { _ in false }
 
+        // Copy / paste of files.
+        let pasteSrc = ops.appendingPathComponent("target/drop.txt")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([pasteSrc as NSURL])
+        w.tree.paste(into: ops.appendingPathComponent("target"))
+        check("paste beside the original makes a 'copy' file", read(ops.appendingPathComponent("target/drop copy.txt")) == "src")
+        w.tree.paste(into: ops)
+        check("paste into another folder copies the file", read(ops.appendingPathComponent("drop.txt")) == "src" && fm.fileExists(atPath: pasteSrc.path))
+
         // Context menu content.
         let titles = w.tree.menuItems(for: ops.appendingPathComponent("target/drop.txt")).map(\.title)
         check("tree context menu lists all commands",

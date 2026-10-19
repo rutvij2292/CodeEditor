@@ -38,6 +38,8 @@ final class LSPSession: NSResponder {
     var hoverToken = 0
     var hoverTimer: Timer?
     var hoverAnchor: NSRange?
+    var linkRange: NSRange?
+    var linkToken = 0
     var signatureWork: DispatchWorkItem?
     var trackingArea: NSTrackingArea?
     var overlay: LSPDiagnosticOverlay?

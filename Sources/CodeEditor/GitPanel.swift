@@ -7,7 +7,7 @@ private enum GitGroupKind: Int, CaseIterable {
         case .conflicts: return "Conflicts"
         case .staged: return "Staged"
         case .changes: return "Changes"
-        case .untracked: return "Untracked"
+        case .untracked: return "Unversioned Files"
         }
     }
 }
