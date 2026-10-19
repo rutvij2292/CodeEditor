@@ -89,6 +89,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         tabs.onReorder = { [weak self] in self?.scheduleSessionSave() }
         tree.onOpen = { [weak self] url in self?.open(url) }
         tree.onEscape = { [weak self] in self?.focusEditor() }
+        tree.onSearchEverywhere = { [weak self] q in self?.showGoToFile(initialQuery: q) }
         tree.onChange = { [weak self] change in self?.handleFileChange(change) }
 
         let sidebarVC = NSViewController(); sidebarVC.view = tree.scrollView
@@ -1026,11 +1027,11 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         return result
     }
 
-    func showGoToFile() {
+    func showGoToFile(initialQuery: String = "") {
         guard let index else { return }
         index.refresh()
         let recents = recentRelativePaths()
-        QuickPicker.present(over: window, placeholder: "Go to file…", items: [], provider: { [weak self] query in
+        QuickPicker.present(over: window, placeholder: "Go to file…", items: [], initialQuery: initialQuery, provider: { [weak self] query in
             guard let self else { return [] }
             if query.trimmingCharacters(in: .whitespaces).isEmpty { return recents.prefix(15).map(self.fileItem) }
             return index.search(query, limit: 200).map { self.fileItem($0.path) }

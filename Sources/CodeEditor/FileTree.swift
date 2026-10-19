@@ -75,12 +75,16 @@ final class KeyOutlineView: NSOutlineView {
     var onCopy: (() -> Void)?
     var onCut: (() -> Void)?
     var onPaste: (() -> Void)?
+    /// Typing a letter starts a speed search over the loaded rows (PhpStorm), instead of AppKit's invisible prefix type-select.
+    var speedSearch: SpeedSearch?
 
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
         case 36, 76: onReturn?()          // return, enter
         case 53: onEscape?()              // escape
-        default: super.keyDown(with: event)
+        default:
+            if speedSearch?.handleKeyDown(event) == true { return }
+            super.keyDown(with: event)
         }
     }
 
@@ -108,6 +112,9 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private var renamingURL: URL?
     var onOpen: ((URL) -> Void)?
     var onEscape: (() -> Void)?
+    /// Typed query nothing in the loaded tree matched: the window widens it to Go to File.
+    var onSearchEverywhere: ((String) -> Void)?
+    let speed = SpeedSearch()
     /// Reports every file-system change the tree made, after the tree itself refreshed.
     var onChange: ((FileChange) -> Void)?
     /// Asks whether existing files may be replaced; the default shows an alert (declines when headless).
@@ -142,6 +149,10 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         outline.onCut = { [weak self] in self?.copySelection(cut: true) }
         outline.onPaste = { [weak self] in self?.paste(into: self?.targetDirectory(for: self?.selectedURL)) }
         outline.onNewFile = { [weak self] in self?.newFile(in: self?.targetDirectory(for: self?.selectedURL)) }
+        speed.attach(to: outline) { [weak self] row in (self?.outline.item(atRow: row) as? FileNode)?.url.lastPathComponent }
+        speed.onReturn = { [weak self] in self?.activateSelection() }
+        speed.onSearchEverywhere = { [weak self] q in self?.onSearchEverywhere?(q) }
+        outline.speedSearch = speed
         outline.registerForDraggedTypes([.fileURL])
         outline.setDraggingSourceOperationMask([.move, .copy], forLocal: true)
         outline.setDraggingSourceOperationMask(.copy, forLocal: false)
@@ -597,9 +608,23 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
             return c
         }()
         let ext = node.url.pathExtension
-        cell.textField?.stringValue = node.url.lastPathComponent
+        let name = node.url.lastPathComponent
+        let color = statusKinds[node.url.path]?.color ?? NSColor.labelColor
+        let hits = speed.matchedIndices(in: name)
+        if hits.isEmpty {
+            cell.textField?.stringValue = name
+        } else {
+            let font = cell.textField?.font ?? .systemFont(ofSize: 12)
+            let s = NSMutableAttributedString(string: name, attributes: [.font: font, .foregroundColor: color])
+            let bold = NSFont.systemFont(ofSize: font.pointSize, weight: .bold)
+            let len = name.utf16.count
+            for i in hits where i < len {
+                s.addAttributes([.font: bold, .foregroundColor: NSColor.controlAccentColor], range: NSRange(location: i, length: 1))
+            }
+            cell.textField?.attributedStringValue = s
+        }
         cell.textField?.isEditable = false
-        cell.textField?.textColor = statusKinds[node.url.path]?.color ?? .labelColor
+        cell.textField?.textColor = color
         cell.imageView?.image = FileIcon.treeImage(name: node.url.lastPathComponent, isDirectory: node.isDirectory)
         cell.imageView?.contentTintColor = nil
         return cell

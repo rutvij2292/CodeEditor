@@ -303,7 +303,7 @@ final class QuickPicker: NSObject, NSTextFieldDelegate, NSTableViewDataSource, N
         return score - t.count / 8
     }
 
-    private static func matchIndices(_ q: [Character], in title: String) -> Set<Int> {
+    static func matchIndices(_ q: [Character], in title: String) -> Set<Int> {
         guard !q.isEmpty else { return [] }
         var out = Set<Int>(), qi = 0, i = 0
         for ch in title.utf16 {
