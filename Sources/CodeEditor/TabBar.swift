@@ -208,6 +208,87 @@ final class TabHost: NSView {
         overflow.contentTintColor = Theme.gutter
     }
 
+    // MARK: Split (two tabs side by side; each tab keeps its single view, so a split costs one NSSplitView and no buffers)
+
+    private var split: (left: String, right: String)?
+    private var splitView: NSSplitView?
+    private let leftBox = NSView(), rightBox = NSView()
+    private var splitMonitor: Any?
+
+    var isSplit: Bool { split != nil }
+    var splitIDs: (left: String, right: String)? { split }
+
+    private func fill(_ box: NSView, with view: NSView) {
+        box.subviews.forEach { $0.removeFromSuperview() }
+        view.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: box.topAnchor), view.bottomAnchor.constraint(equalTo: box.bottomAnchor),
+            view.leadingAnchor.constraint(equalTo: box.leadingAnchor), view.trailingAnchor.constraint(equalTo: box.trailingAnchor),
+        ])
+    }
+
+    /// Shows the selected tab and `other` side by side. When already split, `other` replaces the inactive pane.
+    @discardableResult
+    func splitWith(_ other: String) -> Bool {
+        guard let active = selectedID, other != active,
+              let a = entries.first(where: { $0.id == active }), let b = entries.first(where: { $0.id == other }) else { return false }
+        if let sp = split {
+            // replace whichever pane does not hold the active tab
+            if sp.left == active { fill(rightBox, with: b.view); split = (active, other) }
+            else { fill(leftBox, with: b.view); split = (other, active) }
+            return true
+        }
+        content.subviews.filter { $0 !== hint }.forEach { $0.removeFromSuperview() }
+        let sv = NSSplitView()
+        sv.isVertical = true
+        sv.dividerStyle = .thin
+        sv.translatesAutoresizingMaskIntoConstraints = false
+        sv.addArrangedSubview(leftBox)
+        sv.addArrangedSubview(rightBox)
+        content.addSubview(sv)
+        NSLayoutConstraint.activate([
+            sv.topAnchor.constraint(equalTo: content.topAnchor), sv.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            sv.leadingAnchor.constraint(equalTo: content.leadingAnchor), sv.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+        ])
+        fill(leftBox, with: a.view)
+        fill(rightBox, with: b.view)
+        splitView = sv
+        split = (active, other)
+        sv.layoutSubtreeIfNeeded()
+        sv.setPosition(sv.bounds.width / 2, ofDividerAt: 0)
+        splitMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+            self?.activatePane(for: event)
+            return event
+        }
+        return true
+    }
+
+    /// A click inside a pane makes that pane's tab the selected one.
+    private func activatePane(for event: NSEvent) {
+        guard let sp = split, event.window === window else { return }
+        let p = event.locationInWindow
+        for (box, id) in [(leftBox, sp.left), (rightBox, sp.right)] where id != selectedID {
+            if box.convert(box.bounds, to: nil).contains(p) { select(id); return }
+        }
+    }
+
+    private func tearDownSplit() {
+        if let m = splitMonitor { NSEvent.removeMonitor(m); splitMonitor = nil }
+        leftBox.subviews.forEach { $0.removeFromSuperview() }
+        rightBox.subviews.forEach { $0.removeFromSuperview() }
+        splitView?.removeFromSuperview()
+        splitView = nil
+        split = nil
+    }
+
+    /// Back to one editor: the selected tab fills the area.
+    func unsplit() {
+        guard split != nil else { return }
+        tearDownSplit()
+        if let id = selectedID { select(id) }
+    }
+
     // MARK: Model
 
     func add(id: String, title: String, view: NSView) {
@@ -256,6 +337,7 @@ final class TabHost: NSView {
             items[newID] = fresh
         }
         if selectedID == id { selectedID = newID }
+        if let sp = split { split = (sp.left == id ? newID : sp.left, sp.right == id ? newID : sp.right) }
         refreshItem(newID)
     }
 
@@ -266,8 +348,15 @@ final class TabHost: NSView {
 
     func remove(_ id: String) {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        var survivor: String?
+        if let sp = split, id == sp.left || id == sp.right {
+            survivor = id == sp.left ? sp.right : sp.left
+            tearDownSplit()
+            if selectedID == id { selectedID = survivor }   // the other pane's tab stays selected
+        }
         entries.remove(at: i)
         if let item = items.removeValue(forKey: id) { strip.removeArrangedSubview(item); item.removeFromSuperview() }
+        if let survivor, selectedID == survivor { select(survivor); needsLayout = true; return }
         if selectedID == id {
             selectedID = nil
             if let next = entries.indices.contains(i) ? entries[i] : entries.last { select(next.id) } else {
@@ -282,7 +371,13 @@ final class TabHost: NSView {
         guard let entry = entries.first(where: { $0.id == id }) else { return }
         let previous = selectedID
         selectedID = id
-        if previous != id || entry.view.superview !== content {
+        if let sp = split {
+            if id != sp.left, id != sp.right {
+                // the new tab takes over the pane that was active
+                if previous == sp.right { fill(rightBox, with: entry.view); split = (sp.left, id) }
+                else { fill(leftBox, with: entry.view); split = (id, sp.right) }
+            }
+        } else if previous != id || entry.view.superview !== content {
             content.subviews.filter { $0 !== hint }.forEach { $0.removeFromSuperview() }
             entry.view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(entry.view)

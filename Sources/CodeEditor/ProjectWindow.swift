@@ -636,6 +636,19 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
 
     var symbolEntries: [SymbolIndex.Entry] { symbols?.entries ?? [] }
 
+    /// Split Right: shows the most recently used other tab beside the current one (or `id` when chosen from a tab's menu).
+    func splitEditorRight(with id: String? = nil) {
+        guard let active = tabs.selectedID else { NSSound.beep(); return }
+        let candidates = [id].compactMap { $0 } + mru
+        guard let other = candidates.first(where: { cand in cand != active && tabs.entries.contains { $0.id == cand } }) else { NSSound.beep(); return }
+        tabs.splitWith(other)
+        window.makeFirstResponder(editors[active]?.textView)
+        scheduleSessionSave()
+    }
+
+    func unsplitEditor() { tabs.unsplit(); window.makeFirstResponder(current?.textView) }
+    var editorIsSplit: Bool { tabs.isSplit }
+
     var current: EditorTab? { tabs.selectedID.flatMap { editors[$0] } }
 
     /// Closes a tab, asking about unsaved changes. False means the user cancelled.
@@ -723,6 +736,12 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             menu.addItem(item)
         }
         menu.addItem(.separator())
+        let split = NSMenuItem(title: tabs.isSplit ? "Unsplit" : "Split Right", action: #selector(tabMenuSplit(_:)), keyEquivalent: "")
+        split.target = self
+        split.representedObject = id
+        split.isEnabled = tabs.isSplit || tabs.entries.count > 1
+        menu.addItem(split)
+        menu.addItem(.separator())
         for (title, action) in [("Copy Path", #selector(tabMenuCopyPath(_:))), ("Reveal in Finder", #selector(tabMenuReveal(_:)))] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
@@ -737,6 +756,12 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     @objc private func tabMenuCloseOthers(_ i: NSMenuItem) { if let id = tabID(i) { closeOthers(id) } }
     @objc private func tabMenuCloseAll(_ i: NSMenuItem) { closeAllTabs() }
     @objc private func tabMenuCloseRight(_ i: NSMenuItem) { if let id = tabID(i) { closeToTheRight(of: id) } }
+    @objc private func tabMenuSplit(_ i: NSMenuItem) {
+        if tabs.isSplit { unsplitEditor(); return }
+        if let id = tabID(i) {
+            if id != tabs.selectedID { splitEditorRight(with: id) } else { splitEditorRight() }
+        }
+    }
     @objc private func tabMenuCopyPath(_ i: NSMenuItem) {
         guard let id = tabID(i) else { return }
         NSPasteboard.general.clearContents()

@@ -111,6 +111,23 @@ extension SelfTest {
         w.toggleGitPanel()
         check("window: Cmd-9 toggles git panel on", w.bottom.isVisible && w.bottom.selectedID == "git")
         w.bottom.hide()
+
+        // Split editor: two tabs side by side, one view each (no duplicated buffers); closing one unsplits.
+        let host = TabHost(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        let v1 = NSView(), v2 = NSView(), v3 = NSView()
+        host.add(id: "/t/a", title: "a", view: v1); host.add(id: "/t/b", title: "b", view: v2); host.add(id: "/t/c", title: "c", view: v3)
+        host.select("/t/a")
+        check("split: refuses a tab with itself", !host.splitWith("/t/a"))
+        check("split: starts", host.splitWith("/t/b") && host.isSplit && host.splitIDs?.left == "/t/a" && host.splitIDs?.right == "/t/b")
+        check("split: both views are on screen, once each", v1.superview != nil && v2.superview != nil && v3.superview == nil && v1.superview !== v2.superview)
+        host.select("/t/b")
+        check("split: selecting the other pane's tab only activates it", host.selectedID == "/t/b" && v1.superview != nil && v2.superview != nil)
+        host.select("/t/c")
+        check("split: a new tab replaces the active pane", host.splitIDs?.right == "/t/c" && host.splitIDs?.left == "/t/a" && v2.superview == nil)
+        host.remove("/t/c")
+        check("split: closing a split tab unsplits to the other", !host.isSplit && host.selectedID == "/t/a" && v1.superview != nil)
+        host.splitWith("/t/b"); host.unsplit()
+        check("split: unsplit shows one view", !host.isSplit && v1.superview != nil && v2.superview == nil)
     }
 
     // MARK: File operations, tab retargeting, tree
@@ -230,7 +247,7 @@ extension SelfTest {
         w.tabs.move(p[4], toIndex: 99)
         check("reorder clamps index", w.tabs.entries.last?.id == p[4])
         let menuTitles = w.tabMenu(for: p[1]).items.map(\.title)
-        check("tab context menu", menuTitles == ["Close", "Close Others", "Close All", "Close to the Right", "", "Copy Path", "Reveal in Finder"])
+        check("tab context menu", menuTitles == ["Close", "Close Others", "Close All", "Close to the Right", "", "Split Right", "", "Copy Path", "Reveal in Finder"])
         let right = w.tabs.ids(toRightOf: p[1])
         check("ids to the right", right == Array(w.tabs.entries.map(\.id).drop { $0 != p[1] }.dropFirst()))
         w.closeToTheRight(of: p[1])

@@ -38,6 +38,10 @@ enum Verification {
             case "term-right", "term-bottom", "term-max", "term-narrow": decorateTerminal(w, mode: picker!)
             case "bottom": decorateBottom(w)
             case "tabs": decorateTabs(w)
+            case "split":
+                let files = (FileManager.default.enumerator(at: w.root!, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? []).filter { !$0.hasDirectoryPath && !$0.path.contains("/.git/") }.sorted { $0.path < $1.path }
+                for u in files.prefix(2) { w.open(u) }
+                w.splitEditorRight()
             case "completion":
                 if let tv = w.current?.textView {
                     tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))
@@ -58,7 +62,7 @@ enum Verification {
                 render(v, to: shot.replacingOccurrences(of: ".png", with: "_commit.png"))
             }
             if let p = picker, BranchVerification.isBranchPicker(p), let w = app.active { BranchVerification.finish(p, shot: shot, w) }
-            if picker != nil, !BranchVerification.isBranchPicker(picker), !["git", "git-log", "completion", "bottom", "tabs", "commit", "http", "term-right", "term-bottom", "term-max", "term-narrow"].contains(picker!) { QuickPicker.snapshot(to: shot.replacingOccurrences(of: ".png", with: "_picker.png")) }
+            if picker != nil, !BranchVerification.isBranchPicker(picker), !["git", "git-log", "completion", "bottom", "tabs", "split", "commit", "http", "term-right", "term-bottom", "term-max", "term-narrow"].contains(picker!) { QuickPicker.snapshot(to: shot.replacingOccurrences(of: ".png", with: "_picker.png")) }
             fputs("snapshot done\n", stderr)
             NSApp.terminate(nil)
         }
