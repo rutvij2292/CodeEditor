@@ -168,7 +168,10 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
         nonConflictingPopup.controlSize = .small
         nonConflictingPopup.font = .systemFont(ofSize: 11)
         nonConflictingPopup.addItems(withTitles: ["Apply Non-Conflicting", "Left", "Right", "All"])
-        for (i, sel) in [(1, #selector(applyNonConflictingLeft)), (2, #selector(applyNonConflictingRight)), (3, #selector(applyNonConflictingAll))] {
+        nonConflictingPopup.menu?.addItem(.separator())
+        nonConflictingPopup.addItems(withTitles: ["Resolve Automatically", "Revert Conflict Resolution…"])
+        for (i, sel) in [(1, #selector(applyNonConflictingLeft)), (2, #selector(applyNonConflictingRight)), (3, #selector(applyNonConflictingAll)),
+                         (5, #selector(resolveAutomaticallyTapped)), (6, #selector(revertAllTapped))] {
             nonConflictingPopup.item(at: i)?.target = self
             nonConflictingPopup.item(at: i)?.action = sel
         }
@@ -579,6 +582,48 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
         }
         um?.endUndoGrouping()
     }
+    /// Settles conflicts that only differ by whitespace (PhpStorm: "Resolve Automatically"): identical sides, or one side unchanged
+    /// from the base. Returns how many conflicts it resolved.
+    @discardableResult
+    func resolveAutomatically() -> Int {
+        func norm(_ t: String) -> String { t.components(separatedBy: .whitespacesAndNewlines).joined() }
+        let um = result.text.undoManager
+        um?.beginUndoGrouping()
+        var n = 0
+        for k in hunks.indices where hunks[k].conflict && !hunks[k].resolved {
+            let h = hunks[k]
+            if norm(h.ours) == norm(h.theirs) || norm(h.theirs) == norm(h.base) { applyOurs(k); n += 1 }
+            else if norm(h.ours) == norm(h.base) { applyTheirs(k); n += 1 }
+        }
+        um?.endUndoGrouping()
+        return n
+    }
+
+    /// Every change back to its state when the merge opened ("Revert Conflict Resolution").
+    func revertAllResolution() {
+        let um = result.text.undoManager
+        um?.beginUndoGrouping()
+        for k in hunks.indices where initialStates.indices.contains(k) { restore(k, initialStates[k]) }
+        um?.endUndoGrouping()
+    }
+
+    @objc private func resolveAutomaticallyTapped() {
+        let n = resolveAutomatically()
+        counter.stringValue = n == 0 ? "Nothing to resolve automatically" : "Resolved \(n) conflict\(n == 1 ? "" : "s") automatically"
+    }
+
+    @objc private func revertAllTapped() {
+        if !AppEnv.headless {
+            let alert = NSAlert()
+            alert.messageText = "Confirm Revert"
+            alert.informativeText = "All changes will be reverted. The file will return to its original conflicted state."
+            alert.addButton(withTitle: "Revert")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        revertAllResolution()
+    }
+
     @objc private func applyNonConflictingLeft() { applyNonConflicting(left: true, right: false) }
     @objc private func applyNonConflictingRight() { applyNonConflicting(left: false, right: true) }
     @objc private func applyNonConflictingAll() { applyNonConflicting(left: true, right: true) }
@@ -623,7 +668,19 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
 
     @objc private func yoursTapped() { acceptAllOurs() }
     @objc private func theirsTapped() { acceptAllTheirs() }
-    @objc private func applyTapped() { onResolved?(result.text.string) }
+    @objc private func applyTapped() {
+        let left = unresolved.count
+        if left > 0, !AppEnv.headless {
+            // PhpStorm: finishing with conflicts open is allowed, after asking; the file is saved exactly as the Result pane shows it.
+            let alert = NSAlert()
+            alert.messageText = "Apply Changes"
+            alert.informativeText = "There \(left == 1 ? "is one conflict" : "are \(left) conflicts") left unprocessed.\nSave changes and mark the file resolved anyway? The file is saved exactly as shown in the Result pane."
+            alert.addButton(withTitle: "Back to Resolving")
+            alert.addButton(withTitle: "Save Current Result")
+            guard alert.runModal() == .alertSecondButtonReturn else { return }
+        }
+        onResolved?(result.text.string)
+    }
     @objc private func prevTapped() { navigate(-1) }
     @objc private func nextTapped() { navigate(1) }
 
@@ -674,7 +731,8 @@ final class MergeView: NSView, NSTextStorageDelegate, NSTextViewDelegate {
         counter.stringValue = n == 0 ? (hunks.contains { $0.conflict } ? "All conflicts resolved" : "No conflicts")
             : "\(n) conflict\(n == 1 ? "" : "s") remaining"
         counter.textColor = n == 0 ? DiffColors.secondary : NSColor.systemOrange
-        applyButton.isEnabled = n == 0
+        applyButton.isEnabled = !hunks.isEmpty
+        applyButton.toolTip = n == 0 ? nil : "\(n) conflict\(n == 1 ? "" : "s") still unresolved — you will be asked to confirm"
     }
 
     private func navigationTargets() -> [Int] {

@@ -107,6 +107,16 @@ enum SelfTestPR {
         SelfTest.check("merge view: discarding removes the arrows too", st(true) == "--R" && st(false) == "---" && m2.remainingConflicts == 0)
         m2.resetHunk(0)
         m2.applyTheirs(0)
+        // Resolve Automatically: whitespace-only differences settle themselves; real conflicts stay.
+        let m3 = MergeView(frame: NSRect(x: 0, y: 0, width: 1000, height: 600))
+        m3.show(base: "a\nb\nc\nd\ne\nf\n", ours: "a\nB1\nc\nd\ne\nf\n", theirs: "a\nB2\nc\nd\ne\nf\n", oursTitle: "o", theirsTitle: "t", fileExtension: "txt")
+        SelfTest.check("merge view: a real conflict is not auto-resolved", m3.resolveAutomatically() == 0 && m3.remainingConflicts == 1)
+        let m4 = MergeView(frame: NSRect(x: 0, y: 0, width: 1000, height: 600))
+        m4.show(base: "a\nvalue = 1\nc\nd\ne\nf\n", ours: "a\nvalue  =  2\nc\nd\ne\nf\n", theirs: "a\nvalue = 2\nc\nd\ne\nf\n", oursTitle: "o", theirsTitle: "t", fileExtension: "txt")
+        let before = m4.remainingConflicts
+        SelfTest.check("merge view: whitespace-only conflict resolves automatically", before == 1 && m4.resolveAutomatically() == 1 && m4.remainingConflicts == 0)
+        m4.revertAllResolution()
+        SelfTest.check("merge view: revert conflict resolution restores the conflict", m4.remainingConflicts == 1)
         SelfTest.check("merge view: accepting right puts the reset on the right", st(true) == "---" && st(false) == "--R")
     }
 
