@@ -17,6 +17,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private(set) var historyPath: String?
     /// Ref the log walks from ("HEAD" = current branch); chosen with the Branch control.
     private(set) var revision = "HEAD"
+    private(set) var filter = GitLogFilter()
     var onAction: ((GitLogAction, GitCommit) -> Void)?
     /// Fired when a page (or the file list / diff of the selection) finished loading; used by tests and the panel.
     var onIdle: (() -> Void)?
@@ -25,6 +26,13 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private let reader = DispatchQueue(label: "git.log", qos: .userInitiated, attributes: .concurrent)
     private let search = NSSearchField()
     private let branchButton = NSButton(title: "", target: nil, action: nil)
+    private let userButton = NSButton(title: "", target: nil, action: nil)
+    private let dateButton = NSButton(title: "", target: nil, action: nil)
+    private let pathButton = NSButton(title: "", target: nil, action: nil)
+    private let filterBar = NSStackView()
+    private let details = NSTextView()
+    private var detailsToken = 0
+    private var dateChoice = "All"
     private let historyBar = NSStackView()
     private let historyLabel = NSTextField(labelWithString: "")
     private let commitTable = LogTable()
@@ -46,7 +54,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private var myName = ""
 
     /// The graph only makes sense for an unfiltered walk (a search or file history skips commits, so lanes would lie).
-    private var showsGraph: Bool { query.trimmingCharacters(in: .whitespaces).isEmpty && historyPath == nil }
+    private var showsGraph: Bool { query.trimmingCharacters(in: .whitespaces).isEmpty && historyPath == nil && !filter.isActive }
 
     private func commitsChanged() {
         graphRows = showsGraph ? GitGraphLayout.rows(for: commits) : []
@@ -92,6 +100,23 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         branchButton.translatesAutoresizingMaskIntoConstraints = false
         updateBranchTitle()
 
+        for (b, sel) in [(userButton, #selector(showUserMenu(_:))), (dateButton, #selector(showDateMenu(_:))), (pathButton, #selector(showPathMenu(_:)))] {
+            b.bezelStyle = .recessed
+            b.controlSize = .small
+            b.font = .systemFont(ofSize: 11)
+            b.target = self
+            b.action = sel
+        }
+        filterBar.setViews([userButton, dateButton, pathButton], in: .leading)
+        filterBar.orientation = .horizontal
+        filterBar.spacing = 6
+        updateFilterTitles()
+
+        details.isEditable = false
+        details.drawsBackground = false
+        details.textContainerInset = NSSize(width: 8, height: 6)
+        details.font = .systemFont(ofSize: 12)
+
         historyLabel.font = .systemFont(ofSize: 11, weight: .medium)
         historyLabel.lineBreakMode = .byTruncatingHead
         let clear = NSButton(title: "Show All", target: self, action: #selector(clearHistory))
@@ -132,7 +157,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         status.lineBreakMode = .byTruncatingTail
 
         let left = NSView()
-        for v in [branchButton, search, historyBar, commitScroll, status] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; left.addSubview(v) }
+        for v in [branchButton, search, filterBar, historyBar, commitScroll, status] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; left.addSubview(v) }
         NSLayoutConstraint.activate([
             search.topAnchor.constraint(equalTo: left.topAnchor, constant: 6),
             branchButton.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 8),
@@ -140,7 +165,9 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             branchButton.widthAnchor.constraint(lessThanOrEqualToConstant: 190),
             search.leadingAnchor.constraint(equalTo: branchButton.trailingAnchor, constant: 8),
             search.trailingAnchor.constraint(equalTo: left.trailingAnchor, constant: -8),
-            historyBar.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 4),
+            filterBar.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 4),
+            filterBar.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 8),
+            historyBar.topAnchor.constraint(equalTo: filterBar.bottomAnchor, constant: 4),
             historyBar.leadingAnchor.constraint(equalTo: left.leadingAnchor),
             historyBar.trailingAnchor.constraint(equalTo: left.trailingAnchor),
             commitScroll.topAnchor.constraint(equalTo: historyBar.bottomAnchor, constant: 4),
@@ -186,9 +213,18 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
         rightSplit.isVertical = false
         rightSplit.dividerStyle = .thin
+        let detailsScroll = NSScrollView()
+        detailsScroll.documentView = details
+        detailsScroll.hasVerticalScroller = true
+        detailsScroll.drawsBackground = false
+        detailsScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 60).isActive = true
+        details.isVerticallyResizable = true
+        details.autoresizingMask = [.width]
+        rightSplit.addArrangedSubview(detailsScroll)
         rightSplit.addArrangedSubview(fileScroll)
         rightSplit.addArrangedSubview(diffHost)
         rightSplit.setHoldingPriority(.init(260), forSubviewAt: 0)
+        rightSplit.setHoldingPriority(.init(250), forSubviewAt: 1)
         split.isVertical = true
         split.dividerStyle = .thin
         split.addArrangedSubview(left)
@@ -209,7 +245,8 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             split.layoutSubtreeIfNeeded()
             split.setPosition(min(640, bounds.width * 0.55), ofDividerAt: 0)
             rightSplit.layoutSubtreeIfNeeded()
-            rightSplit.setPosition(min(110, rightSplit.bounds.height * 0.25), ofDividerAt: 0)
+            rightSplit.setPosition(min(128, rightSplit.bounds.height * 0.28), ofDividerAt: 0)
+            rightSplit.setPosition(min(200, rightSplit.bounds.height * 0.4), ofDividerAt: 1)
         }
     }
 
@@ -220,6 +257,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         fileTable.backgroundColor = Theme.background
         diffMessage.textColor = Theme.gutter
         status.textColor = Theme.gutter
+        details.textColor = Theme.foreground
         historyLabel.textColor = Theme.foreground
         commitTable.reloadData()
         fileTable.reloadData()
@@ -247,10 +285,10 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         let gen = generation
         loading = true
         exhausted = false
-        let (q, p, f, n, rev) = (query, historyPath, follow, pageSize, revision)
+        let (q, p, f, n, rev, flt) = (query, historyPath, follow, pageSize, revision, filter)
         let repo = repo
         reader.async {
-            let r = Result { try repo.log(skip: 0, limit: n, query: q, path: p, follow: f, rev: rev) }
+            let r = Result { try repo.log(skip: 0, limit: n, query: q, path: p, follow: f, rev: rev, filter: flt) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.loading = false
@@ -275,6 +313,145 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
                     self.clearSelectionUI(e.localizedDescription)
                 }
                 self.onIdle?()
+            }
+        }
+    }
+
+    // MARK: filters
+
+    private func updateFilterTitles() {
+        userButton.title = "User: " + (filter.user ?? "All")
+        dateButton.title = "Date: " + dateChoice
+        pathButton.title = "Path: " + (filter.path.map { ($0 as NSString).lastPathComponent } ?? "All")
+        for b in [userButton, dateButton, pathButton] { b.sizeToFit() }
+    }
+
+    private func applyFilter(_ new: GitLogFilter) {
+        filter = new
+        updateFilterTitles()
+        preferredFile = historyPath
+        reload()
+        commitTable.scrollRowToVisible(0)
+    }
+
+    @objc private func showUserMenu(_ sender: NSButton) {
+        let repo = repo
+        reader.async {
+            let names = repo.recentAuthors()
+            let me = (try? repo.text(["config", "user.name"]))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let menu = NSMenu()
+                func add(_ title: String, _ user: String?, checked: Bool) {
+                    let i = NSMenuItem(title: title, action: #selector(self.userPicked(_:)), keyEquivalent: "")
+                    i.target = self; i.representedObject = user ?? ""; i.state = checked ? .on : .off
+                    menu.addItem(i)
+                }
+                add("All", nil, checked: self.filter.user == nil)
+                if !me.isEmpty { add("Me (\(me))", me, checked: self.filter.user == me) }
+                menu.addItem(.separator())
+                for n in names where n != me { add(n, n, checked: self.filter.user == n) }
+                menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 2), in: sender)
+            }
+        }
+    }
+
+    @objc private func userPicked(_ s: NSMenuItem) {
+        var f = filter
+        let v = s.representedObject as? String ?? ""
+        f.user = v.isEmpty ? nil : v
+        applyFilter(f)
+    }
+
+    @objc private func showDateMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        for t in ["All", "Last 24 hours", "Last 7 days", "Last 30 days", "Last year"] {
+            let i = NSMenuItem(title: t, action: #selector(datePicked(_:)), keyEquivalent: "")
+            i.target = self; i.state = t == dateChoice ? .on : .off
+            menu.addItem(i)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 2), in: sender)
+    }
+
+    @objc private func datePicked(_ s: NSMenuItem) {
+        dateChoice = s.title
+        let day: TimeInterval = 86_400
+        var f = filter
+        switch s.title {
+        case "Last 24 hours": f.since = Date().addingTimeInterval(-day)
+        case "Last 7 days": f.since = Date().addingTimeInterval(-7 * day)
+        case "Last 30 days": f.since = Date().addingTimeInterval(-30 * day)
+        case "Last year": f.since = Date().addingTimeInterval(-365 * day)
+        default: f.since = nil
+        }
+        applyFilter(f)
+    }
+
+    @objc private func showPathMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        let all = NSMenuItem(title: "All paths", action: #selector(pathPicked(_:)), keyEquivalent: "")
+        all.target = self; all.representedObject = ""; all.state = filter.path == nil ? .on : .off
+        menu.addItem(all)
+        let choose = NSMenuItem(title: "File or folder…", action: #selector(pathChoose), keyEquivalent: "")
+        choose.target = self
+        menu.addItem(choose)
+        if let p = filter.path {
+            menu.addItem(.separator())
+            let cur = NSMenuItem(title: p, action: nil, keyEquivalent: ""); cur.state = .on; cur.isEnabled = false
+            menu.addItem(cur)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 2), in: sender)
+    }
+
+    @objc private func pathPicked(_ s: NSMenuItem) {
+        var f = filter
+        let v = s.representedObject as? String ?? ""
+        f.path = v.isEmpty ? nil : v
+        applyFilter(f)
+    }
+
+    @objc private func pathChoose() {
+        let (alert, field) = GitDialogs.textAlert(title: "Filter by path", info: "A file or folder, relative to the project root.", placeholder: "app/Http/Controllers", button: "Filter")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let v = field.stringValue.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        var f = filter
+        f.path = v.isEmpty ? nil : v
+        applyFilter(f)
+    }
+
+    // MARK: details pane
+
+    private func loadDetails(for c: GitCommit) {
+        detailsToken += 1
+        let token = detailsToken
+        let repo = repo
+        let refs = c.refs
+        reader.async {
+            let info = try? repo.commitInfo(hash: c.hash)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, token == self.detailsToken else { return }
+                let out = NSMutableAttributedString()
+                func line(_ text: String, font: NSFont, color: NSColor, gap: CGFloat = 0) {
+                    let p = NSMutableParagraphStyle(); p.paragraphSpacing = gap
+                    out.append(NSAttributedString(string: text + "\n", attributes: [.font: font, .foregroundColor: color, .paragraphStyle: p]))
+                }
+                let message = info?.message ?? c.subject
+                let parts = message.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+                line(parts.first ?? c.subject, font: .systemFont(ofSize: 13, weight: .semibold), color: Theme.foreground, gap: 4)
+                if parts.count > 1, !parts[1].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    line(parts[1].trimmingCharacters(in: .whitespacesAndNewlines), font: .systemFont(ofSize: 12), color: Theme.foreground, gap: 6)
+                }
+                let when = info.map { Self.dateFormat.string(from: Date(timeIntervalSince1970: $0.authorTime)) } ?? c.relativeDate
+                let who = info.map { "\($0.author) <\($0.mail)>" } ?? c.author
+                line("\(c.shortHash)  ·  \(who)  ·  \(when)", font: .monospacedSystemFont(ofSize: 11, weight: .regular), color: Theme.gutter)
+                if let info, info.parents.count > 0 {
+                    line("Parent\(info.parents.count > 1 ? "s" : ""): " + info.parents.map { String($0.prefix(7)) }.joined(separator: ", "),
+                         font: .monospacedSystemFont(ofSize: 11, weight: .regular), color: Theme.gutter)
+                }
+                if !refs.isEmpty { line("In: " + refs.joined(separator: ", "), font: .systemFont(ofSize: 11), color: Theme.gutter) }
+                if let info { line("\(info.fileCount) file\(info.fileCount == 1 ? "" : "s") changed", font: .systemFont(ofSize: 11), color: Theme.gutter) }
+                self.details.textStorage?.setAttributedString(out)
+                self.details.scrollToBeginningOfDocument(nil)
             }
         }
     }
@@ -387,10 +564,10 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         guard !loading, !exhausted else { return }
         loading = true
         let gen = generation
-        let (q, p, f, n, skip, rev) = (query, historyPath, follow, pageSize, commits.count, revision)
+        let (q, p, f, n, skip, rev, flt) = (query, historyPath, follow, pageSize, commits.count, revision, filter)
         let repo = repo
         reader.async {
-            let r = try? repo.log(skip: skip, limit: n, query: q, path: p, follow: f, rev: rev)
+            let r = try? repo.log(skip: skip, limit: n, query: q, path: p, follow: f, rev: rev, filter: flt)
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.loading = false
@@ -427,6 +604,8 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     // MARK: selection
 
     private func clearSelectionUI(_ message: String) {
+        detailsToken += 1
+        details.string = ""
         files = []
         fileTable.reloadData()
         diffView.isHidden = true
@@ -437,6 +616,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     func tableViewSelectionDidChange(_ n: Notification) {
         if (n.object as? NSTableView) === fileTable { showSelectedFileDiff(); return }
         guard let c = selectedCommit else { return }
+        loadDetails(for: c)
         fileToken += 1
         diffToken += 1
         let token = fileToken

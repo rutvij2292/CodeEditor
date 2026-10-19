@@ -23,6 +23,25 @@ struct GitCommit: Equatable {
     let parents: [String]
 }
 
+/// Narrowing of the log list: author substring, earliest date, one path.
+struct GitLogFilter: Equatable {
+    var user: String?
+    var since: Date?
+    var path: String?
+    var isActive: Bool { user != nil || since != nil || path != nil }
+
+    private static let iso: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd HH:mm:ss"; return f
+    }()
+    /// git arguments for the user / date parts (paths go after `--`).
+    var arguments: [String] {
+        var a: [String] = []
+        if let user { a += ["--author=\(user)", "--fixed-strings"] }
+        if let since { a.append("--since=\(Self.iso.string(from: since))") }
+        return a
+    }
+}
+
 struct GitFileChange: Equatable {
     /// A, M, D, R, C, T
     let status: String
@@ -208,29 +227,39 @@ extension GitRepo {
 
     /// One page of history for `rev` (default: the current branch). `query` matches message, author or hash prefix (case-insensitive).
     /// `path` + `follow` lists the history of one file across renames.
-    func log(skip: Int, limit: Int, query: String? = nil, path: String? = nil, follow: Bool = false, rev: String = "HEAD") throws -> [GitCommit] {
+    func log(skip: Int, limit: Int, query: String? = nil, path: String? = nil, follow: Bool = false, rev: String = "HEAD",
+             filter: GitLogFilter = GitLogFilter()) throws -> [GitCommit] {
         guard hasHead else { return [] }
-        let paths = path.map { [$0] } ?? []
+        let paths = (path ?? filter.path).map { [$0] } ?? []
+        let filterArgs = filter.arguments
         let q = query?.trimmingCharacters(in: .whitespaces) ?? ""
         if q.isEmpty {
-            return try logCommits([rev], skip: skip, limit: limit, extra: (follow && path != nil ? ["--follow"] : ["--topo-order"]), paths: paths)
+            return try logCommits([rev], skip: skip, limit: limit, extra: (follow && path != nil ? ["--follow"] : ["--topo-order"]) + filterArgs, paths: paths)
         }
         // git ANDs --grep and --author, so collect both hash sets and show the union
         var hashes: [String] = []
         var seen = Set<String>()
         func collect(_ extra: [String]) throws {
-            var args = ["log", "--format=%H", "--max-count=5000", "-i", "--fixed-strings"] + extra + [rev]
+            var args = ["log", "--format=%H", "--max-count=5000", "-i", "--fixed-strings"] + extra + filterArgs + [rev]
             if !paths.isEmpty { args += ["--"] + paths }
             for h in try text(args).split(separator: "\n") where seen.insert(String(h)).inserted { hashes.append(String(h)) }
         }
         try collect(["--grep=\(q)"])
-        try collect(["--author=\(q)"])
+        if filter.user == nil { try collect(["--author=\(q)"]) }
         if q.count >= 4, q.allSatisfy({ $0.isHexDigit }),
            let full = try? text(["rev-parse", "--verify", "-q", q + "^{commit}"]).trimmingCharacters(in: .whitespacesAndNewlines),
            !full.isEmpty, seen.insert(full).inserted { hashes.append(full) }
         guard !hashes.isEmpty else { return [] }
         return try logCommits([], skip: skip, limit: limit, extra: ["--no-walk=sorted", "--stdin"],
                               stdin: Data(hashes.joined(separator: "\n").utf8))
+    }
+
+    /// Author names in the recent history, most active first (for the log's User filter).
+    func recentAuthors(limit: Int = 30) -> [String] {
+        guard hasHead, let out = try? text(["log", "--format=%an", "--max-count=3000", "--no-color"]) else { return [] }
+        var counts: [String: Int] = [:]
+        for n in out.split(separator: "\n") { counts[String(n), default: 0] += 1 }
+        return counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.prefix(limit).map(\.key)
     }
 
     /// Files changed by a commit (against its first parent).

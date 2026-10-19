@@ -357,6 +357,13 @@ enum SelfTestBranches {
         check("merge commit reports two parents", r.parentHashes(mergeHash).count == 2)
         sh(r, ["checkout", "-q", "main"])
         check("merge cherry-pick with mainline succeeds", (try? r.cherryPick([mergeHash], mainline: 1)) != nil)
+        sh(r, ["commit", "--allow-empty", "-q", "--author=Zed <z@example.com>", "-m", "by zed"])
+        let byZed = (try? r.log(skip: 0, limit: 50, filter: GitLogFilter(user: "Zed"))) ?? []
+        check("log filter by user", byZed.map(\.subject) == ["by zed"])
+        check("log filter by date excludes older commits", ((try? r.log(skip: 0, limit: 50, filter: GitLogFilter(since: Date().addingTimeInterval(86_400)))) ?? [nil as GitCommit?].compactMap { $0 }).isEmpty)
+        check("log filter by path", ((try? r.log(skip: 0, limit: 50, filter: GitLogFilter(path: "a.txt"))) ?? []).map(\.subject) == ["feat a"])
+        check("log filter combines with search", ((try? r.log(skip: 0, limit: 50, query: "feat", filter: GitLogFilter(user: "Zed"))) ?? []).isEmpty)
+        check("recent authors lists them", r.recentAuthors().contains("Zed") && r.recentAuthors().contains("Test"))
         let everything = GitGraphLayout.rows(for: (try? r.logCommits(["--all"], limit: 100, extra: ["--topo-order"])) ?? [])
         check("graph: branches use several lanes and converge at their fork",
               everything.map(\.laneCount).max() ?? 0 >= 3 && everything.contains { row in row.outs.contains { $0.lane != row.column } })
