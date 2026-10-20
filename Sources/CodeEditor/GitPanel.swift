@@ -58,12 +58,15 @@ private enum GitColors {
 private final class GitOutline: NSOutlineView {
     var onSpace: (() -> Void)?
     var onReturn: (() -> Void)?
+    var speedSearch: SpeedSearch?
     override func keyDown(with event: NSEvent) {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         switch event.keyCode {
         case 49 where mods.isEmpty: onSpace?()
         case 36 where mods.isEmpty, 76 where mods.isEmpty: onReturn?()
-        default: super.keyDown(with: event)
+        default:
+            if speedSearch?.handleKeyDown(event) == true { return }
+            super.keyDown(with: event)
         }
     }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -230,6 +233,8 @@ private final class GitPanelView: NSView {
     var onCommitPush: (() -> Void)?
     var onRollback: (() -> Void)?
     var onEscape: (() -> Void)?
+    /// Shift-Escape: hide the whole panel.
+    var onHide: (() -> Void)?
     /// True while a popover, sheet or search text should get Esc instead of the panel.
     var escapeIsBusy: () -> Bool = { false }
 
@@ -247,7 +252,7 @@ private final class GitPanelView: NSView {
             onRollback?(); return true
         }
         if event.keyCode == 53, mods.isEmpty || mods == .shift, window?.attachedSheet == nil, !escapeIsBusy() {
-            onEscape?()
+            if mods == .shift { (onHide ?? onEscape)?() } else { onEscape?() }
             return true
         }
         return super.performKeyEquivalent(with: event)
@@ -277,6 +282,8 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     var onShowBranches: (() -> Void)?
     /// Esc / Shift-Esc pressed while focus is inside the panel and no popover, sheet or search text wants it.
     var onRequestClose: (() -> Void)?
+    /// Escape in the project window's Git tool: focus the editor and keep the panel (the Commit window closes instead).
+    var onFocusEditor: (() -> Void)?
     /// Fired after a successful commit (`andPush`: the push is about to start).
     var onCommitted: ((_ andPush: Bool) -> Void)?
     /// Fired after every successful reload of the repository state.
@@ -315,6 +322,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private var mode = Mode.changes
     private static let maxUntrackedShown = 2000
     private let outline = GitOutline()
+    private let speed = SpeedSearch()
     private let diffHost = NSView()
     private let diffView = SideBySideDiffView()
     private var mergeView: MergeView?
@@ -477,6 +485,9 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         outline.doubleAction = #selector(doubleClicked)
         outline.onSpace = { [weak self] in self?.toggleSelection() }
         outline.onReturn = { [weak self] in self?.openSelection() }
+        speed.attach(to: outline) { [weak self] row in (self?.outline.item(atRow: row) as? GitRow)?.change.path }
+        speed.onReturn = { [weak self] in self?.openSelection() }
+        outline.speedSearch = speed
         let menu = NSMenu()
         menu.delegate = self
         outline.menu = menu
@@ -643,7 +654,8 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         panel.onCommit = { [weak self] in self?.commitTapped() }
         panel.onCommitPush = { [weak self] in self?.commitPushTapped() }
         panel.onRollback = { [weak self] in self?.rollbackTapped() }
-        panel.onEscape = { [weak self] in self?.onRequestClose?() }
+        panel.onEscape = { [weak self] in if let f = self?.onFocusEditor { f() } else { self?.onRequestClose?() } }
+        panel.onHide = { [weak self] in self?.onRequestClose?() }
         panel.escapeIsBusy = { [weak self] in
             guard let self else { return false }
             return self.stashPopover?.isShown == true || (self.mode == .log && self.logView.searchIsEditing)

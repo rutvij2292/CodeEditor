@@ -192,3 +192,12 @@ final class SpeedSearch: NSObject, NSTextFieldDelegate {
     func testBegin(_ s: String) { begin(seed: s) }
     func testStep(_ d: Int) { step(d) }
 }
+
+/// Plain table whose typing starts a speed search (TODO, Bookmarks, Tests, Claude Changes).
+final class SpeedTableView: NSTableView {
+    var speedSearch: SpeedSearch?
+    override func keyDown(with event: NSEvent) {
+        if speedSearch?.handleKeyDown(event) == true { return }
+        super.keyDown(with: event)
+    }
+}

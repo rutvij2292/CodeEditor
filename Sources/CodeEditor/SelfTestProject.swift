@@ -107,7 +107,8 @@ extension SelfTest {
         w.showCommit(); w.showCommit()
         check("window: Cmd-K shows git and never hides", w.bottom.isVisible && w.bottom.selectedID == "git")
         w.toggleGitPanel()
-        check("window: Cmd-9 toggles git panel off", !w.bottom.isVisible)
+        check("window: Cmd-9 on a visible but unfocused git panel focuses it instead of hiding", w.bottom.isVisible)
+        w.bottom.hide()
         w.toggleGitPanel()
         check("window: Cmd-9 toggles git panel on", w.bottom.isVisible && w.bottom.selectedID == "git")
         w.bottom.hide()
@@ -506,10 +507,12 @@ extension SelfTest {
         check("Rename is Shift-F6", shortcut("Rename…") == "⇧F6")
         check("Format Document is Cmd-Opt-Shift-L", shortcut("Format Document") == "⌥⇧⌘L")
         check("Reformat Code keeps Cmd-Opt-L", shortcut("Reformat Code") == "⌥⌘L")
-        check("Toggle Soft Wrap and tool windows exist", ["Toggle Soft Wrap", "Find Tool Window", "Problems Tool Window", "Git Tool Window",
+        check("Toggle Soft Wrap and tool windows exist", ["Toggle Soft Wrap", "Find Tool Window", "Problems Tool Window", "HTTP Client Tool Window",
                                                           "Include vendor in Go to File", "Reopen Windows on Launch"].allSatisfy { shortcut($0) != "missing" })
-        check("Git panel is Cmd-9, Commit Panel Cmd-0, Go to Line Cmd-L",
-              shortcut("Show Git Panel") == "⌘9" && shortcut("Commit Panel") == "⌘0" && shortcut("Go to Line…") == "⌘L")
+        check("Git panel is Cmd-9, Bookmarks Cmd-2, Tests Cmd-4, Focus Editor shows Esc, Go to Line Cmd-L",
+              shortcut("Show Git Panel") == "⌘9" && shortcut("Bookmarks Tool Window") == "⌘2" && shortcut("Tests Tool Window") == "⌘4"
+              && shortcut("Focus Editor") == "⌘⎋" && shortcut("Go to Line…") == "⌘L")
+        check("Last tool window is F12, hide all is Shift-Cmd-F12", shortcut("Last Tool Window") == "F12" && shortcut("Hide All Tool Windows") == "⇧⌘F12")
 
         app.noteKey(w.window)
         var hits: [String] = []

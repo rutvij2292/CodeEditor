@@ -7,6 +7,10 @@ final class BottomPanelView: NSView {
     let closeButton = NSButton()
     private let separator = NSView()
     var onEscape: (() -> Void)?
+    /// Shift-Escape inside a tool: hide the panel and return to the editor (PhpStorm).
+    var onHide: (() -> Void)?
+    /// Shift-Cmd-[ / ] inside a tool: previous / next tool tab.
+    var onCycle: ((Int) -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -48,8 +52,28 @@ final class BottomPanelView: NSView {
         closeButton.contentTintColor = Theme.gutter
     }
 
+    override var acceptsFirstResponder: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { onEscape?() } else { super.keyDown(with: event) }
+    }
+
     /// Escape inside any tool view arrives here through the responder chain.
     override func cancelOperation(_ sender: Any?) { onEscape?() }
+
+    /// Keys that only make sense while focus is inside the panel; the terminal keeps plain Escape for the shell.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard let r = window?.firstResponder as? NSView, r.isDescendant(of: self), window?.attachedSheet == nil else {
+            return super.performKeyEquivalent(with: event)
+        }
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.function, .numericPad, .capsLock])
+        if event.keyCode == 53, mods == .shift { onHide?(); return true }
+        if mods == [.command, .shift], let c = event.charactersIgnoringModifiers {
+            if c == "[" || c == "{" { onCycle?(-1); return true }
+            if c == "]" || c == "}" { onCycle?(1); return true }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 /// Tabbed host for tool windows (Git, Find, Problems, ...). Tools register a view; the panel owns visibility,
@@ -74,6 +98,12 @@ final class BottomPanel: NSObject {
     var onWillShow: ((String) -> Void)?
     /// Escape inside a tool, and the end of `requestClose`: the host moves focus back to the editor.
     var onEscape: (() -> Void)?
+    /// Moves focus into a tool's primary control (after it was shown by a number key or tab cycling).
+    var onFocusTool: ((String) -> Void)?
+
+    /// Shortcut shown in tab tooltips.
+    static let shortcutHints: [String: String] = ["bookmarks": "⌘2", "find": "⌘3", "tests": "⌘4", "todo": "⌘5", "problems": "⌘6",
+                                                  "http": "⌘8", "git": "⌘9", "terminal": "⌥F12"]
 
     private let defaults: UserDefaults
     private var persistenceKey: String?
@@ -86,6 +116,8 @@ final class BottomPanel: NSObject {
         view.closeButton.target = self
         view.closeButton.action = #selector(closeClicked)
         view.onEscape = { [weak self] in self?.escapePressed() }
+        view.onHide = { [weak self] in self?.requestClose() }
+        view.onCycle = { [weak self] d in self?.cycle(d) }
         NotificationCenter.default.addObserver(self, selector: #selector(themeChanged), name: Theme.didChange, object: nil)
     }
 
@@ -115,6 +147,7 @@ final class BottomPanel: NSObject {
         let b = NSButton(title: title, target: self, action: #selector(tabClicked(_:)))
         b.isBordered = false
         b.identifier = NSUserInterfaceItemIdentifier(id)
+        b.toolTip = Self.shortcutHints[id].map { "\(title) (\($0))" } ?? title
         b.wantsLayer = true
         b.layer?.cornerRadius = 5
         buttons[id] = b
@@ -172,6 +205,18 @@ final class BottomPanel: NSObject {
     /// Shows `id`; if it is already the visible tool, hides the panel instead.
     func toggle(_ id: String, focus: (() -> Void)? = nil) {
         if isVisible, selectedID == id { hide() } else { show(id, focus: focus) }
+    }
+
+    /// True when `responder` is a view inside the visible panel.
+    func contains(_ responder: NSResponder?) -> Bool {
+        isVisible && ((responder as? NSView)?.isDescendant(of: view) ?? false)
+    }
+
+    /// Selects the next / previous tool tab (wrapping) and focuses it.
+    func cycle(_ delta: Int) {
+        guard tools.count > 1, let cur = tools.firstIndex(where: { $0.id == selectedID }) else { return }
+        let id = tools[(cur + delta + tools.count) % tools.count].id
+        show(id) { [weak self] in self?.onFocusTool?(id) }
     }
 
     /// Hides the panel and returns focus to the editor (what Escape and a tool's own close request do).

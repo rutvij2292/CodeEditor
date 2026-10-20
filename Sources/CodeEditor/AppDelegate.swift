@@ -259,8 +259,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func focusEditor(_ sender: Any?) { active?.focusEditor() }
     @objc func splitEditorRight(_ sender: Any?) { active?.splitEditorRight() }
     @objc func unsplitEditor(_ sender: Any?) { active?.unsplitEditor() }
-    @objc func showTodoTool(_ sender: Any?) { active?.showTodo() }
-    @objc func showBookmarksTool(_ sender: Any?) { active?.showBookmarks() }
+    @objc func showTodoTool(_ sender: Any?) { active?.toggleTool("todo") }
+    @objc func showBookmarksTool(_ sender: Any?) { active?.toggleTool("bookmarks") }
     @objc func toggleBookmark(_ sender: Any?) { active?.toggleBookmark() }
     @objc func nextBookmark(_ sender: Any?) { active?.jumpToBookmark(forward: true) }
     @objc func previousBookmark(_ sender: Any?) { active?.jumpToBookmark(forward: false) }
@@ -274,10 +274,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func fetchChanges(_ sender: Any?) { active?.showCommitWindow { $0.fetch() } }
     @objc func selectOpenedFile(_ sender: Any?) { active?.selectOpenedFile() }
     @objc func collapseAll(_ sender: Any?) { active?.collapseTree() }
-    @objc func showFindTool(_ sender: Any?) { active?.showToolPanel("find") }
-    @objc func showProblemsTool(_ sender: Any?) { active?.showToolPanel("problems") }
-    @objc func showGitTool(_ sender: Any?) { active?.showToolPanel("git") }
-    @objc func showClaudeChangesTool(_ sender: Any?) { active?.showClaudeChanges() }
+    @objc func showFindTool(_ sender: Any?) { active?.toggleTool("find") }
+    @objc func showProblemsTool(_ sender: Any?) { active?.toggleTool("problems") }
+    @objc func showGitTool(_ sender: Any?) { active?.toggleTool("git") }
+    @objc func showHttpTool(_ sender: Any?) { active?.toggleTool("http") }
+    @objc func showClaudeChangesTool(_ sender: Any?) { active?.toggleTool("claude-changes") }
+    @objc func jumpToLastTool(_ sender: Any?) { active?.jumpToLastTool() }
+    @objc func hideAllTools(_ sender: Any?) { active?.toggleHideAllTools() }
     @objc func findInFiles(_ sender: Any?) { active?.onFindInFiles?() }
     @objc func replaceInFiles(_ sender: Any?) { active?.onReplaceInFiles?() }
     @objc func nextProblem(_ sender: Any?) { active.map { Self.nextProblemHandler?($0) } }

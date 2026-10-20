@@ -12,7 +12,8 @@ final class LineListPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate 
     }
 
     let view = NSView()
-    private let table = NSTableView()
+    private let table = SpeedTableView()
+    private let speed = SpeedSearch()
     private let status = NSTextField(labelWithString: "")
     private let refreshButton = NSButton()
     private let chips = NSSegmentedControl()
@@ -34,6 +35,12 @@ final class LineListPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         table.delegate = self
         table.target = self
         table.doubleAction = #selector(activate)
+        speed.attach(to: table) { [weak self] row in
+            guard let r = self?.shown, r.indices.contains(row) else { return nil }
+            return r[row].primary + " " + r[row].secondary
+        }
+        speed.onReturn = { [weak self] in self?.activate() }
+        table.speedSearch = speed
         table.style = .plain
         table.backgroundColor = .clear
         let scroll = NSScrollView()

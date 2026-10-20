@@ -6,7 +6,8 @@ final class ChangeReviewPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
     enum Row { case session(ChangeReviewStore.Session), file(ChangeReviewStore.Session, ChangeReviewStore.Entry) }
 
     let view = NSView()
-    private let table = NSTableView()
+    private let table = SpeedTableView()
+    private let speed = SpeedSearch()
     private let summary = NSTextField(labelWithString: "")
     private let store: ChangeReviewStore
     private(set) var rows: [Row] = []
@@ -38,6 +39,12 @@ final class ChangeReviewPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
         table.target = self
         table.action = #selector(clicked)
         table.doubleAction = #selector(doubleClicked)
+        speed.attach(to: table) { [weak self] row in
+            guard let r = self?.rows, r.indices.contains(row) else { return nil }
+            if case .file(_, let e) = r[row] { return e.rel }
+            return nil
+        }
+        table.speedSearch = speed
         table.usesAlternatingRowBackgroundColors = false
         table.backgroundColor = .clear
         table.style = .plain

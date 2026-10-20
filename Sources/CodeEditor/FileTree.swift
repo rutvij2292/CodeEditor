@@ -114,6 +114,8 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     var onEscape: (() -> Void)?
     /// Typed query nothing in the loaded tree matched: the window widens it to Go to File.
     var onSearchEverywhere: ((String) -> Void)?
+    /// "Open in Terminal": the window opens a tab of its own terminal in that folder (Terminal.app only when this is unset).
+    var onOpenTerminal: ((URL) -> Void)?
     let speed = SpeedSearch()
     /// Reports every file-system change the tree made, after the tree itself refreshed.
     var onChange: ((FileChange) -> Void)?
@@ -347,6 +349,7 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     @objc private func menuTerminal() {
         guard let u = menuURL, let dir = targetDirectory(for: u) else { return }
+        if let embedded = onOpenTerminal { embedded(dir); return }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         p.arguments = ["-a", "Terminal", dir.path]

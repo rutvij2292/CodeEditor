@@ -16,7 +16,8 @@ final class TestPanelController: NSObject, NSTableViewDataSource, NSTableViewDel
     private let outputButton = NSButton(title: "Output", target: nil, action: nil)
     private let toolbar = NSView()
     private let split = NSSplitView()
-    private let table = NSTableView()
+    private let table = SpeedTableView()
+    private let speed = SpeedSearch()
     private let tableScroll = NSScrollView()
     private let text = NSTextView()
     private let textScroll = NSScrollView()
@@ -45,6 +46,11 @@ final class TestPanelController: NSObject, NSTableViewDataSource, NSTableViewDel
         table.dataSource = self
         table.delegate = self
         table.doubleAction = #selector(doubleClicked)
+        speed.attach(to: table) { [weak self] row in
+            guard let r = self?.rows, r.indices.contains(row) else { return nil }
+            return (r[row].className.map { $0 + " " } ?? "") + r[row].name
+        }
+        table.speedSearch = speed
         table.target = self
         table.usesAlternatingRowBackgroundColors = false
         tableScroll.documentView = table

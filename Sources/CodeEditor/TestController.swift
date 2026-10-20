@@ -13,6 +13,8 @@ final class TestController: NSObject {
     private let store = TestResultsStore.shared
     /// Reveals the Tests tab (set by the window wiring).
     var showPanel: (() -> Void)?
+    /// Menu / ⌘4: show-and-focus, or hide when focus is already inside.
+    var togglePanel: (() -> Void)?
     /// Called on the main thread when a run ends (tests).
     var onFinish: ((TestRunner.Outcome) -> Void)?
 
@@ -91,7 +93,7 @@ final class TestActions: NSObject {
     @objc func rerunLast(_ sender: Any?) { controller?.rerunLast() }
     @objc func rerunFailed(_ sender: Any?) { controller?.rerunFailed() }
     @objc func stop(_ sender: Any?) { controller?.stop() }
-    @objc func showTests(_ sender: Any?) { controller?.showPanel?() }
+    @objc func showTests(_ sender: Any?) { controller?.togglePanel?() }
 
     /// The top-level "Run" menu.
     static func menuItem() -> NSMenuItem {
@@ -110,7 +112,7 @@ final class TestActions: NSObject {
                   item("Re-run Failed Tests", #selector(rerunFailed(_:))),
                   item("Stop Tests", #selector(stop(_:))),
                   NSMenuItem.separator(),
-                  item("Tests Tool Window", #selector(showTests(_:)), "7", [.command])] { menu.addItem(i) }
+                  item("Tests Tool Window", #selector(showTests(_:)), "4", [.command])] { menu.addItem(i) }
         let top = NSMenuItem(title: "Run", action: nil, keyEquivalent: "")
         top.submenu = menu
         return top
@@ -124,6 +126,7 @@ extension ProjectWindow {
         let c = TestController(root: root)
         objc_setAssociatedObject(self, &TestController.ownerKey, c, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)   // lives as long as the window
         c.showPanel = { [weak self] in self?.showToolPanel("tests") }
+        c.togglePanel = { [weak self] in self?.toggleTool("tests") }
         c.panel.onOpen = { [weak self] path, line in
             self?.open(URL(fileURLWithPath: path), line: line)
             self?.current?.textView.goToLine(line, column: 1)

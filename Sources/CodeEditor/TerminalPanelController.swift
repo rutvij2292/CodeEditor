@@ -429,6 +429,12 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         let tab = Tab(view: tv, title: title ?? (shell as NSString).lastPathComponent)
         tv.onData = { [weak self, weak tab] in if let self, let tab { self.dataArrived(tab) } }
         tv.onRestartKey = { [weak self, weak tab] in if let self, let tab { self.restart(tab) } }
+        tv.onNewTab = { [weak self] in self?.newTab() }
+        tv.onCloseTab = { [weak self] in self?.closeTab() }
+        tv.onCycleTab = { [weak self] d in
+            guard let self, self.tabs.count > 1 else { return }
+            self.select((self.active + d + self.tabs.count) % self.tabs.count)
+        }
         tv.onLink = { [weak self] in self?.handleLink($0) }
         tv.onBell = { [weak self, weak tab] in if let self, let tab { self.bellRang(tab) } }
         tv.onFileDrop = { [weak self] in self?.onFilesDropped?($0) }
@@ -590,6 +596,7 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         let view = tab.view
         view.processDelegate = nil
         view.onData = nil; view.onLink = nil; view.onRestartKey = nil
+        view.onNewTab = nil; view.onCloseTab = nil; view.onCycleTab = nil
         let pid = view.process?.shellPid ?? 0
         let running = view.process?.running ?? false
         view.terminate()   // closes the pty (kernel HUPs the foreground group), SIGTERM to shell

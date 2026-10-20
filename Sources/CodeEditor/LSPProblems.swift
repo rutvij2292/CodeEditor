@@ -103,8 +103,11 @@ private final class ProblemNode: NSObject {
 
 private final class ProblemsOutline: NSOutlineView {
     var onActivate: (() -> Void)?
+    var speedSearch: SpeedSearch?
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 36 || event.keyCode == 76 { onActivate?() } else { super.keyDown(with: event) }
+        if event.keyCode == 36 || event.keyCode == 76 { onActivate?(); return }
+        if speedSearch?.handleKeyDown(event) == true { return }
+        super.keyDown(with: event)
     }
 }
 
@@ -143,6 +146,7 @@ final class ProblemsPanelController: NSObject, NSOutlineViewDataSource, NSOutlin
     private let root: URL
     private let openFile: (URL, Int, Int) -> Void
     private let outline = ProblemsOutline()
+    private let speed = SpeedSearch()
     private let scroll = NSScrollView()
     private let toolbar = NSView()
     private let summary = NSTextField(labelWithString: "")
@@ -195,6 +199,15 @@ final class ProblemsPanelController: NSObject, NSOutlineViewDataSource, NSOutlin
         outline.target = self
         outline.doubleAction = #selector(activate)
         outline.onActivate = { [weak self] in self?.activate() }
+        speed.attach(to: outline) { [weak self] row in
+            switch self?.outline.item(atRow: row) {
+            case let f as ProblemFileNode: return f.relative
+            case let p as ProblemNode: return p.d.message
+            default: return nil
+            }
+        }
+        speed.onReturn = { [weak self] in self?.activate() }
+        outline.speedSearch = speed
         scroll.documentView = outline
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true

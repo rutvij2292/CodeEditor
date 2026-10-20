@@ -90,6 +90,7 @@ private final class FindOutlineView: NSOutlineView {
     var onSpace: (() -> Void)?
     var onEscape: (() -> Void)?
     var onUpAtTop: (() -> Void)?
+    var speedSearch: SpeedSearch?
 
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
@@ -97,7 +98,9 @@ private final class FindOutlineView: NSOutlineView {
         case 49: onSpace?()
         case 53: onEscape?()
         case 126 where selectedRow <= 1: onUpAtTop?()
-        default: super.keyDown(with: event)
+        default:
+            if speedSearch?.handleKeyDown(event) == true { return }
+            super.keyDown(with: event)
         }
     }
 }
@@ -116,6 +119,8 @@ private final class FindRootView: NSView {
 final class FindPanelController: NSObject, NSSearchFieldDelegate, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
     let view: NSView
     var onClose: (() -> Void)?
+    /// Escape: back to the editor with the results kept (Shift-Escape or the close button hides the panel).
+    var onEscapeToEditor: (() -> Void)?
     /// Optional richer open hook (gets the whole match, e.g. to select the range). Takes precedence over `openFile`.
     var openMatch: ((FindMatch) -> Void)?
 
@@ -142,6 +147,7 @@ final class FindPanelController: NSObject, NSSearchFieldDelegate, NSOutlineViewD
     private let divider = NSView()
     private let scroll = NSScrollView()
     private let outline = FindOutlineView()
+    private let speed = SpeedSearch()
     private let root = FindRootView()
 
     private var directory: URL?
@@ -295,8 +301,17 @@ final class FindPanelController: NSObject, NSSearchFieldDelegate, NSOutlineViewD
         outline.allowsMultipleSelection = false
         outline.floatsGroupRows = false
         outline.onOpen = { [weak self] in self?.openSelected() }
+        speed.attach(to: outline) { [weak self] row in
+            switch self?.outline.item(atRow: row) {
+            case let f as FindFileNode: return f.dir.isEmpty ? f.name : f.dir + "/" + f.name
+            case let m as FindMatchNode: return m.match.lineText
+            default: return nil
+            }
+        }
+        speed.onReturn = { [weak self] in self?.openSelected() }
+        outline.speedSearch = speed
         outline.onSpace = { [weak self] in self?.toggleSelectedExclusion() }
-        outline.onEscape = { [weak self] in self?.closeTapped() }
+        outline.onEscape = { [weak self] in self?.escapePressed() }
         outline.onUpAtTop = { [weak self] in self?.focusQuery() }
         let menu = NSMenu()
         menu.delegate = self
@@ -546,7 +561,7 @@ final class FindPanelController: NSObject, NSSearchFieldDelegate, NSOutlineViewD
     func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
         switch sel {
         case #selector(NSResponder.cancelOperation(_:)):
-            closeTapped(); return true
+            escapePressed(); return true
         case #selector(NSResponder.moveDown(_:)):
             if control === queryField || control === maskField || control === replaceField { focusResults(); return true }
         case #selector(NSResponder.insertNewline(_:)):
@@ -564,6 +579,10 @@ final class FindPanelController: NSObject, NSSearchFieldDelegate, NSOutlineViewD
     }
 
     // MARK: actions
+
+    private func escapePressed() {
+        if let f = onEscapeToEditor { f() } else { closeTapped() }
+    }
 
     @objc private func closeTapped() {
         clearResults()

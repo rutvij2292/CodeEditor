@@ -24,6 +24,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     var bookmarks: BookmarkStore?
     var bookmarkPanelRebuild: (() -> Void)?
     var todoRescan: (() -> Void)?
+    /// What "Hide All Tool Windows" hid, so the same key brings it back.
+    var hiddenTools: (sidebar: Bool, bottom: Bool)?
     var changeReviewPanel: ChangeReviewPanel?
     var changeReviewGutter: ChangeReviewGutter?
     /// Right/bottom dock state of the terminal (see TerminalDocking.swift).
@@ -89,6 +91,12 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         tabs.onReorder = { [weak self] in self?.scheduleSessionSave() }
         tree.onOpen = { [weak self] url in self?.open(url) }
         tree.onEscape = { [weak self] in self?.focusEditor() }
+        tree.onOpenTerminal = { [weak self] dir in
+            guard let self, let term = self.terminalPanel else { return }
+            self.showTerminalPanel(focus: true)
+            term.newTab()
+            term.runCommand("cd " + Artisan.shellQuote(dir.path) + " && clear")
+        }
         tree.onSearchEverywhere = { [weak self] q in self?.showGoToFile(initialQuery: q) }
         tree.onChange = { [weak self] change in self?.handleFileChange(change) }
 
@@ -149,9 +157,11 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
 
         bottom.onVisibilityChange = { [weak self] visible in self?.applyBottomVisibility(visible) }
         bottom.onEscape = { [weak self] in self?.focusEditor() }
+        bottom.onFocusTool = { [weak self] id in self?.focusTool(id) }
         bottom.onWillShow = { [weak self] id in
             if id == "git" { self?.ensureGitPanel() }
             if id == "problems" { self?.problemsPanel?.reload() }
+            if id == "todo" { self?.todoRescan?() }
         }
         bottom.register(id: "git", title: "Git", view: gitHost)
 
@@ -1122,14 +1132,11 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     func gitFetch() { showCommit(); git?.fetch() }
 
     /// Cmd-9: show the Git tool, or hide the panel if Git is what it shows.
+    func focusGitTool() { git?.reload(); git?.focusCommitMessage() }
+
     func toggleGitPanel() {
         guard root != nil else { return }
-        let hiding = bottom.isVisible && bottom.selectedID == "git"
-        bottom.toggle("git") { [weak self] in
-            self?.git?.reload()
-            self?.git?.focusCommitMessage()
-        }
-        if hiding { focusEditor() }
+        toggleTool("git")
     }
 
     /// Git › Show History for File: opens the Git panel's Log tab filtered by the current file (`git log --follow`).
@@ -1164,6 +1171,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         panel.onStatusChange = { [weak self] in self?.refreshGitStatus(); self?.tree.refresh() }
         git = panel
         panel.onRequestClose = { [weak self] in self?.bottom.hide(); self?.focusEditor() }
+        panel.onFocusEditor = { [weak self] in self?.focusEditor() }
         panel.onSummaryChange = { [weak self] summary in
             self?.setToolPanelBadge(summary.changes > 0 ? "\(summary.changes)" : nil, for: "git")
         }

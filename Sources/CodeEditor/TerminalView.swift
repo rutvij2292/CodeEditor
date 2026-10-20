@@ -47,6 +47,10 @@ final class CETerminalView: LocalProcessTerminalView {
     var onData: (() -> Void)?
     var onLink: ((String) -> Void)?
     var onRestartKey: (() -> Void)?
+    /// Terminal-tab keys (Cmd-T new, Cmd-W close, Shift-Cmd-[ / ] previous / next) while the terminal has focus.
+    var onNewTab: (() -> Void)?
+    var onCloseTab: (() -> Void)?
+    var onCycleTab: ((Int) -> Void)?
     /// BEL received (agents such as Claude Code ring it when they need attention). No sound is played.
     var onBell: (() -> Void)?
     /// Files dropped on the terminal (from the file tree or Finder).
@@ -108,8 +112,14 @@ final class CETerminalView: LocalProcessTerminalView {
             case (_, 123): send(txt: "\u{01}"); return true      // Cmd-Left: line start
             case (_, 124): send(txt: "\u{05}"); return true      // Cmd-Right: line end
             case (_, 51): send(txt: "\u{15}"); return true       // Cmd-Backspace: kill line
+            case ("t", _): if let f = onNewTab { f(); return true }; return false
+            case ("w", _): if let f = onCloseTab { f(); return true }; return false
             default: return false
             }
+        }
+        if f == [.command, .shift], let cycle = onCycleTab {
+            if ch == "[" || ch == "{" { cycle(-1); return true }
+            if ch == "]" || ch == "}" { cycle(1); return true }
         }
         return false
     }

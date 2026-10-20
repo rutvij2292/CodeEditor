@@ -15,6 +15,7 @@ extension ProjectWindow {
         }
         findPanel = find
         registerToolPanel(id: "find", title: "Find", view: find.view) { close in find.onClose = close }
+        find.onEscapeToEditor = { [weak self] in self?.focusEditor() }
         installProblemsPanel(root: root)
         installHttpPanel(root: root)
         installTerminalPanel(root: root)

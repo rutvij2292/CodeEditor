@@ -85,7 +85,7 @@ enum MainMenu {
             item("Find in Files…", #selector(AppDelegate.findInFiles(_:)), "f", [.command, .shift], target: a),
             item("Replace in Files…", #selector(AppDelegate.replaceInFiles(_:)), "r", [.command, .shift], target: a),
             sep,
-            item("Send @File to Terminal", #selector(AppDelegate.sendFileToTerminal(_:)), "k", [.command, .option], target: a),
+            item("Send @File to Terminal", #selector(AppDelegate.sendFileToTerminal(_:)), "f", [.command, .option, .control], target: a),
             item("Send Selection Reference to Terminal", #selector(AppDelegate.sendSelectionReferenceToTerminal(_:)), "k", [.command, .option, .control], target: a),
             item("Send Selection Text to Terminal", #selector(AppDelegate.sendSelectionTextToTerminal(_:)), "k", [.command, .option, .shift], target: a),
             item("Ask Claude About Selection…", #selector(AppDelegate.askClaudeAboutSelection(_:)), "/", [.command, .option], target: a),
@@ -183,13 +183,14 @@ enum MainMenu {
             item("Project Tree", #selector(AppDelegate.focusTree(_:)), "1", target: a),
             item("Toggle Sidebar", #selector(AppDelegate.toggleSidebar(_:)), "\\", target: a),
             item("Focus Editor", #selector(AppDelegate.focusEditor(_:)), "\u{1b}", target: a),
-            item("Commit Panel", #selector(AppDelegate.commitChanges(_:)), "0", target: a),
+            item("Bookmarks Tool Window", #selector(AppDelegate.showBookmarksTool(_:)), "2", target: a),
             item("Find Tool Window", #selector(AppDelegate.showFindTool(_:)), "3", target: a),
-            item("Problems Tool Window", #selector(AppDelegate.showProblemsTool(_:)), "6", target: a),
             item("TODO Tool Window", #selector(AppDelegate.showTodoTool(_:)), "5", target: a),
-            item("Bookmarks Tool Window", #selector(AppDelegate.showBookmarksTool(_:)), f3, [.command], target: a),
+            item("Problems Tool Window", #selector(AppDelegate.showProblemsTool(_:)), "6", target: a),
+            item("HTTP Client Tool Window", #selector(AppDelegate.showHttpTool(_:)), "8", target: a),
             item("Claude Changes Tool Window", #selector(AppDelegate.showClaudeChangesTool(_:)), "", target: a),
-            item("Git Tool Window", #selector(AppDelegate.showGitTool(_:)), "", target: a),
+            item("Last Tool Window", #selector(AppDelegate.jumpToLastTool(_:)), f12, [], target: a),
+            item("Hide All Tool Windows", #selector(AppDelegate.hideAllTools(_:)), f12, [.command, .shift], target: a),
             sep,
             item("Select Opened File", #selector(AppDelegate.selectOpenedFile(_:)), f1, [.option], target: a),
             item("Terminal", #selector(AppDelegate.showTerminal(_:)), f12, [.option], target: a),
@@ -279,6 +280,8 @@ enum MainMenu {
         case UInt32(NSRightArrowFunctionKey): out += "→"
         case 0x7f: out += "⌫"
         case 13: out += "↩"
+        case 0x1B: out += "⎋"
+        case 9: out += "⇥"
         case UInt32(NSF1FunctionKey)...UInt32(NSF12FunctionKey): out += "F\(key.unicodeScalars.first!.value - UInt32(NSF1FunctionKey) + 1)"
         case 0x20: out += "Space"
         case 0x2D, 0x5F: out += "−"        // - and _ (shifted)
