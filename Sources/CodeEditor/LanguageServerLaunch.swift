@@ -131,8 +131,14 @@ enum LanguageServerLaunch {
             return LSPLaunch(executable: native, args: ["--lsp", "--stdio"], pullDiagnostics: true, variant: "native")
         }
         guard let exe = manager.resolveExecutable(["typescript-language-server"]) else { return nil }
-        var opts: [String: Any] = ["preferences": typescriptPreferences, "hostInfo": "CodeEditor"]
-        if let lib = tsserverLib(root: root) { opts["tsserver"] = ["path": lib + "/tsserver.js"] }
+        // RAM: by default typescript-language-server runs a second "syntax" tsserver (+~110 MB) and a typings-installer
+        // process (+~50 MB, runs npm). Measured on a Vue project: 630 MB -> 330 MB without them. maxTsServerMemory is a
+        // runaway safety net only (the live program graph is ~270 MB; lower caps barely help and risk out-of-memory restarts).
+        var opts: [String: Any] = ["preferences": typescriptPreferences, "hostInfo": "CodeEditor",
+                                   "disableAutomaticTypingAcquisition": true]
+        var tsserverOpts: [String: Any] = ["useSyntaxServer": "never", "maxTsServerMemory": 1024]
+        if let lib = tsserverLib(root: root) { tsserverOpts["path"] = lib + "/tsserver.js" }
+        opts["tsserver"] = tsserverOpts
         if forceNode, let loc = vuePluginLocation(root: root) {
             opts["plugins"] = [["name": "@vue/typescript-plugin", "location": loc, "languages": ["vue"], "configNamespace": "typescript"]]
         }
