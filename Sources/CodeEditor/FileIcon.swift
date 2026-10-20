@@ -43,7 +43,7 @@ extension FileIcon {
         else { key = documentKey(name) }
         let cacheKey = key + (Theme.isDark ? ".d" : ".l")
         if let img = cache[cacheKey] { return img }
-        let img = key.hasPrefix("dir") ? folder(open: expanded) : document(tint: tint(forKey: key))
+        let img = key.hasPrefix("dir") ? folder(open: expanded) : document(tint: tint(forKey: key), label: label(forKey: key))
         cache[cacheKey] = img
         return img
     }
@@ -56,6 +56,7 @@ extension FileIcon {
         if name == "artisan" { return "php" }
         if name.hasPrefix(".env") { return "env" }
         if ext == "php", name.hasSuffix(".blade.php") { return "blade" }
+        if ext == "php", name.first?.isUppercase == true { return "php.class" }
         if ext == "mjs" || ext == "cjs" || ext == "jsx" { return "js" }
         if ext == "tsx" || ext == "mts" { return "ts" }
         if ext == "markdown" { return "md" }
@@ -70,7 +71,7 @@ extension FileIcon {
         switch key {
         case "vue": return 0x23885A
         case "js": return 0x9A7300
-        case "php": return 0x5B59C2
+        case "php", "php.class": return 0x5B59C2
         case "blade": return 0xE0533D
         case "env": return 0xB4530F
         case "ts": return 0x3178C6
@@ -81,6 +82,24 @@ extension FileIcon {
         case "yml": return 0xC24A4A
         case "img": return 0xC2418A
         default: return 0x6B7280     // .editorconfig, .gitignore, plain text and anything unknown
+        }
+    }
+
+    /// Short type prefix drawn on the badge, so PHP / Blade / JS / etc. stay readable at a glance.
+    private static func label(forKey key: String) -> String? {
+        switch key {
+        case "php", "php.class": return "php"
+        case "blade": return "blade"
+        case "js": return "JS"
+        case "ts": return "TS"
+        case "vue": return "V"
+        case "css": return "#"
+        case "html", "htm", "xml": return "<>"
+        case "md": return "M↓"
+        case "json": return "{}"
+        case "yml": return "Y"
+        case "env": return "env"
+        default: return nil
         }
     }
 
@@ -134,8 +153,19 @@ extension FileIcon {
         }
     }
 
-    private static func document(tint: NSColor) -> NSImage {
+    private static func document(tint: NSColor, label: String?) -> NSImage {
         let color = Theme.isDark ? tint.blended(withFraction: 0.25, of: .white) ?? tint : tint
+        if let label {
+            return canvas {
+                let box = NSBezierPath(roundedRect: NSRect(x: 0.5, y: 3, width: 15, height: 10), xRadius: 2.5, yRadius: 2.5)
+                color.withAlphaComponent(0.16).setFill(); box.fill()
+                color.setStroke(); box.lineWidth = 1; box.stroke()
+                let size: CGFloat = label.count >= 5 ? 5.2 : label.count == 3 ? 6.2 : label.count == 2 ? 6.8 : 8
+                let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: size, weight: .heavy), .foregroundColor: color]
+                let t = NSAttributedString(string: label, attributes: attrs), ts = t.size()
+                t.draw(at: NSPoint(x: 8 - ts.width / 2, y: 8 - ts.height / 2))
+            }
+        }
         return canvas {
             let p = NSBezierPath()
             p.move(to: NSPoint(x: 4.5, y: 2)); p.line(to: NSPoint(x: 9.3, y: 2)); p.line(to: NSPoint(x: 12, y: 4.7))
