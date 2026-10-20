@@ -86,6 +86,7 @@ enum SelfTest {
                     fastTierChecks()
                     SelfTestSpeedSearch.run(w: w)
                     SelfTestToolFocus.run(w: w)
+                    SelfTestCodeActions.run()
                     try? fm.removeItem(at: dir)
                     try? fm.removeItem(at: LocalHistory.root)
                     SelfTestBranches.run()

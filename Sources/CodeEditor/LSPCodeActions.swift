@@ -105,8 +105,25 @@ extension LSPSession {
                 if case .success(let v) = result { all += LSPCodeAction.parse(v, instance: inst) }
                 group.leave()
             }
+            // Servers only list file-wide source actions (organize imports, fix all, ...) when asked for them by kind.
+            let kinds = ((inst.capabilities["codeActionProvider"] as? [String: Any])?["codeActionKinds"] as? [String]) ?? ["source"]
+            if kinds.contains(where: { $0.hasPrefix("source") }) {
+                var sourceParams = params
+                sourceParams["context"] = ["diagnostics": [], "only": ["source"], "triggerKind": 1]
+                group.enter()
+                client.request("textDocument/codeAction", sourceParams, timeout: 15) { result in
+                    if case .success(let v) = result {
+                        let have = Set(all.map(\.title))
+                        all += LSPCodeAction.parse(v, instance: inst).filter { !have.contains($0.title) }
+                    }
+                    group.leave()
+                }
+            }
         }
-        group.notify(queue: .main) { completion(LSPCodeAction.sorted(all)) }
+        group.notify(queue: .main) {
+            var seen = Set<String>()
+            completion(LSPCodeAction.sorted(all).filter { seen.insert($0.title + "|" + ($0.kind ?? "")).inserted })
+        }
     }
 
     /// Applies the action: its edit (resolving it first when the server defers it), then its command.
