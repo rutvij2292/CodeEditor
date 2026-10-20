@@ -99,7 +99,7 @@ extension ProjectWindow {
     func installTodoAndBookmarks(root: URL) {
         guard !hasToolPanel("todo") else { return }
         // TODO panel
-        let todo = LineListPanel(emptyMessage: "Press ⌘5 or Refresh to scan for TODO / FIXME comments", showsRefresh: true)
+        let todo = LineListPanel(emptyMessage: "Press ⌘8 or Refresh to scan for TODO / FIXME comments", showsRefresh: true)
         let scanner = TodoScanner(root: root, files: { [weak self] in self?.projectFiles ?? [] })
         todo.setTags(["TODO", "FIXME", "HACK", "XXX"])
         let open: (LineListPanel.Row) -> Void = { [weak self] r in

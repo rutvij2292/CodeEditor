@@ -48,7 +48,7 @@ enum SelfTestToolFocus {
         w.toggleHideAllTools()
         check("tool focus: hide-all again restores", w.hiddenTools == nil)
 
-        check("tool focus: tab tooltips carry the shortcut", BottomPanel.shortcutHints["find"] == "⌘3" && BottomPanel.shortcutHints["git"] == "⌘9")
+        check("tool focus: tab tooltips carry the shortcut", BottomPanel.shortcutHints["find"] == "⌘4" && BottomPanel.shortcutHints["git"] == "⌘9")
         w.bottom.hide()
         w.focusEditor()
     }

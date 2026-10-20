@@ -119,7 +119,7 @@ final class TabHost: NSView {
         Search Everywhere   ⇧⇧
         Find Action         ⌘⇧A
         Open Project        ⌃⌘O
-        Tree  ⌘1   Find  ⌘3   Git  ⌘9
+        Tree  ⌘1   Editor  ⌘2   Claude  ⌘3   Git  ⌘9
         Terminal  ⌃`   Back to editor  ⎋
         """)
     private(set) var entries: [Entry] = []

@@ -13,7 +13,7 @@ final class TestController: NSObject {
     private let store = TestResultsStore.shared
     /// Reveals the Tests tab (set by the window wiring).
     var showPanel: (() -> Void)?
-    /// Menu / ⌘4: show-and-focus, or hide when focus is already inside.
+    /// Menu / ⌘6: show-and-focus, or hide when focus is already inside.
     var togglePanel: (() -> Void)?
     /// Called on the main thread when a run ends (tests).
     var onFinish: ((TestRunner.Outcome) -> Void)?
@@ -112,7 +112,7 @@ final class TestActions: NSObject {
                   item("Re-run Failed Tests", #selector(rerunFailed(_:))),
                   item("Stop Tests", #selector(stop(_:))),
                   NSMenuItem.separator(),
-                  item("Tests Tool Window", #selector(showTests(_:)), "4", [.command])] { menu.addItem(i) }
+                  item("Tests Tool Window", #selector(showTests(_:)), "6", [.command])] { menu.addItem(i) }
         let top = NSMenuItem(title: "Run", action: nil, keyEquivalent: "")
         top.submenu = menu
         return top

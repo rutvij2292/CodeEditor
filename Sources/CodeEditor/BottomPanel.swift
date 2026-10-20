@@ -102,8 +102,8 @@ final class BottomPanel: NSObject {
     var onFocusTool: ((String) -> Void)?
 
     /// Shortcut shown in tab tooltips.
-    static let shortcutHints: [String: String] = ["bookmarks": "⌘2", "find": "⌘3", "tests": "⌘4", "todo": "⌘5", "problems": "⌘6", "structure": "⌘7",
-                                                  "http": "⌘8", "git": "⌘9", "terminal": "⌥F12"]
+    static let shortcutHints: [String: String] = ["find": "⌘4", "problems": "⌘5", "tests": "⌘6", "structure": "⌘7", "todo": "⌘8",
+                                                  "git": "⌘9", "bookmarks": "⌥⌘2", "http": "⌥⌘8", "terminal": "⌥F12"]
 
     private let defaults: UserDefaults
     private var persistenceKey: String?

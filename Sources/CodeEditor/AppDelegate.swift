@@ -257,6 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func focusTree(_ sender: Any?) { active?.toggleProjectTree() }
     @objc func toggleSidebar(_ sender: Any?) { active?.toggleSidebar() }
     @objc func focusEditor(_ sender: Any?) { active?.focusEditor() }
+    @objc func showClaudeTool(_ sender: Any?) { active?.toggleClaude() }
     @objc func splitEditorRight(_ sender: Any?) { active?.splitEditorRight() }
     @objc func unsplitEditor(_ sender: Any?) { active?.unsplitEditor() }
     @objc func showTodoTool(_ sender: Any?) { active?.toggleTool("todo") }
