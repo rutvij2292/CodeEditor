@@ -89,7 +89,7 @@ extension FileIcon {
     private static func label(forKey key: String) -> String? {
         switch key {
         case "php", "php.class": return "php"
-        case "blade": return "blade"
+        case "blade": return "b"
         case "js": return "JS"
         case "ts": return "TS"
         case "vue": return "V"
