@@ -9,6 +9,7 @@ extension ProjectWindow {
     func toggleTool(_ id: String) {
         guard root != nil else { return }
         if id == "terminal" { toggleTerminal(); return }
+        if id == "structure" { installStructurePanel() }
         guard bottom.has(id) || id == "git" else { return }
         if bottom.isVisible, bottom.selectedID == id, isBottomFocused {
             bottom.hide()

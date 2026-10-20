@@ -196,7 +196,10 @@ final class SpeedSearch: NSObject, NSTextFieldDelegate {
 /// Plain table whose typing starts a speed search (TODO, Bookmarks, Tests, Claude Changes).
 final class SpeedTableView: NSTableView {
     var speedSearch: SpeedSearch?
+    /// Return / Enter on the selected row (lists that have an "open" action).
+    var onReturn: (() -> Void)?
     override func keyDown(with event: NSEvent) {
+        if (event.keyCode == 36 || event.keyCode == 76), let onReturn { onReturn(); return }
         if speedSearch?.handleKeyDown(event) == true { return }
         super.keyDown(with: event)
     }

@@ -26,6 +26,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     var todoRescan: (() -> Void)?
     /// What "Hide All Tool Windows" hid, so the same key brings it back.
     var hiddenTools: (sidebar: Bool, bottom: Bool)?
+    var structurePanel: StructurePanelController?
+    var structureObservers: [NSObjectProtocol] = []
     var changeReviewPanel: ChangeReviewPanel?
     var changeReviewGutter: ChangeReviewGutter?
     /// Right/bottom dock state of the terminal (see TerminalDocking.swift).
@@ -162,6 +164,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             if id == "git" { self?.ensureGitPanel() }
             if id == "problems" { self?.problemsPanel?.reload() }
             if id == "todo" { self?.todoRescan?() }
+            if id == "structure" { DispatchQueue.main.async { self?.refreshStructure() } }
         }
         bottom.register(id: "git", title: "Git", view: gitHost)
 
@@ -629,6 +632,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         lastSelectedID = id
         // The Problems tree is rebuilt only while it is on screen (it re-expands every row: ~5 ms per tab switch otherwise).
         if bottom.isVisible, bottom.selectedID == "problems" { problemsPanel?.reload() }
+        refreshStructure()
         mru.removeAll { $0 == id }
         mru.insert(id, at: 0)
         if !navigating {

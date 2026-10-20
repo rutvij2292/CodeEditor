@@ -188,6 +188,7 @@ enum MainMenu {
             item("Find Tool Window", #selector(AppDelegate.showFindTool(_:)), "3", target: a),
             item("TODO Tool Window", #selector(AppDelegate.showTodoTool(_:)), "5", target: a),
             item("Problems Tool Window", #selector(AppDelegate.showProblemsTool(_:)), "6", target: a),
+            item("Structure Tool Window", #selector(AppDelegate.showStructureTool(_:)), "7", target: a),
             item("HTTP Client Tool Window", #selector(AppDelegate.showHttpTool(_:)), "8", target: a),
             item("Claude Changes Tool Window", #selector(AppDelegate.showClaudeChangesTool(_:)), "", target: a),
             item("Last Tool Window", #selector(AppDelegate.jumpToLastTool(_:)), f12, [], target: a),

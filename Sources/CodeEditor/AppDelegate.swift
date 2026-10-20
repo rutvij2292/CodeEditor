@@ -277,6 +277,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func showFindTool(_ sender: Any?) { active?.toggleTool("find") }
     @objc func showProblemsTool(_ sender: Any?) { active?.toggleTool("problems") }
     @objc func showGitTool(_ sender: Any?) { active?.toggleTool("git") }
+    @objc func showStructureTool(_ sender: Any?) { active?.toggleTool("structure") }
     @objc func showHttpTool(_ sender: Any?) { active?.toggleTool("http") }
     @objc func showClaudeChangesTool(_ sender: Any?) { active?.toggleTool("claude-changes") }
     @objc func jumpToLastTool(_ sender: Any?) { active?.jumpToLastTool() }
