@@ -54,6 +54,7 @@ enum MainMenu {
             sep,
             item("Save", #selector(AppDelegate.saveFile(_:)), "s", target: a),
             item("Save All", #selector(AppDelegate.saveAll(_:)), "s", [.command, .option], target: a),
+            item("Reload Project from Disk", #selector(AppDelegate.reloadProjectFromDisk(_:)), "y", [.command, .option], target: a),
             item("Auto-Save on Focus Loss", #selector(AppDelegate.toggleAutoSaveFocus(_:)), target: a),
             item("Auto-Save on Tab Switch", #selector(AppDelegate.toggleAutoSaveTabSwitch(_:)), target: a),
             item("Local History…", #selector(AppDelegate.showLocalHistory(_:)), target: a),

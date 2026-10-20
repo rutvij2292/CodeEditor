@@ -17,6 +17,10 @@ final class ChangeCoalescer {
     private var pending = Set<String>()
     private var work: DispatchWorkItem?
     private(set) var deliveries = 0
+    /// A pure trailing debounce starves while something keeps writing under the project (queue worker, agent, cache): the
+    /// tree and index would never refresh. A batch is therefore delivered at most `maxWait` after its first event.
+    var maxWait: TimeInterval = 3
+    private var firstPending: Date?
 
     init(interval: TimeInterval = 0.75, handler: @escaping (Set<String>) -> Void) {
         self.interval = interval
@@ -27,21 +31,30 @@ final class ChangeCoalescer {
         guard !paths.isEmpty else { return }
         pending.formUnion(paths)
         work?.cancel()
+        let first = firstPending ?? Date()
+        firstPending = first
+        let delay = Self.delay(interval: interval, maxWait: maxWait, waited: -first.timeIntervalSinceNow)
         let item = DispatchWorkItem { [weak self] in self?.flush() }
         work = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    /// Trailing-debounce delay, shortened so the batch is never held longer than `maxWait` in total.
+    static func delay(interval: TimeInterval, maxWait: TimeInterval, waited: TimeInterval) -> TimeInterval {
+        max(0, min(interval, maxWait - waited))
     }
 
     private func flush() {
         let batch = pending
         pending = []
         work = nil
+        firstPending = nil
         guard !batch.isEmpty else { return }
         deliveries += 1
         handler(batch)
     }
 
-    func cancel() { work?.cancel(); work = nil; pending = [] }
+    func cancel() { work?.cancel(); work = nil; pending = []; firstPending = nil }
 }
 
 /// Editor-area message for a file that cannot be opened as plain text, with buttons to open it another way.

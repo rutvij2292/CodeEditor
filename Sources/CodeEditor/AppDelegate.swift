@@ -341,6 +341,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         if hasSelection { Formatter.formatSelection(tab, completion: finish) } else { Formatter.format(tab, completion: finish) }
     }
 
+    /// Re-reads the file tree, Go to File / symbol indexes, git status and open buffers (for files created outside the editor).
+    @objc func reloadProjectFromDisk(_ sender: Any?) { active?.reloadFromDisk() }
+
     @objc func toggleIncludeVendor(_ sender: Any?) {
         ProjectIndex.includeVendor.toggle()
         windows.forEach { $0.reindex() }

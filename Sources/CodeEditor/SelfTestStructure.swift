@@ -49,5 +49,11 @@ enum SelfTestStructure {
         try? FileManager.default.removeItem(at: f)
         w.reopenClosedTab()
         check("reopen: a file deleted meanwhile is skipped", w.editors[id] == nil)
+
+        // A steady stream of events must not starve the debounce (tree / index refresh).
+        check("coalescer: a held batch is flushed no later than maxWait",
+              ChangeCoalescer.delay(interval: 0.75, maxWait: 3, waited: 0) == 0.75
+              && ChangeCoalescer.delay(interval: 0.75, maxWait: 3, waited: 2.5) == 0.5
+              && ChangeCoalescer.delay(interval: 0.75, maxWait: 3, waited: 3.4) == 0)
     }
 }

@@ -264,6 +264,18 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         if content || gitMeta { refreshGitStatus() }
     }
 
+    /// Manual "synchronize": same work as a file-system event batch, over the whole project.
+    func reloadFromDisk() {
+        guard let root else { return }
+        VendorIndex.invalidate(root: root)
+        LaravelNavigator.invalidate(root: root)
+        FastTier.invalidate(root: root)
+        tree.refresh()
+        index?.refresh(force: true) { [weak self] in self?.symbols?.rebuild() }
+        editors.values.forEach { $0.reloadIfChangedOnDisk() }
+        refreshGitStatus()
+    }
+
     /// Rescans Go to File and symbols (e.g. after toggling "Include vendor").
     func reindex() {
         index?.refresh(force: true) { [weak self] in self?.symbols?.rebuild() }
