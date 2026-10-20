@@ -521,6 +521,12 @@ final class LSPServerInstance {
             "definition": ["linkSupport": true],
             "references": [:] as [String: Any],
             "rename": ["prepareSupport": true],
+            "codeAction": [
+                "codeActionLiteralSupport": ["codeActionKind": ["valueSet": ["quickfix", "refactor", "refactor.extract", "refactor.inline",
+                                                                            "refactor.rewrite", "source", "source.organizeImports", "source.fixAll"]]],
+                "isPreferredSupport": true, "disabledSupport": true, "dataSupport": true,
+                "resolveSupport": ["properties": ["edit"]],
+            ],
             "formatting": [:] as [String: Any],
             "rangeFormatting": [:] as [String: Any],
             "publishDiagnostics": ["relatedInformation": false, "versionSupport": true, "tagSupport": ["valueSet": [1, 2]]],

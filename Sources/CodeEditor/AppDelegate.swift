@@ -287,6 +287,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func previousProblem(_ sender: Any?) { active.map { Self.previousProblemHandler?($0) } }
     @objc func findUsages(_ sender: Any?) { active.map { Self.findUsagesHandler?($0) } }
     @objc func renameSymbol(_ sender: Any?) { active.map { Self.renameHandler?($0) } }
+    @objc func showQuickFixes(_ sender: Any?) {
+        guard let w = active, let tab = w.current else { return }
+        if !LanguageServers.showCodeActions(in: tab) { w.statusBar.flash("No language server for this file") }
+    }
     @objc func formatDocument(_ sender: Any?) { active.map { Self.formatHandler?($0) } }
     @objc func toggleReopenWindows(_ sender: Any?) { SessionStore.reopenOnLaunch.toggle() }
     @objc func focusBreadcrumbs(_ sender: Any?) { active?.current?.focusBreadcrumbs() }
