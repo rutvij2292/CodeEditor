@@ -102,6 +102,8 @@ final class CETerminalView: LocalProcessTerminalView {
         guard event.type == .keyDown, window?.firstResponder === self else { return false }
         let f = event.modifierFlags.intersection([.command, .control, .option, .shift])
         if dead && !f.contains(.command) { onRestartKey?(); return true }
+        // Ctrl-Tab / Shift-Ctrl-Tab: next / previous terminal tab (same as Shift-Cmd-] / [).
+        if event.keyCode == 48, f == .control || f == [.control, .shift], let cycle = onCycleTab { cycle(f.contains(.shift) ? -1 : 1); return true }
         guard f.contains(.command), !f.contains(.control), !f.contains(.option) else { return false }
         let ch = event.charactersIgnoringModifiers?.lowercased() ?? ""
         if f == .command {

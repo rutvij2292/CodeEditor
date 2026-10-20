@@ -375,6 +375,12 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         }
     }
 
+    /// Ctrl-Tab / Shift-Cmd-] style cycling, wrapping at both ends.
+    func cycleTab(_ delta: Int) {
+        guard tabs.count > 1 else { return }
+        select((active + delta + tabs.count) % tabs.count)
+    }
+
     func select(_ index: Int) {
         guard tabs.indices.contains(index) else { return }
         active = index
@@ -441,10 +447,7 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         tv.onRestartKey = { [weak self, weak tab] in if let self, let tab { self.restart(tab) } }
         tv.onNewTab = { [weak self] in self?.newTab() }
         tv.onCloseTab = { [weak self] in self?.closeTab() }
-        tv.onCycleTab = { [weak self] d in
-            guard let self, self.tabs.count > 1 else { return }
-            self.select((self.active + d + self.tabs.count) % self.tabs.count)
-        }
+        tv.onCycleTab = { [weak self] d in self?.cycleTab(d) }
         tv.onLink = { [weak self] in self?.handleLink($0) }
         tv.onBell = { [weak self, weak tab] in if let self, let tab { self.bellRang(tab) } }
         tv.onFileDrop = { [weak self] in self?.onFilesDropped?($0) }
