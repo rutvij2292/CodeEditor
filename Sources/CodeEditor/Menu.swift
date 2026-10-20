@@ -59,6 +59,7 @@ enum MainMenu {
             item("Local History…", #selector(AppDelegate.showLocalHistory(_:)), target: a),
             sep,
             item("Close Tab", #selector(AppDelegate.closeTab(_:)), "w", target: a),
+            item("Reopen Closed Tab", #selector(AppDelegate.reopenClosedTab(_:)), "t", [.command, .shift], target: a),
             item("Close Window", #selector(NSWindow.performClose(_:)), "w", [.command, .shift]),
         ]))
 

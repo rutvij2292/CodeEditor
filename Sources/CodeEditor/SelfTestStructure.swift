@@ -30,5 +30,24 @@ enum SelfTestStructure {
         w.toggleTool("structure")
         w.bottom.hide()
         w.focusEditor()
+
+        // Reopen Closed Tab
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ce-reopen-\(getpid())")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let f = dir.appendingPathComponent("reopen.txt")
+        try? "one\ntwo\nthree\n".write(to: f, atomically: true, encoding: .utf8)
+        w.open(f, line: 3)
+        let id = f.standardizedFileURL.path
+        check("reopen: file is open", w.editors[id] != nil)
+        _ = w.close(id)
+        check("reopen: closing removes the tab", w.editors[id] == nil)
+        w.reopenClosedTab()
+        check("reopen: Cmd-Shift-T brings the closed file back", w.editors[id] != nil)
+        check("reopen: at the line it was closed on", w.editors[id]?.textView.lineAndColumn.line == 3)
+        _ = w.close(id)
+        try? FileManager.default.removeItem(at: f)
+        w.reopenClosedTab()
+        check("reopen: a file deleted meanwhile is skipped", w.editors[id] == nil)
     }
 }

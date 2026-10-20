@@ -52,7 +52,9 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     var bottomItem: NSSplitViewItem!
     var restoring = false
     private var sessionWork: DispatchWorkItem?
-    private var diffWindows: [NSWindow] = []
+    var diffWindows: [NSWindow] = []
+    /// Files closed by the user, newest last (Reopen Closed Tab).
+    var closedTabs: [(url: URL, line: Int)] = []
     private var lastSelectedID: String?
     /// The most recent clean-buffer reload caused by a change on disk (agent edit, git checkout); for tests and status UI.
     private(set) var lastExternalChange: ExternalChange?
@@ -444,9 +446,9 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         } else {
             items = revisions.map { rev in
                 let lines = LocalHistory.data(of: rev).map { $0.reduce(0) { $1 == 10 ? $0 + 1 : $0 } } ?? 0
-                return PickerItem(title: LocalHistory.describe(rev), detail: "\(lines) lines", symbol: "clock.arrow.circlepath",
+                return PickerItem(title: LocalHistory.describe(rev), detail: "\(lines) lines · ↩ compare & restore", symbol: "clock.arrow.circlepath",
                                   key: LocalHistory.describe(rev)) { [weak self, weak editor] in
-                    if let editor { self?.restoreRevision(rev, into: editor) }
+                    if let editor { self?.showRevisionDiff(rev, in: editor) }
                 }
             }
         }
@@ -677,6 +679,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     func close(_ id: String) -> Bool {
         if placeholders[id] != nil { placeholders[id] = nil; forget(id); return true }
         guard let editor = editors[id], confirmDiscard(editor) else { return false }
+        closedTabs.append((editor.url, editor.textView.lineAndColumn.line))
+        if closedTabs.count > 20 { closedTabs.removeFirst() }
         closeNow(id)
         return true
     }

@@ -303,6 +303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func toggleFormatOnSave(_ sender: Any?) { Formatter.formatOnSave.toggle() }
     @objc func toggleAutoSaveFocus(_ sender: Any?) { AutoSave.focusLossEnabled.toggle() }
     @objc func toggleAutoSaveTabSwitch(_ sender: Any?) { AutoSave.tabSwitchEnabled.toggle() }
+    @objc func reopenClosedTab(_ sender: Any?) { active?.reopenClosedTab() }
     @objc func showLocalHistory(_ sender: Any?) { active?.showLocalHistory() }
     @objc func showSettings(_ sender: Any?) { SettingsWindowController.shared.show() }
     @objc func sendFileToTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.sendFileReference?($0) } }
