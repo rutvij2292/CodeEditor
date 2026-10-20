@@ -104,7 +104,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         tree.onSearchEverywhere = { [weak self] q in self?.showGoToFile(initialQuery: q) }
         tree.onChange = { [weak self] change in self?.handleFileChange(change) }
 
-        let sidebarVC = NSViewController(); sidebarVC.view = tree.scrollView
+        let sidebarVC = NSViewController(); sidebarVC.view = tree.panel
         let contentVC = NSViewController()
         let host = NSView()
         tabs.translatesAutoresizingMaskIntoConstraints = false

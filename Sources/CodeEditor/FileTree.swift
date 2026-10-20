@@ -77,6 +77,36 @@ final class KeyOutlineView: NSOutlineView {
     var onPaste: (() -> Void)?
     /// Typing a letter starts a speed search over the loaded rows (PhpStorm), instead of AppKit's invisible prefix type-select.
     var speedSearch: SpeedSearch?
+    private var hoveredRow = -1
+
+    /// The tree draws its own chevrons; clicking a folder row toggles it (FileTreeController.clicked).
+    override func frameOfOutlineCell(atRow row: Int) -> NSRect { .zero }
+
+    /// With the system triangle gone AppKit still reserves its column; place cells at exactly level × indent instead.
+    override func frameOfCell(atColumn column: Int, row: Int) -> NSRect {
+        var f = super.frameOfCell(atColumn: column, row: row)
+        guard column == 0, row >= 0 else { return f }
+        let x = TreeStyle.indent * CGFloat(max(0, level(forRow: row)))
+        f.size.width += f.origin.x - x
+        f.origin.x = x
+        return f
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+
+    private func setHover(_ row: Int) {
+        guard row != hoveredRow else { return }
+        if hoveredRow >= 0, let v = rowView(atRow: hoveredRow, makeIfNecessary: false) as? TreeRowView { v.isHovered = false }
+        hoveredRow = row
+        if row >= 0, let v = rowView(atRow: row, makeIfNecessary: false) as? TreeRowView { v.isHovered = true }
+    }
+    override func mouseMoved(with event: NSEvent) { setHover(row(at: convert(event.locationInWindow, from: nil))) }
+    override func mouseExited(with event: NSEvent) { setHover(-1) }
+    override func reloadData() { hoveredRow = -1; super.reloadData() }
 
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
@@ -131,6 +161,12 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     }
 
     var rootURL: URL? { root?.url }
+    /// Sidebar container: Explorer header + this tree.
+    private(set) lazy var panel = FileTreePanel(tree: self)
+
+    @objc func panelNewFile() { newFile(in: targetDirectory(for: selectedURL)) }
+    @objc func panelNewFolder() { newFolder(in: targetDirectory(for: selectedURL)) }
+    @objc func panelCollapseAll() { collapseAll() }
 
     override init() {
         super.init()
@@ -138,7 +174,14 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         outline.addTableColumn(column)
         outline.outlineTableColumn = column
         outline.headerView = nil
-        outline.rowSizeStyle = .small
+        outline.rowSizeStyle = .custom
+        outline.rowHeight = TreeStyle.rowHeight
+        outline.intercellSpacing = .zero
+        outline.indentationPerLevel = TreeStyle.indent
+        outline.style = .plain
+        outline.backgroundColor = .clear
+        outline.selectionHighlightStyle = .regular
+        column.resizingMask = .autoresizingMask
         outline.dataSource = self
         outline.delegate = self
         outline.target = self
@@ -588,47 +631,48 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     }
     func outlineView(_ o: NSOutlineView, isItemExpandable item: Any) -> Bool { (item as! FileNode).isDirectory }
 
+    func outlineView(_ o: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
+        let id = NSUserInterfaceItemIdentifier("treeRow")
+        let row = o.makeView(withIdentifier: id, owner: nil) as? TreeRowView ?? { let r = TreeRowView(); r.identifier = id; return r }()
+        row.level = max(0, o.level(forItem: item))
+        row.isHovered = false
+        return row
+    }
+
+    func outlineViewItemDidExpand(_ notification: Notification) { setChevron(notification, expanded: true) }
+    func outlineViewItemDidCollapse(_ notification: Notification) { setChevron(notification, expanded: false) }
+
+    private func setChevron(_ notification: Notification, expanded: Bool) {
+        guard let node = notification.userInfo?["NSObject"] as? FileNode else { return }
+        let row = outline.row(forItem: node)
+        guard row >= 0, let cell = outline.view(atColumn: 0, row: row, makeIfNecessary: false) as? TreeCellView else { return }
+        cell.chevron.expanded = expanded
+        cell.imageView?.image = FileIcon.treeImage(name: node.url.lastPathComponent, isDirectory: true, expanded: expanded)
+    }
+
     func outlineView(_ o: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         let node = item as! FileNode
         let id = NSUserInterfaceItemIdentifier("cell")
-        let cell = o.makeView(withIdentifier: id, owner: nil) as? NSTableCellView ?? {
-            let c = NSTableCellView()
-            c.identifier = id
-            let img = NSImageView(), text = NSTextField(labelWithString: "")
-            img.translatesAutoresizingMaskIntoConstraints = false
-            text.translatesAutoresizingMaskIntoConstraints = false
-            text.lineBreakMode = .byTruncatingMiddle
-            c.addSubview(img); c.addSubview(text)
-            c.imageView = img; c.textField = text
-            NSLayoutConstraint.activate([
-                img.leadingAnchor.constraint(equalTo: c.leadingAnchor, constant: 2),
-                img.centerYAnchor.constraint(equalTo: c.centerYAnchor),
-                img.widthAnchor.constraint(equalToConstant: 16), img.heightAnchor.constraint(equalToConstant: 16),
-                text.leadingAnchor.constraint(equalTo: img.trailingAnchor, constant: 4),
-                text.trailingAnchor.constraint(equalTo: c.trailingAnchor),
-                text.centerYAnchor.constraint(equalTo: c.centerYAnchor),
-            ])
-            return c
-        }()
-        let ext = node.url.pathExtension
+        let cell = o.makeView(withIdentifier: id, owner: nil) as? TreeCellView ?? { let c = TreeCellView(); c.identifier = id; return c }()
         let name = node.url.lastPathComponent
-        let color = statusKinds[node.url.path]?.color ?? NSColor.labelColor
+        let color = statusKinds[node.url.path]?.color ?? TreeStyle.foreground
         let hits = speed.matchedIndices(in: name)
-        if hits.isEmpty {
-            cell.textField?.stringValue = name
-        } else {
-            let font = cell.textField?.font ?? .systemFont(ofSize: 12)
-            let s = NSMutableAttributedString(string: name, attributes: [.font: font, .foregroundColor: color])
-            let bold = NSFont.systemFont(ofSize: font.pointSize, weight: .bold)
+        var attributed: NSAttributedString?
+        if !hits.isEmpty {
+            let s = NSMutableAttributedString(string: name, attributes: [.font: TreeStyle.font, .foregroundColor: color])
+            let bold = NSFont.systemFont(ofSize: TreeStyle.font.pointSize, weight: .bold)
             let len = name.utf16.count
             for i in hits where i < len {
                 s.addAttributes([.font: bold, .foregroundColor: NSColor.controlAccentColor], range: NSRange(location: i, length: 1))
             }
-            cell.textField?.attributedStringValue = s
+            attributed = s
         }
         cell.textField?.isEditable = false
-        cell.textField?.textColor = color
-        cell.imageView?.image = FileIcon.treeImage(name: node.url.lastPathComponent, isDirectory: node.isDirectory)
+        let expanded = node.isDirectory && o.isItemExpanded(node)
+        cell.configure(name: name, color: color, italic: node.isDirectory && name.hasPrefix("."), attributed: attributed)
+        cell.chevron.visible = node.isDirectory
+        cell.chevron.expanded = expanded
+        cell.imageView?.image = FileIcon.treeImage(name: name, isDirectory: node.isDirectory, expanded: expanded)
         cell.imageView?.contentTintColor = nil
         return cell
     }

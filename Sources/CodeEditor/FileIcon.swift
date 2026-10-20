@@ -31,88 +31,122 @@ enum FileIcon {
     }
 }
 
-// MARK: PhpStorm-style drawn icons (tree rows)
+// MARK: Drawn icons (tree rows): outline folders and tinted document shapes, 16 pt, paths from the Explorer design
 
 extension FileIcon {
     private static var cache: [String: NSImage] = [:]
 
-    /// Icon for a tree row: outline folders, a circled C for PHP classes, letter badges for common file types.
-    static func treeImage(name: String, isDirectory: Bool) -> NSImage {
-        let ext = (name as NSString).pathExtension.lowercased()
+    /// Icon for a tree row: closed / open folder, or a document tinted by file type.
+    static func treeImage(name: String, isDirectory: Bool, expanded: Bool = false) -> NSImage {
         let key: String
-        if isDirectory { key = name.hasPrefix(".") ? "dir.dot" : "dir" }
-        else if ext == "php", name.hasSuffix(".blade.php") { key = "blade" }
-        else if name == "artisan" { key = "php" }
-        else if ext == "php" { key = (name.first?.isUppercase == true) ? "php.class" : "php" }
-        else if name.hasPrefix(".git") && name.hasSuffix("ignore") || name == ".ignore" { key = "ignore" }
-        else if name.hasPrefix(".env") || name.hasPrefix(".") && ext.isEmpty { key = "lines" }
-        else { key = ext.isEmpty ? "lines" : ext }
-        if let img = cache[key] { return img }
-        let img = draw(key: key, fallbackExt: ext)
-        cache[key] = img
+        if isDirectory { key = expanded ? "dir.open" : "dir" }
+        else { key = documentKey(name) }
+        let cacheKey = key + (Theme.isDark ? ".d" : ".l")
+        if let img = cache[cacheKey] { return img }
+        let img = key.hasPrefix("dir") ? folder(open: expanded) : document(tint: tint(forKey: key))
+        cache[cacheKey] = img
         return img
     }
 
-    private static func draw(key: String, fallbackExt ext: String) -> NSImage {
-        let size = NSSize(width: 16, height: 16)
+    /// Dropped on a theme change so dark / light variants are redrawn.
+    static func resetTreeIcons() { cache.removeAll() }
+
+    private static func documentKey(_ name: String) -> String {
+        let ext = (name as NSString).pathExtension.lowercased()
+        if name == "artisan" { return "php" }
+        if name.hasPrefix(".env") { return "env" }
+        if ext == "php", name.hasSuffix(".blade.php") { return "blade" }
+        if ext == "mjs" || ext == "cjs" || ext == "jsx" { return "js" }
+        if ext == "tsx" || ext == "mts" { return "ts" }
+        if ext == "markdown" { return "md" }
+        if ext == "jsonc" { return "json" }
+        if ["scss", "sass", "less"].contains(ext) { return "css" }
+        if ["yml", "yaml"].contains(ext) { return "yml" }
+        if ["png", "jpg", "jpeg", "gif", "webp", "svg", "ico"].contains(ext) { return "img" }
+        return ext.isEmpty ? "plain" : ext
+    }
+
+    private static func tintHex(_ key: String) -> UInt32 {
         switch key {
-        case "dir", "dir.dot":
-            return symbol("folder", color: key == "dir" ? Theme.hex(0x6B8CB8) : Theme.hex(0x9A7B4F), size: size)
-        case "php.class":
-            return NSImage(size: size, flipped: false) { r in
-                let c = Theme.hex(0x4E7FD6)
-                let circle = NSBezierPath(ovalIn: r.insetBy(dx: 1.2, dy: 1.2))
-                c.withAlphaComponent(0.14).setFill(); circle.fill()
-                c.setStroke(); circle.lineWidth = 1.1; circle.stroke()
-                drawText("C", in: r, color: c, size: 9.5, weight: .semibold)
-                return true
+        case "vue": return 0x23885A
+        case "js": return 0x9A7300
+        case "php": return 0x5B59C2
+        case "blade": return 0xE0533D
+        case "env": return 0xB4530F
+        case "ts": return 0x3178C6
+        case "css": return 0x2F9DB8
+        case "html", "htm", "xml": return 0xC2570C
+        case "md": return 0x4E7FD6
+        case "json": return 0x8F5CC7
+        case "yml": return 0xC24A4A
+        case "img": return 0xC2418A
+        default: return 0x6B7280     // .editorconfig, .gitignore, plain text and anything unknown
+        }
+    }
+
+    private static func tint(forKey key: String) -> NSColor { Theme.hex(tintHex(key)) }
+
+    /// 16×16 image drawn top-left origin so the coordinates read like the design's SVG viewBox.
+    private static func canvas(_ draw: @escaping () -> Void) -> NSImage {
+        NSImage(size: NSSize(width: 16, height: 16), flipped: true) { _ in draw(); return true }
+    }
+
+    private static func stroke(_ path: NSBezierPath, _ color: NSColor, fill alpha: CGFloat?) {
+        if let alpha { color.withAlphaComponent(alpha).setFill(); path.fill() }
+        color.setStroke(); path.lineWidth = 1.3; path.lineJoinStyle = .round; path.stroke()
+    }
+
+    private static func folder(open: Bool) -> NSImage {
+        let color = Theme.hex(Theme.isDark ? 0x8B96A8 : 0x6F7988)
+        return canvas {
+            if !open {
+                let p = NSBezierPath()
+                p.move(to: NSPoint(x: 2, y: 4.5))
+                p.curve(to: NSPoint(x: 3.5, y: 3), controlPoint1: NSPoint(x: 2, y: 3.67), controlPoint2: NSPoint(x: 2.67, y: 3))
+                p.line(to: NSPoint(x: 6.1, y: 3)); p.line(to: NSPoint(x: 7.5, y: 4.5)); p.line(to: NSPoint(x: 12.5, y: 4.5))
+                p.curve(to: NSPoint(x: 14, y: 6), controlPoint1: NSPoint(x: 13.33, y: 4.5), controlPoint2: NSPoint(x: 14, y: 5.17))
+                p.line(to: NSPoint(x: 14, y: 11.5))
+                p.curve(to: NSPoint(x: 12.5, y: 13), controlPoint1: NSPoint(x: 14, y: 12.33), controlPoint2: NSPoint(x: 13.33, y: 13))
+                p.line(to: NSPoint(x: 3.5, y: 13))
+                p.curve(to: NSPoint(x: 2, y: 11.5), controlPoint1: NSPoint(x: 2.67, y: 13), controlPoint2: NSPoint(x: 2, y: 12.33))
+                p.close()
+                stroke(p, color, fill: 0.12)
+                return
             }
-        case "php": return badge("php", Theme.hex(0x6C5CC7), size: size)
-        case "blade": return badge("b", Theme.hex(0xE0533D), size: size, filled: true)
-        case "md", "markdown": return badge("M↓", Theme.hex(0x4E7FD6), size: size)
-        case "json", "jsonc": return badge("{}", Theme.hex(0x8F5CC7), size: size)
-        case "js", "mjs", "cjs", "jsx": return badge("JS", Theme.hex(0x1F1F1F), size: size, filled: true, fill: Theme.hex(0xF0C419))
-        case "ts", "tsx", "mts": return badge("TS", .white, size: size, filled: true, fill: Theme.hex(0x3178C6))
-        case "vue": return badge("V", .white, size: size, filled: true, fill: Theme.hex(0x41B883))
-        case "css", "scss", "sass", "less": return badge("#", Theme.hex(0x2F9DB8), size: size)
-        case "html", "htm", "xml": return badge("<>", Theme.hex(0xE5762E), size: size)
-        case "yml", "yaml": return badge("Y", Theme.hex(0xC24A4A), size: size)
-        case "ignore": return symbol("nosign", color: .secondaryLabelColor, size: size)
-        case "lines": return symbol("text.alignleft", color: .secondaryLabelColor, size: size)
-        case "lock": return symbol("lock", color: .secondaryLabelColor, size: size)
-        default: return symbol(symbolName(forExtension: ext), color: tint(forExtension: ext), size: size)
+            let back = NSBezierPath()
+            back.move(to: NSPoint(x: 2, y: 11.5)); back.line(to: NSPoint(x: 2, y: 4.5))
+            back.curve(to: NSPoint(x: 3.5, y: 3), controlPoint1: NSPoint(x: 2, y: 3.67), controlPoint2: NSPoint(x: 2.67, y: 3))
+            back.line(to: NSPoint(x: 6.1, y: 3)); back.line(to: NSPoint(x: 7.5, y: 4.5)); back.line(to: NSPoint(x: 11.5, y: 4.5))
+            back.curve(to: NSPoint(x: 13, y: 6), controlPoint1: NSPoint(x: 12.33, y: 4.5), controlPoint2: NSPoint(x: 13, y: 5.17))
+            back.line(to: NSPoint(x: 13, y: 7))
+            stroke(back, color, fill: nil)
+            let front = NSBezierPath()
+            front.move(to: NSPoint(x: 2, y: 11.5)); front.line(to: NSPoint(x: 3.6, y: 7.9))
+            front.curve(to: NSPoint(x: 5, y: 7), controlPoint1: NSPoint(x: 3.85, y: 7.35), controlPoint2: NSPoint(x: 4.4, y: 7))
+            front.line(to: NSPoint(x: 13.3, y: 7))
+            front.curve(to: NSPoint(x: 14, y: 8.1), controlPoint1: NSPoint(x: 13.8, y: 7), controlPoint2: NSPoint(x: 14.15, y: 7.65))
+            front.line(to: NSPoint(x: 12.6, y: 12))
+            front.curve(to: NSPoint(x: 11.2, y: 13), controlPoint1: NSPoint(x: 12.4, y: 12.55), controlPoint2: NSPoint(x: 11.8, y: 13))
+            front.line(to: NSPoint(x: 3.5, y: 13))
+            front.curve(to: NSPoint(x: 2, y: 11.5), controlPoint1: NSPoint(x: 2.67, y: 13), controlPoint2: NSPoint(x: 2, y: 12.33))
+            front.close()
+            stroke(front, color, fill: 0.15)
         }
     }
 
-    private static func symbolName(forExtension ext: String) -> String { symbol(forExtension: ext) }
-
-    private static func symbol(_ name: String, color: NSColor, size: NSSize) -> NSImage {
-        let cfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-        let base = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(cfg) ?? NSImage(size: size)
-        return NSImage(size: size, flipped: false) { r in
-            guard base.size.width > 0 else { return true }
-            let s = base.size, scale = min(r.width / s.width, r.height / s.height, 1)
-            let dr = NSRect(x: (r.width - s.width * scale) / 2, y: (r.height - s.height * scale) / 2,
-                            width: s.width * scale, height: s.height * scale)
-            base.draw(in: dr)
-            color.setFill(); dr.fill(using: .sourceIn)
-            return true
+    private static func document(tint: NSColor) -> NSImage {
+        let color = Theme.isDark ? tint.blended(withFraction: 0.25, of: .white) ?? tint : tint
+        return canvas {
+            let p = NSBezierPath()
+            p.move(to: NSPoint(x: 4.5, y: 2)); p.line(to: NSPoint(x: 9.3, y: 2)); p.line(to: NSPoint(x: 12, y: 4.7))
+            p.line(to: NSPoint(x: 12, y: 13.5))
+            p.curve(to: NSPoint(x: 11.5, y: 14), controlPoint1: NSPoint(x: 12, y: 13.78), controlPoint2: NSPoint(x: 11.78, y: 14))
+            p.line(to: NSPoint(x: 4.5, y: 14))
+            p.curve(to: NSPoint(x: 4, y: 13.5), controlPoint1: NSPoint(x: 4.22, y: 14), controlPoint2: NSPoint(x: 4, y: 13.78))
+            p.line(to: NSPoint(x: 4, y: 2.5))
+            p.curve(to: NSPoint(x: 4.5, y: 2), controlPoint1: NSPoint(x: 4, y: 2.22), controlPoint2: NSPoint(x: 4.22, y: 2))
+            p.close()
+            stroke(p, color, fill: 0.14)
         }
-    }
-
-    private static func badge(_ text: String, _ color: NSColor, size: NSSize, filled: Bool = false, fill: NSColor? = nil) -> NSImage {
-        NSImage(size: size, flipped: false) { r in
-            let box = NSBezierPath(roundedRect: r.insetBy(dx: 0.9, dy: 1.6), xRadius: 2.5, yRadius: 2.5)
-            if filled { (fill ?? color).setFill(); box.fill() }
-            else { color.withAlphaComponent(0.12).setFill(); box.fill(); color.setStroke(); box.lineWidth = 0.9; box.stroke() }
-            drawText(text, in: r, color: filled ? color : color, size: text.count > 1 ? 6.8 : 8.5, weight: .bold)
-            return true
-        }
-    }
-
-    private static func drawText(_ s: String, in r: NSRect, color: NSColor, size: CGFloat, weight: NSFont.Weight) {
-        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: size, weight: weight), .foregroundColor: color]
-        let t = NSAttributedString(string: s, attributes: attrs), ts = t.size()
-        t.draw(at: NSPoint(x: r.midX - ts.width / 2, y: r.midY - ts.height / 2))
     }
 }

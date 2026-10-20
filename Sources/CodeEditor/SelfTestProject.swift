@@ -512,6 +512,11 @@ extension SelfTest {
         check("Git panel is Cmd-9, Bookmarks Cmd-2, Tests Cmd-4, Focus Editor shows Esc, Go to Line Cmd-L",
               shortcut("Show Git Panel") == "⌘9" && shortcut("Editor") == "⌘2" && shortcut("Claude Code") == "⌘3" && shortcut("Find Tool Window") == "⌘4" && shortcut("Tests Tool Window") == "⌘6"
               && shortcut("Focus Editor") == "⌘⎋" && shortcut("Go to Line…") == "⌘L")
+        check("explorer: 28 pt rows, own chevrons (no system triangle), panel hosts the tree",
+              w.tree.outline.rowHeight == 28 && w.tree.outline.frameOfOutlineCell(atRow: 0) == .zero && w.tree.scrollView.superview === w.tree.panel)
+        check("explorer: folder icons differ open vs closed, dot-folders and files get their own icons",
+              FileIcon.treeImage(name: "app", isDirectory: true, expanded: true) !== FileIcon.treeImage(name: "app", isDirectory: true)
+              && FileIcon.treeImage(name: "a.vue", isDirectory: false) !== FileIcon.treeImage(name: "a.php", isDirectory: false))
         check("Last tool window is F12, hide all is Shift-Cmd-F12", shortcut("Last Tool Window") == "F12" && shortcut("Hide All Tool Windows") == "⇧⌘F12")
 
         app.noteKey(w.window)
