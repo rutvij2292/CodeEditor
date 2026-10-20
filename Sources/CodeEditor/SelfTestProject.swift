@@ -46,7 +46,7 @@ extension SelfTest {
                       && !withVendor.files.contains("node_modules/m/i.js"))
                 ProjectIndex.includeVendor = savedVendor
                 terminalChecks(app: app, w: w, dir: dir) {
-                    claudeChecks(app: app, w: w, dir: dir) { coalescingChecks(w: w, dir: dir, done: done) }
+                    claudeChecks(app: app, w: w, dir: dir) { coalescingChecks(w: w, dir: dir) { treeDeleteChecks(w: w, dir: dir, done: done) } }
                 }
             }
         }
@@ -616,6 +616,33 @@ extension SelfTest {
         w4.bottom.hide()
         SessionStore.forceEnabled = false
         w4.window.close()
+    }
+
+    // MARK: Files deleted outside the editor disappear from the tree (async)
+
+    private static func treeDeleteChecks(w: ProjectWindow, dir: URL, done: @escaping () -> Void) {
+        let fm = FileManager.default
+        let app = dir.appendingPathComponent("app")
+        try? fm.createDirectory(at: app, withIntermediateDirectories: true)
+        let gone = ["doomed1.php", "doomed2.php"].map { app.appendingPathComponent($0) }
+        gone.forEach { fm.createFile(atPath: $0.path, contents: Data("<?php".utf8)) }
+        func rows() -> [String] { (0..<w.tree.outline.numberOfRows).compactMap { (w.tree.outline.item(atRow: $0) as? FileNode)?.url.lastPathComponent } }
+        w.tree.refresh()
+        w.tree.expand(paths: [app.path])
+        check("tree shows files created on disk once refreshed", rows().contains("doomed1.php"))
+        w.coalesceInterval = 0.15
+        gone.forEach { try? fm.removeItem(at: $0) }
+        w.filesChanged(gone.map(\.path))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            check("files deleted on disk leave the tree after the FS event", !rows().contains("doomed1.php") && !rows().contains("doomed2.php"))
+            fm.createFile(atPath: gone[0].path, contents: Data("<?php".utf8))
+            w.tree.refresh()
+            try? fm.removeItem(at: gone[0])
+            w.reloadFromDisk()
+            check("Reload Project from Disk drops a file deleted since the last refresh", !rows().contains("doomed1.php"))
+
+            done()
+        }
     }
 
     // MARK: FS-burst coalescing (async)

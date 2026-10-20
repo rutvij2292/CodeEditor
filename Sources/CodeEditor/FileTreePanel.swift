@@ -206,7 +206,11 @@ final class FileTreePanel: NSView {
             p.move(to: NSPoint(x: 5, y: 13)); p.line(to: NSPoint(x: 8, y: 10)); p.line(to: NSPoint(x: 11, y: 13))
         }, tooltip: "Collapse All", target: tree, action: #selector(FileTreeController.panelCollapseAll))
 
-        let buttons = NSStackView(views: [newFile, newFolder, collapse])
+        let reload = TreeIconButton(drawing: { p in
+            p.appendArc(withCenter: NSPoint(x: 8, y: 8), radius: 5, startAngle: 40, endAngle: 330, clockwise: false)
+            p.move(to: NSPoint(x: 12.8, y: 2.8)); p.line(to: NSPoint(x: 12.9, y: 6.1)); p.line(to: NSPoint(x: 9.7, y: 6.0))
+        }, tooltip: "Refresh (⌥⌘Y)", target: tree, action: #selector(FileTreeController.panelReload))
+        let buttons = NSStackView(views: [newFile, newFolder, reload, collapse])
         buttons.spacing = 2
         for v in [title, buttons, section, tree.scrollView] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
         tree.scrollView.drawsBackground = false

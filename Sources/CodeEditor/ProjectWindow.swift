@@ -94,6 +94,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         tabs.onDropURLs = { [weak self] urls in self?.handleDrop(urls) }
         tabs.onReorder = { [weak self] in self?.scheduleSessionSave() }
         tree.onOpen = { [weak self] url in self?.open(url) }
+        tree.onReload = { [weak self] in self?.reloadFromDisk() }
         tree.onEscape = { [weak self] in self?.focusEditor() }
         tree.onOpenTerminal = { [weak self] dir in
             guard let self, let term = self.terminalPanel else { return }

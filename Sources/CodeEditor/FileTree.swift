@@ -6,7 +6,12 @@ final class FileNode {
     private var loaded: [FileNode]?
     init(url: URL) {
         self.url = url
-        isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+        let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        if values?.isSymbolicLink == true {      // a symlink to a folder is a folder (also the project root itself)
+            isDirectory = (try? url.resolvingSymlinksInPath().resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+        } else {
+            isDirectory = values?.isDirectory ?? false
+        }
     }
 
     /// Children are read lazily on first expand, so large repos cost nothing until opened.
@@ -167,6 +172,9 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     @objc func panelNewFile() { newFile(in: targetDirectory(for: selectedURL)) }
     @objc func panelNewFolder() { newFolder(in: targetDirectory(for: selectedURL)) }
     @objc func panelCollapseAll() { collapseAll() }
+    /// Header Refresh button / context menu: rescans the whole project (tree, index, Git colours), same as Cmd-Opt-Y.
+    var onReload: (() -> Void)?
+    @objc func panelReload() { if let onReload { onReload() } else { refresh() } }
 
     override init() {
         super.init()
@@ -230,11 +238,16 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     /// folders (build output, caches, other branches' files) cost nothing.
     func refreshIfAffected(_ paths: Set<String>) {
         guard let rootURL = root?.url else { return }
-        let base = VCSKind.canonical(rootURL.path)
-        let expanded = Set(expandedPaths().map { VCSKind.canonical($0) })
+        // FSEvents reports real paths; the project may be opened through a symlink (or a firmlink), so compare resolved paths.
+        func real(_ p: String) -> String { URL(fileURLWithPath: p).resolvingSymlinksInPath().path }
+        let base = real(rootURL.path)
+        let expanded = Set(expandedPaths().map(real))
         let affected = paths.contains { p in
-            let parent = VCSKind.canonical((p as NSString).deletingLastPathComponent)
-            return parent == base || expanded.contains(parent)
+            let parent = (p as NSString).deletingLastPathComponent
+            let r = real(parent)
+            // Not under the project at all after resolving (odd mounts): refresh rather than risk a stale tree.
+            return r == base || expanded.contains(r) || !(r + "/").hasPrefix(base + "/")
+                || !FileManager.default.fileExists(atPath: parent)   // the whole folder vanished
         }
         if affected { refresh() }
     }
@@ -347,6 +360,7 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
             make("Copy Relative Path", #selector(menuCopyRelativePath)),
             make("Open in Terminal", #selector(menuTerminal)),
             .separator(),
+            make("Reload from Disk", #selector(panelReload)),
             make("Collapse All", #selector(menuCollapseAll)),
         ]
     }
