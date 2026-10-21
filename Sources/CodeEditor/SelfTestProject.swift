@@ -133,7 +133,7 @@ extension SelfTest {
             t.window.minSize = .zero; t.window.contentMinSize = .zero
             t.window.setContentSize(NSSize(width: 300, height: 600))
             t.window.contentView?.layoutSubtreeIfNeeded()
-            check("window: content minimum width is small (<= 420 pt) with a file open and long status labels", (t.window.contentView?.frame.width ?? 9999) <= 420)
+            check("window: content minimum width is small (<= 420 pt) with a file open and long status labels (+40 pt tool strip)", (t.window.contentView?.frame.width ?? 9999) <= 420 + ToolStripView.width)
             t.showTerminal()
             t.window.setContentSize(NSSize(width: 300, height: 600))
             t.window.contentView?.layoutSubtreeIfNeeded()

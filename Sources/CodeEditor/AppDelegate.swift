@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// Boolean preferences behind the View/Git menu checkmarks (`NSMenuItem.representedObject` holds the key).
     static let preferenceToggles: [String: (get: () -> Bool, set: (Bool) -> Void)] = [
         "showToolbar": ({ Prefs.showToolbar }, { Prefs.showToolbar = $0 }),
+        "showToolStrip": ({ Prefs.showToolStrip }, { Prefs.showToolStrip = $0 }),
         "showBreadcrumbs": ({ Prefs.showBreadcrumbs }, { Prefs.showBreadcrumbs = $0 }),
         "inlineBlame": ({ Prefs.inlineBlame }, { Prefs.inlineBlame = $0 }),
         "showIndentGuides": ({ Prefs.showIndentGuides }, { Prefs.showIndentGuides = $0 }),

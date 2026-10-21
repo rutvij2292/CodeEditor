@@ -216,6 +216,7 @@ enum MainMenu {
             item("Unsplit", #selector(AppDelegate.unsplitEditor(_:)), target: a),
             sep,
             toggleItem("Toolbar", "showToolbar", a),
+            toggleItem("Tool Window Icons", "showToolStrip", a),
             toggleItem("Breadcrumbs", "showBreadcrumbs", a),
             toggleItem("Inline Git Blame", "inlineBlame", a),
             toggleItem("Indent Guides", "showIndentGuides", a),

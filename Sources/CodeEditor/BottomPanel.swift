@@ -86,6 +86,8 @@ final class BottomPanel: NSObject {
         var badge: String?
     }
 
+    /// Posted (object = the panel) when the selected tool, visibility or a badge changes; the tool strip listens.
+    static let stateDidChange = Notification.Name("CodeEditor.bottomPanelStateDidChange")
     let view = BottomPanelView()
     private(set) var tools: [Tool] = []
     private(set) var selectedID: String?
@@ -191,6 +193,7 @@ final class BottomPanel: NSObject {
             onVisibilityChange?(true)
         }
         persist()
+        NotificationCenter.default.post(name: Self.stateDidChange, object: self)
         if let focus { DispatchQueue.main.async(execute: focus) }
     }
 
@@ -200,6 +203,7 @@ final class BottomPanel: NSObject {
         isVisible = false
         persist()
         onVisibilityChange?(false)
+        NotificationCenter.default.post(name: Self.stateDidChange, object: self)
     }
 
     /// Shows `id`; if it is already the visible tool, hides the panel instead.
@@ -249,6 +253,7 @@ final class BottomPanel: NSObject {
     }
 
     private func restyleButtons() {
+        defer { NotificationCenter.default.post(name: Self.stateDidChange, object: self) }
         for tool in tools {
             guard let b = buttons[tool.id] else { continue }
             let selected = tool.id == selectedID
