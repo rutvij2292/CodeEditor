@@ -49,6 +49,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     private(set) var statusKinds: [String: VCSKind] = [:]
     let mainSplit = NSSplitViewController()
     let rootSplit = NSSplitViewController()
+    /// Slim tool-window icon column at the far left (ToolStrip.swift).
+    var toolStrip: ToolStripView!
     var bottomItem: NSSplitViewItem!
     var restoring = false
     private var sessionWork: DispatchWorkItem?
@@ -171,7 +173,8 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         }
         bottom.register(id: "git", title: "Git", view: gitHost)
 
-        window.contentViewController = rootSplit
+        toolStrip = ToolStripView(project: self)
+        window.contentViewController = ToolStripContainerController(strip: toolStrip, content: rootSplit)
         window.setContentSize(NSSize(width: 1200, height: 800))
         DispatchQueue.main.async { [weak self] in self?.mainSplit.splitView.setPosition(260, ofDividerAt: 0) }
 
@@ -198,6 +201,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     func openFolder(_ url: URL) {
         let url = url.standardizedFileURL
         root = url
+        toolStrip?.projectChanged()
         tree.setRoot(url)
         let projectIndex = ProjectIndex(root: url)
         index = projectIndex
