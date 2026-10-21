@@ -200,6 +200,7 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         outline.style = .plain
         outline.backgroundColor = .clear
         outline.selectionHighlightStyle = .regular
+        outline.allowsMultipleSelection = true   // off by default for a table built in code: Shift-arrows / Shift-click did nothing
         column.resizingMask = .autoresizingMask
         outline.dataSource = self
         outline.delegate = self

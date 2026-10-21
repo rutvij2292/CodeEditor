@@ -314,8 +314,8 @@ extension SelfTest {
         msFiles.forEach { fm.createFile(atPath: $0.path, contents: Data()) }
         w.tree.refresh()
         w.tree.reveal(msFiles[0])
-        // Shift-Down is NSTableView's own range extension; it ends up as this call.
         let first = w.tree.outline.selectedRow
+        check("tree allows multiple selection", w.tree.outline.allowsMultipleSelection)
         w.tree.outline.selectRowIndexes(IndexSet(first...(first + 2)), byExtendingSelection: false)
         check("range selection covers every file", Set(w.tree.selectedURLs.map(\.lastPathComponent)) == ["a.txt", "b.txt", "c.txt"])
         var asked = 0
