@@ -165,6 +165,17 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         return alert.runModal() == .alertFirstButtonReturn
     }
 
+    /// Asks before moving items to the Trash; the default shows an alert (declines when headless).
+    var confirmTrash: ([URL]) -> Bool = { urls in
+        guard !AppEnv.headless else { return false }
+        let alert = NSAlert()
+        alert.messageText = urls.count == 1 ? "Move “\(urls[0].lastPathComponent)” to the Trash?" : "Move \(urls.count) items to the Trash?"
+        alert.informativeText = "You can restore \(urls.count == 1 ? "it" : "them") from the Trash."
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     var rootURL: URL? { root?.url }
     /// Sidebar container: Explorer header + this tree.
     private(set) lazy var panel = FileTreePanel(tree: self)
@@ -320,6 +331,8 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     }
 
     @objc private func clicked() {
+        let mods = NSApp.currentEvent?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? []
+        guard mods.isDisjoint(with: [.shift, .command]), outline.selectedRowIndexes.count <= 1 else { return }
         guard let node = outline.item(atRow: outline.clickedRow) as? FileNode else { return }
         open(node)
     }
@@ -367,7 +380,7 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         let row = outline.clickedRow
-        if row >= 0 { outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
+        if row >= 0, !outline.selectedRowIndexes.contains(row) { outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
         contextURL = row >= 0 ? (outline.item(atRow: row) as? FileNode)?.url : nil
         menu.removeAllItems()
         menuItems(for: contextURL).forEach(menu.addItem)
@@ -388,7 +401,10 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     @objc private func menuPaste() { paste(into: targetDirectory(for: contextURL)) }
     @objc private func menuRename() { if let u = contextURL { beginRename(u) } }
     @objc private func menuDuplicate() { if let u = contextURL { duplicate(u) } }
-    @objc private func menuTrash() { if let u = contextURL { trash(u) } }
+    @objc private func menuTrash() {
+        let chosen = selectedURLs
+        if chosen.count > 1, let u = contextURL, chosen.contains(u) { trash(chosen) } else if let u = contextURL { trash(u) }
+    }
     @objc private func menuReveal() { if let u = menuURL { NSWorkspace.shared.activateFileViewerSelecting([u]) } }
     @objc private func menuCollapseAll() { collapseAll() }
 
@@ -450,18 +466,22 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         perform { .created(try FileOperations.duplicate(url)) }
     }
 
-    func trash(_ url: URL) {
-        guard !AppEnv.headless else { return }
-        let alert = NSAlert()
-        alert.messageText = "Move “\(url.lastPathComponent)” to the Trash?"
-        alert.informativeText = "You can restore it from the Trash."
-        alert.addButton(withTitle: "Move to Trash")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        perform { try FileOperations.trash(url); return .deleted(url) }
+    func trash(_ url: URL) { trash([url]) }
+
+    /// Moves every URL to the Trash after one confirmation; items inside another selected folder go with it.
+    func trash(_ urls: [URL]) {
+        let urls = urls.filter { u in !urls.contains { $0.path != u.path && FileOperations.isInside(u, of: $0) } }
+        guard !urls.isEmpty, confirmTrash(urls) else { return }
+        var changes: [FileChange] = []
+        for url in urls {
+            do { try FileOperations.trash(url); changes.append(.deleted(url)) } catch { self.alert(error) }
+        }
+        guard !changes.isEmpty else { return }
+        refresh()
+        changes.forEach { onChange?($0) }
     }
 
-    private func trashSelection() { if let u = selectedURL, u.path != root?.url.path { trash(u) } }
+    private func trashSelection() { trash(selectedURLs) }
     private func renameSelection() { if let u = selectedURL, u.path != root?.url.path { beginRename(u) } }
 
     private func perform(_ op: () throws -> FileChange) {
@@ -519,7 +539,7 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     /// Files cut with Cmd-X; the next paste moves them (and clears this).
     private var cutURLs: [URL] = []
 
-    private var selectedURLs: [URL] {
+    var selectedURLs: [URL] {
         outline.selectedRowIndexes.compactMap { (outline.item(atRow: $0) as? FileNode)?.url }.filter { $0.path != root?.url.path }
     }
 

@@ -307,6 +307,23 @@ extension SelfTest {
         check("deleting a folder closes tabs inside it", w.editors[movedDir.appendingPathComponent("t2.txt").standardizedFileURL.path] == nil)
         w.close(newID)
 
+        // Multi-select: Delete trashes all of it with one confirmation.
+        let ms = ops.appendingPathComponent("multi")
+        try? fm.createDirectory(at: ms, withIntermediateDirectories: true)
+        let msFiles = ["a.txt", "b.txt", "c.txt"].map { ms.appendingPathComponent($0) }
+        msFiles.forEach { fm.createFile(atPath: $0.path, contents: Data()) }
+        w.tree.refresh()
+        w.tree.reveal(msFiles[0])
+        // Shift-Down is NSTableView's own range extension; it ends up as this call.
+        let first = w.tree.outline.selectedRow
+        w.tree.outline.selectRowIndexes(IndexSet(first...(first + 2)), byExtendingSelection: false)
+        check("range selection covers every file", Set(w.tree.selectedURLs.map(\.lastPathComponent)) == ["a.txt", "b.txt", "c.txt"])
+        var asked = 0
+        w.tree.confirmTrash = { asked += 1; return $0.count == 3 }
+        w.tree.trash(w.tree.selectedURLs)
+        check("multi-select trash: one prompt, every file gone", asked == 1 && msFiles.allSatisfy { !fm.fileExists(atPath: $0.path) })
+        w.tree.confirmTrash = { _ in false }
+
         // Tree drop: move with overwrite confirmation, copy from outside.
         let dropSrc = ops.appendingPathComponent("drop.txt"), dropDir = ops.appendingPathComponent("target")
         write("src", to: dropSrc); write("existing", to: dropDir.appendingPathComponent("drop.txt"))
