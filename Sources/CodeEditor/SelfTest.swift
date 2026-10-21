@@ -102,8 +102,10 @@ enum SelfTest {
                                     SelfTestPrettierReal.run(w: w) {
                                         SelfTestPlans.run(w: w)
                                         SelfTestClaudeCLI.run(w: w) {
-                                            SelfTestPerf.run(app: app)
-                                            finish()
+                                            SelfTestFindPopup.run(w: w) {
+                                                SelfTestPerf.run(app: app)
+                                                finish()
+                                            }
                                         }
                                     }
                                 }

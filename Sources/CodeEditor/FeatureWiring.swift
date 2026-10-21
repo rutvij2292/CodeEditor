@@ -28,15 +28,26 @@ extension ProjectWindow {
         onReplaceInFiles = { [weak self] in self?.showFind(replace: true) }
     }
 
-    /// Cmd-Shift-F / Cmd-Shift-R: opens the Find panel seeded with the current single-line selection.
+    /// Cmd-Shift-F / Cmd-Shift-R: floating Find / Replace in Files popup seeded with the current single-line selection.
     func showFind(replace: Bool) {
-        guard let find = findPanel else { return }
+        guard let find = findPanel, let root else { return }
         var seed: String?
         if let tv = current?.textView, tv.selectedRange().length > 0 {
             let text = (tv.string as NSString).substring(with: tv.selectedRange())
             if !text.contains("\n"), text.count <= 200 { seed = text }
         }
-        showToolPanel("find") { find.show(seed: seed, replaceMode: replace) }
+        let host = FindPopupHost(
+            root: root, engine: find.engine,
+            openBuffer: { [weak self] url in self?.editors[url.standardizedFileURL.path] },
+            openMatch: { [weak self] m in
+                self?.open(m.url, line: m.line)
+                self?.current?.textView.goToLine(m.line, column: m.column)
+            },
+            openFilePaths: { [weak self] in Set(self?.editors.keys.map { $0 } ?? []) },
+            openInFindWindow: { [weak self] o, rep, mode in
+                self?.showToolPanel("find") { find.adopt(o, replaceText: rep, replaceMode: mode) }
+            })
+        FindPopup.present(over: window, host: host, seed: seed, replace: replace)
     }
 
     private func installHttpPanel(root: URL) {
