@@ -41,6 +41,13 @@ enum Verification {
             case "http": decorateHttp(w)
             case "find":
                 w.showToolPanel("find") { w.findPanel?.show(seed: AppEnv.value("CE_FIND_QUERY") ?? "function", replaceMode: AppEnv.value("CE_FIND_REPLACE") != nil) }
+            case "findpopup", "replacepopup":
+                w.current?.textView.setSelectedRange(NSRange(location: 0, length: 0))
+                w.showFind(replace: picker == "replacepopup")
+                if let pop = FindPopup.shared {
+                    pop.testType(AppEnv.value("CE_FIND_QUERY") ?? "function")
+                    if picker == "replacepopup" { pop.testSetReplacement(AppEnv.value("CE_FIND_REPLACEMENT") ?? "method") }
+                }
             case "term-right", "term-bottom", "term-max", "term-narrow": decorateTerminal(w, mode: picker!)
             case "tree":
                 w.tree.expand(paths: ["resources", "resources/js", "resources/js/Pages", "routes"].map { w.root!.appendingPathComponent($0).path })
@@ -59,7 +66,7 @@ enum Verification {
             default: break
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + ((picker == "git" || picker == "git-log" || picker == "push" || picker == "todo" || picker == "bookmarks" || BranchVerification.isBranchPicker(picker) || picker == "find" || picker == "problems" || picker == "commit") ? 3.5 : picker == "http" ? 4.5 : picker == "completion" ? 2.2 : 1.6)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + ((picker == "git" || picker == "git-log" || picker == "push" || picker == "todo" || picker == "bookmarks" || BranchVerification.isBranchPicker(picker) || picker == "find" || picker == "findpopup" || picker == "replacepopup" || picker == "problems" || picker == "commit") ? 3.5 : picker == "http" ? 4.5 : picker == "completion" ? 2.2 : 1.6)) {
             if let w = app.active?.window.contentView { render(w, to: shot) }
             if AppEnv.value("CE_FRAME_SHOT") != nil, let frame = app.active?.window.contentView?.superview { render(frame, to: shot.replacingOccurrences(of: ".png", with: "_frame.png")) }
             if picker == "completion", let w = app.active, let tab = w.current {
@@ -76,7 +83,8 @@ enum Verification {
                 render(v, to: shot.replacingOccurrences(of: ".png", with: "_commit.png"))
             }
             if let p = picker, BranchVerification.isBranchPicker(p), let w = app.active { BranchVerification.finish(p, shot: shot, w) }
-            if picker != nil, !BranchVerification.isBranchPicker(picker), !["git", "git-log", "push", "todo", "bookmarks", "completion", "bottom", "tabs", "split", "commit", "http", "tree", "term-right", "term-bottom", "term-max", "term-narrow"].contains(picker!) { QuickPicker.snapshot(to: shot.replacingOccurrences(of: ".png", with: "_picker.png")) }
+            if picker == "findpopup" || picker == "replacepopup" { FindPopup.snapshot(to: shot.replacingOccurrences(of: ".png", with: "_popup.png")) }
+            if picker != nil, !BranchVerification.isBranchPicker(picker), !["git", "git-log", "push", "todo", "bookmarks", "completion", "bottom", "tabs", "split", "commit", "http", "tree", "findpopup", "replacepopup", "term-right", "term-bottom", "term-max", "term-narrow"].contains(picker!) { QuickPicker.snapshot(to: shot.replacingOccurrences(of: ".png", with: "_picker.png")) }
             if AppEnv.value("CE_VMMAP") != nil {   // dev hook: print where this process's memory is
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: "/usr/bin/vmmap")

@@ -11,6 +11,8 @@ struct FindOptions {
     var fileMask = ""
     /// Also search skipNames directories (vendor, node_modules, ...) by walking the filesystem. `.git` is always skipped.
     var includeIgnored = false
+    /// Replace: keep the matched text's casing style (ALL CAPS / Capitalised / lower) on the replacement.
+    var preserveCase = false
     /// nil = project root.
     var directory: URL?
 }
@@ -696,7 +698,7 @@ final class FindEngine {
                                             range: NSRange(location: loc, length: le - loc)),
                       r.range == range else { skipped.append(mt); continue }
                 let new = re.replacementString(for: r, in: text, offset: 0, template: tmpl)
-                edits.append(Edit(range: range, new: new, key: mt.key))
+                edits.append(Edit(range: range, new: m.opts.preserveCase ? Self.adaptCase(new, to: ns.substring(with: range)) : new, key: mt.key))
             } else {
                 let sub = ns.substring(with: range)
                 let same = m.opts.caseSensitive ? sub == m.opts.query : sub.compare(m.opts.query, options: .caseInsensitive) == .orderedSame
@@ -706,10 +708,22 @@ final class FindEngine {
                     if loc > 0, word(u16[loc - 1]), word(u16[loc]) { skipped.append(mt); continue }
                     if loc + mt.length < len, word(u16[loc + mt.length]), word(u16[loc + mt.length - 1]) { skipped.append(mt); continue }
                 }
-                edits.append(Edit(range: range, new: replacement, key: mt.key))
+                edits.append(Edit(range: range, new: m.opts.preserveCase ? Self.adaptCase(replacement, to: sub) : replacement, key: mt.key))
             }
         }
         return (edits, skipped)
+    }
+
+    /// "Preserve case": FOO -> BAR, Foo -> Bar, foo -> bar-as-typed.
+    static func adaptCase(_ replacement: String, to matched: String) -> String {
+        let letters = matched.filter(\.isLetter)
+        guard !letters.isEmpty, !replacement.isEmpty else { return replacement }
+        if letters.count > 1, letters == letters.uppercased() { return replacement.uppercased() }
+        if letters == letters.lowercased() { return replacement.lowercased() }
+        if let f = letters.first, f.isUppercase, letters.dropFirst() == letters.dropFirst().lowercased() {
+            return replacement.prefix(1).uppercased() + replacement.dropFirst()
+        }
+        return replacement
     }
 
     private func applyToBuffer(_ tab: EditorTab, edits: [Edit]) {

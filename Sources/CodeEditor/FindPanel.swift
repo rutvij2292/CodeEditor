@@ -124,7 +124,7 @@ final class FindPanelController: NSObject, NSSearchFieldDelegate, NSOutlineViewD
     /// Optional richer open hook (gets the whole match, e.g. to select the range). Takes precedence over `openFile`.
     var openMatch: ((FindMatch) -> Void)?
 
-    private let engine: FindEngine
+    let engine: FindEngine
     private let openFile: (URL, Int, Int) -> Void
     private let openBuffer: (URL) -> EditorTab?
     private let rootURL: URL
@@ -195,6 +195,21 @@ final class FindPanelController: NSObject, NSSearchFieldDelegate, NSOutlineViewD
         } else if files.isEmpty, !queryField.stringValue.isEmpty {
             scheduleSearch(immediately: true)
         }
+        focusQuery()
+    }
+
+    /// Find popup -> "Open in Find Window": takes over the popup's query, options and scope, then searches.
+    func adopt(_ o: FindOptions, replaceText: String?, replaceMode: Bool) {
+        setReplaceMode(replaceMode)
+        queryField.stringValue = o.query
+        caseButton.state = o.caseSensitive ? .on : .off
+        wordButton.state = o.wholeWord ? .on : .off
+        regexButton.state = o.isRegex ? .on : .off
+        maskField.stringValue = o.fileMask
+        if let r = replaceText { replaceField.stringValue = r }
+        directory = o.directory
+        rebuildScopeMenu(selecting: directory == nil ? 0 : 1)
+        optionChanged()
         focusQuery()
     }
 
