@@ -38,7 +38,7 @@ enum Prefs {
     static var showBreadcrumbs: Bool { get { get("showBreadcrumbs", true) } set { set("showBreadcrumbs", newValue) } }
     static var foldingEnabled: Bool { get { get("foldingEnabled", true) } set { set("foldingEnabled", newValue) } }
     /// Fold `use` imports / license header comments when a file opens.
-    static var foldImportsOnOpen: Bool { get { get("foldImportsOnOpen", false) } set { set("foldImportsOnOpen", newValue) } }
+    static var foldImportsOnOpen: Bool { get { get("foldImportsOnOpen", true) } set { set("foldImportsOnOpen", newValue) } }
     /// Highlight other occurrences of the identifier under the caret (read / write tints).
     static var highlightOccurrences: Bool { get { get("highlightOccurrences", true) } set { set("highlightOccurrences", newValue) } }
     /// "auto" (Low Power Mode / serious thermal state / battery <= 20 %), "always" or "off". See PowerState.
