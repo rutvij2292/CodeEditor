@@ -50,6 +50,19 @@ final class NPDiagContext {
         prepare()
     }
 
+    /// Function scopes and variable classification, built once per pass.
+    lazy var flow: NPFlow = NPFlow(self)
+    /// Named functions declared outside class bodies: (keyword index, name token index).
+    lazy var localFunctions: [(Int, Int)] = {
+        var out: [(Int, Int)] = []
+        for i in 0..<n where toks[i].kind == .ident && kind[i] != 1 && !isMember(i) && !inImport[i] && lower(i) == "function" {
+            var j = i + 1
+            if punct(j, "&") { j += 1 }
+            if isIdent(j), j + 1 < n, punct(j + 1, "(") { out.append((i, j)) }
+        }
+        return out
+    }()
+
     // MARK: Token helpers
 
     func text(_ i: Int) -> String {

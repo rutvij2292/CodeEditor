@@ -55,7 +55,9 @@ enum SelfTestNativePHPDiag {
             guard let t = FastProject.read(f) else { continue }
             let t0 = Date()
             let list = fp.queue.sync { NativePHPDiag.analyze(url: URL(fileURLWithPath: f), text: t, fp: fp) }
-            worst = max(worst, Date().timeIntervalSince(t0))
+            let took = Date().timeIntervalSince(t0)
+            worst = max(worst, took)
+            if took > 0.4 { fputs("SCAN SLOW \(Int(took * 1000)) ms \(f.dropFirst(path.count + 1)) (\(t.length) chars)\n", stderr) }
             let table = NPLineStarts(t)
             for d in list {
                 byCode[d.code, default: 0] += 1
@@ -104,6 +106,8 @@ enum SelfTestNativePHPDiag {
         SelfTestNativePHP.put(root, il + "Console/Command.php", "<?php\nnamespace Illuminate\\Console;\nclass Command { public function __call($m, $a) {} }\n")
         FastProject.shared(root: root).markDirty()
         NPFiles.clear()
+        VendorIndex.shared(for: root).refreshIfNeeded(force: true)
+        VendorIndex.shared(for: root).waitUntilIdle()           // deterministic: the vendor index is either loaded or not before any check runs
 
         syntaxChecks()
         classChecks()
@@ -240,8 +244,15 @@ enum SelfTestNativePHPDiag {
         check("class: named arguments are not class refs", c(method("        $x = $post->update(title: 'a', body: 'b'); $r = foo(name: Post::class);")).isEmpty)
         check("class: multiple namespaces in one file are skipped", c("<?php\nnamespace A { class X { function f(Nope $n) {} } }\nnamespace B { class Y {} }\n").isEmpty)
         check("class: class_alias files are skipped", c("<?php\nnamespace A;\nclass_alias(\\B\\C::class, 'A\\D');\nclass X { function f(D $d, Nope $n) {} }\n").isEmpty)
+        check("class: HTML templates mixing text and PHP are not analysed semantically", c("<html>\n<body>Use the following format <?php echo $x; ?>\n</body></html>\n").isEmpty && c("Use this text\n<?php new Nope(); ?>").isEmpty)
+        check("class: pure code files with a closing tag are analysed", c("<?php\nnamespace App;\nclass A { function f(Nope $n) {} }\n?>\n") == ["Undefined class 'Nope'"])
+        check("class: code file with a shebang line", c("#!/usr/bin/env php\n<?php\nnamespace App;\nclass A { function f(Nope $n) {} }\n") == ["Undefined class 'Nope'"])
+        check("class: Composer namespace and global autoload-file classes are known", c(method("        $a = \\Composer\\InstalledVersions::getVersion('x');")).isEmpty)
         check("class: Blade file is skipped", run("<?php new Nope();", path: "resources/views/x.blade.php", groups: cl).isEmpty)
-        check("class: tests namespace (autoload-dev style) without psr4 is conservative", c("<?php\nnamespace Tests\\Feature;\nclass ExampleTest { public function a(Foo $x) {} }\n").isEmpty || true)
+        check("class: names outside the project prefixes are judged only once the vendor index is loaded", {
+            let ready = VendorIndex.shared(for: root).isReady
+            return c("<?php\nnamespace Tests\\Feature;\nclass ExampleTest { public function a(Foo $x) {} }\n") == (ready ? ["Undefined class 'Foo'"] : [])
+        }())
         check("class: range covers exactly the name", { () -> Bool in
             let code = method("        $a = new Nope();")
             guard let d = run(code, groups: cl).first else { return false }
@@ -335,7 +346,7 @@ enum SelfTestNativePHPDiag {
         check("var: @var docblock asserts a variable", v("        /** @var \\App\\Models\\Post $injected */\n        return $injected->title;").isEmpty)
         check("var: static property access is not a variable", v("        return Post::$table . self::$count . static::$x;").isEmpty)
         check("var: dynamic property name is a read", v("        return $request->$prop;") == ["Undefined variable '$prop'"])
-        check("var: while assignment", v("        while ($row = array_shift($queue)) { echo $row; }") .isEmpty == false || true)
+        check("var: while assignment", v("        while ($row = array_shift($queue)) { echo $row; }") .isEmpty)
         check("var: assignment in a condition", v("        if (($u = $request->user()) !== null) { return $u; }").isEmpty)
         check("var: for loop", v("        for ($i = 0, $n = 3; $i < $n; $i++) { echo $i; }").isEmpty)
         check("var: match / ternary / null-safe", v("        $x = 1; return match ($x) { 1 => $x, default => $x ?: 0 };").isEmpty)
@@ -404,7 +415,7 @@ enum SelfTestNativePHPDiag {
         check("member: enum static methods are fine", mp("        return Status::from('draft') . Status::tryFrom('x') . Status::cases() . Status::Draft->label();").isEmpty)
         check("member: builtin class receiver -> silent", mp("        $d = new \\DateTime(); return $d->nope() . \\Closure::fromCallable('x');").isEmpty)
         check("member: chained calls are not checked past the first hop", mp("        return $this->go()->nope();").isEmpty)
-        check("member: nullsafe on $this", m("    public function a() { return $this?->nope(); }") == ["Undefined method 'nope'"] || true)
+        check("member: nullsafe on $this", m("    public function a() { return $this?->nope(); }") == ["Undefined method 'nope'"])
         check("member: method named like a property in the same class", m("    public function name() { return 1; }\n    public function a() { return $this->name; }").isEmpty)
         check("member: $this inside an anonymous class is not the outer class", m("    public function a() { return new class { public function f() { return $this->inner(); } public function inner() {} }; }").isEmpty)
         check("member: second class in a file -> silent", codes(head + "class A { public function a() { return $this->x(); } }\nclass B { public function b() { return $this->y(); } }\n", groups: mb).isEmpty)
@@ -419,7 +430,7 @@ enum SelfTestNativePHPDiag {
             FastProject.shared(root: root).markDirty()
             return mp("        return Odd::create(1) . (new Odd)->later();", params: "").isEmpty
         }())
-        check("member: abstract classes calling declared abstract methods", m("    abstract public function hook();\n    public function a() { return $this->hook(); }").isEmpty || true)
+        check("member: abstract classes calling declared abstract methods", m("    abstract public function hook();\n    public function a() { return $this->hook(); }").isEmpty)
     }
 
     // MARK: Argument counts
@@ -718,7 +729,7 @@ enum SelfTestNativePHPDiag {
                     c.apply(list, text: tab.textView.string)
                     check("controller: findings stored and drawn", !c.all.isEmpty && c.squiggleCount == c.visible.count && c.squiggleCount > 0)
                     check("controller: Problems list shows them", NativeProblems.diagnostics(forPath: file.standardizedFileURL.path).contains { $0.code == "undefined-variable" })
-                    check("controller: hover provider returns them", !NativePHPDiagController.hoverDiagnostics(for: file).isEmpty)
+                    check("controller: hover provider returns them", !NativePHPDiagController.hoverDiagnostics(for: tab).isEmpty)
                     let was = c.passes
                     c.apply(list, text: tab.textView.string + "x")             // stale result (buffer length differs) is dropped
                     check("controller: stale results are dropped", c.passes == was)

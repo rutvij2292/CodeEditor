@@ -382,7 +382,7 @@ final class LSPSession: NSResponder {
     private func clearUnderlines() { overlay?.removeFromSuperview(); overlay = nil }
 
     func diagnostics(at offset: Int) -> [LSPDiagnostic] {
-        (allDiagnostics + NativePHPDiagController.hoverDiagnostics(for: url)).filter { NSLocationInRange(offset, $0.range) }.sorted { $0.severity < $1.severity }
+        (allDiagnostics + NativePHPDiagController.hoverDiagnostics(for: tab)).filter { NSLocationInRange(offset, $0.range) }.sorted { $0.severity < $1.severity }
     }
 }
 

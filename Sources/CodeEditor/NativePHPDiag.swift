@@ -67,7 +67,7 @@ enum NativePHPDiag {
             out += NPDiagSyntax.check(text)
             if !out.isEmpty { return out }
         } else if NPDiagSyntax.hasSyntaxError(text) { return [] }
-        guard let fp, text.length <= maxBytes else { return out }
+        guard let fp, text.length <= maxBytes, isPureCode(text) else { return out }
         let lex = PHPLex(text)
         guard lex.count > 0, lex.count <= maxTokens else { return out }
         fp.beginRequest()
@@ -76,6 +76,32 @@ enum NativePHPDiag {
         if groups.contains(.variables) { out += ctx.variablesPass() }
         if groups.contains(.members) || groups.contains(.args) { out += ctx.membersPass(members: groups.contains(.members), args: groups.contains(.args)) }
         return finish(out)
+    }
+
+    /// True when the file is PHP code only: nothing but whitespace outside `<?php ... ?>` blocks (shebang allowed). Templates mixing
+    /// HTML or plain text with PHP are not analysed semantically (their text would be read as code).
+    static func isPureCode(_ ns: NSString) -> Bool {
+        let n = ns.length
+        func skipSpace(_ i: Int) -> Int { var k = i; while k < n, [32, 9, 10, 13].contains(ns.character(at: k)) { k += 1 }; return k }
+        var i = skipSpace(0)
+        if i < n, ns.character(at: i) == 0xFEFF { i = skipSpace(i + 1) }
+        if i + 1 < n, ns.character(at: i) == 35, ns.character(at: i + 1) == 33 {          // shebang
+            i = NSMaxRange(ns.lineRange(for: NSRange(location: i, length: 0)))
+            i = skipSpace(i)
+        }
+        guard i + 1 < n, ns.character(at: i) == 60, ns.character(at: i + 1) == 63 else { return false }   // must open with "<?"
+        var guardCount = 0
+        while i < n, guardCount < 10_000 {
+            guardCount += 1
+            let close = ns.range(of: "?>", options: .literal, range: NSRange(location: i, length: n - i))
+            if close.location == NSNotFound { return true }
+            let next = ns.range(of: "<?", options: .literal, range: NSRange(location: NSMaxRange(close), length: n - NSMaxRange(close)))
+            let gapEnd = next.location == NSNotFound ? n : next.location
+            if skipSpace(NSMaxRange(close)) < gapEnd { return false }                      // text between ?> and the next <?
+            if next.location == NSNotFound { return true }
+            i = next.location + 2
+        }
+        return false
     }
 
     /// Sorted, de-duplicated and capped.

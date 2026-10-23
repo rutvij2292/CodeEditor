@@ -218,6 +218,7 @@ extension NPDiagContext {
         var out: [NPDiag] = []
         let facts = composerFacts
         let aliases = aliasNames
+        let fileTypes = autoloadFileTypes
         let optOut = ns.range(of: "class_alias(", options: .literal).location != NSNotFound || ns.range(of: "spl_autoload_register(", options: .literal).location != NSNotFound
         func judgeable(_ fqn: String) -> Bool {
             if facts.prefixes.contains(where: { fqn.hasPrefix($0) }) { return true }
@@ -229,7 +230,7 @@ extension NPDiagContext {
             if fqn.hasPrefix("Facades\\") { return true }
             if fp.classPath(fqn) != nil { return true }
             if !fqn.contains("\\"), aliases.contains(fqn.lowercased()) { return true }
-            if autoloadFileTypes.contains((fqn.split(separator: "\\").last.map(String.init) ?? fqn).lowercased()) { return true }
+            if fileTypes.contains((fqn.split(separator: "\\").last.map(String.init) ?? fqn).lowercased()) { return true }
             return false
         }
         var badAliases = Set<String>()

@@ -14,6 +14,7 @@ struct NPFn {
 
 struct NPScope {
     var fn: NPFn
+    var parent = -1
     var defs = Set<String>()
     var dynamic = false
     var reads: [Int] = []
@@ -86,7 +87,7 @@ final class NPFlow {
         while i < hi {
             if let f = fns[i], !f.isArrow {
                 let sid = scopes.count
-                scopes.append(NPScope(fn: f))
+                scopes.append(NPScope(fn: f, parent: scope))
                 let headerEnd = f.bodyOpen >= 0 ? f.bodyOpen : f.close
                 for k in i...headerEnd { scopeOf[k] = sid }
                 if f.bodyOpen >= 0 {
@@ -244,11 +245,8 @@ final class NPFlow {
     private func collect() {
         let n = c.n
         // closure captures count as definitions in the enclosing scope
-        for (kwIdx, f) in fns where f.useOpen >= 0 {
-            let outer = kwIdx < n ? outerScope(of: kwIdx) : -1
-            if outer >= 0 {
-                for k in (f.useOpen + 1)..<c.match(f.useOpen) where c.toks[k].kind == .variable { scopes[outer].defs.insert(c.text(k)) }
-            }
+        for s in scopes where s.fn.useOpen >= 0 && s.parent >= 0 {
+            for k in (s.fn.useOpen + 1)..<c.match(s.fn.useOpen) where c.toks[k].kind == .variable { scopes[s.parent].defs.insert(c.text(k)) }
         }
         for i in 0..<n {
             let sid = scopeOf[i]
@@ -269,14 +267,6 @@ final class NPFlow {
             } else if !softMark[i] { scopes[sid].reads.append(i) }
             if i + 1 < n, c.kw(i + 1, "instanceof") { scopes[sid].uncertain.insert(name) }
         }
-    }
-
-    /// The scope that contains the `function` keyword token of a closure (its parent).
-    private func outerScope(of kw: Int) -> Int {
-        // scopeOf[kw] was assigned the new scope; find the enclosing one by scanning back to the nearest token owned by another scope.
-        var k = kw - 1
-        while k >= 0 { if scopeOf[k] != scopeOf[kw] { return scopeOf[k] }; k -= 1 }
-        return -1
     }
 
     private func recordType(_ sid: Int, _ i: Int, _ name: String) {
@@ -323,8 +313,5 @@ final class NPFlow {
 }
 
 extension NPDiagContext {
-    func variablesPass() -> [NPDiag] {
-        // Blade / templates are excluded by the caller; a file without any function has nothing to check.
-        return NPFlow(self).undefinedVariables()
-    }
+    func variablesPass() -> [NPDiag] { flow.undefinedVariables() }
 }

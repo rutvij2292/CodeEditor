@@ -164,9 +164,10 @@ extension NPDiagContext {
             || ns.range(of: "is_callable(", options: .literal).location != NSNotFound
             || ns.range(of: "property_exists(", options: .literal).location != NSNotFound
             || ns.range(of: "__call", options: .literal).location != NSNotFound
+            || ns.range(of: "$this instanceof", options: .literal).location != NSNotFound
         let cur = NativePHPDiagCurCache.parse(ns, lex: lex)
         var cache: [String: NPHier] = [:]
-        let flow = NPFlow(self)
+        let flow = self.flow
         let classBody = typeDecls.first
         let curFqn = cur?.fqn ?? ""
         // The parser must have seen every method of the class body (a class inside `if (!class_exists())` is not parsed completely).
@@ -335,17 +336,6 @@ extension NPDiagContext {
         guard let f = idx.function(key), let t = FastProject.read(f.path), t.range(of: "\nnamespace ", options: .literal).location == NSNotFound,
               let sig = NPFuncIndex.signature(t, nameLoc: f.loc) else { return nil }
         return sig.params
-    }
-
-    /// (keyword index, name token index) of named functions declared outside class bodies.
-    private var localFunctions: [(Int, Int)] {
-        var out: [(Int, Int)] = []
-        for i in 0..<n where toks[i].kind == .ident && kind[i] != 1 && !isMember(i) && !inImport[i] && lower(i) == "function" {
-            var j = i + 1
-            if punct(j, "&") { j += 1 }
-            if isIdent(j), j + 1 < n, punct(j + 1, "(") { out.append((i, j)) }
-        }
-        return out
     }
 }
 

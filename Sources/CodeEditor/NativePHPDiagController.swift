@@ -13,9 +13,10 @@ final class NPDiagOverlay: NSView {
         let origin = tv.textContainerOrigin
         let length = tv.textStorage?.length ?? 0
         let visible = tv.visibleRect.insetBy(dx: 0, dy: -200)
+        let visibleChars = lm.characterRange(forGlyphRange: lm.glyphRange(forBoundingRect: visible, in: tc), actualGlyphRange: nil)
         for d in items {
             let cr = NSIntersectionRange(d.range, NSRange(location: 0, length: length))
-            guard cr.length > 0 else { continue }
+            guard cr.length > 0, NSIntersectionRange(cr, visibleChars).length > 0 else { continue }
             let gr = lm.glyphRange(forCharacterRange: cr, actualCharacterRange: nil)
             let bounds = lm.boundingRect(forGlyphRange: gr, in: tc).offsetBy(dx: origin.x, dy: origin.y)
             guard bounds.intersects(visible), bounds.intersects(dirtyRect.insetBy(dx: -4, dy: -4)) else { continue }
@@ -56,9 +57,9 @@ final class NativePHPDiagController: NSObject {
     static func start() {
         guard !started else { return }
         started = true
-        NPDiagSyntax.prime()
         EditorEvents.onOpen { tab in
             guard NativePHPDiag.handles(tab.url), tab.view is EditorPane else { return }
+            NPDiagSyntax.prime()                      // loads the PHP grammar only once a PHP tab exists
             let c = NativePHPDiagController(tab: tab)
             controllers[ObjectIdentifier(tab)] = c
             c.attach()
@@ -76,9 +77,9 @@ final class NativePHPDiagController: NSObject {
     static func controller(for tab: EditorTab?) -> NativePHPDiagController? { tab.flatMap { controllers[ObjectIdentifier($0)] } }
 
     /// Diagnostics the editor hover should show at `offset` (native findings of the tab, deduplicated against Intelephense).
-    static func hoverDiagnostics(for url: URL) -> [LSPDiagnostic] {
-        guard let c = controllers.values.first(where: { $0.tab?.url.standardizedFileURL == url.standardizedFileURL }) else { return [] }
-        return c.visible.map { LSPDiagnostic(range: $0.range, severity: $0.severity, message: $0.message, source: "PHP", code: $0.code) }
+    static func hoverDiagnostics(for tab: EditorTab?) -> [LSPDiagnostic] {
+        guard let tab, let c = controllers[ObjectIdentifier(tab)] else { return [] }
+        return c.hoverList
     }
 
     weak var tab: EditorTab?
@@ -91,7 +92,8 @@ final class NativePHPDiagController: NSObject {
     private(set) var overlay: NPDiagOverlay?
     /// Last analysis result and the subset shown (no duplicate of a language-server finding).
     private(set) var all: [NPDiag] = []
-    private(set) var visible: [NPDiag] = []
+    private(set) var visible: [NPDiag] = [] { didSet { hoverList = visible.map { LSPDiagnostic(range: $0.range, severity: $0.severity, message: $0.message, source: "PHP", code: $0.code) } } }
+    private(set) var hoverList: [LSPDiagnostic] = []
     private(set) var passes = 0
 
     init(tab: EditorTab) { self.tab = tab }

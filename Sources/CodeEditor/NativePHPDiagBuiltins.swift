@@ -51,7 +51,7 @@ enum NPDiagBuiltins {
     static let names: Set<String> = Set(raw.split(whereSeparator: { $0 == " " || $0 == "\n" }).map { $0.lowercased() })
 
     /// Namespaces of core / extension classes (MongoDB driver, Random, Dom, Pdo ...) that this table cannot enumerate fully.
-    static let namespacePrefixes = ["random\\", "dom\\", "pdo\\", "intl\\", "uri\\", "mongodb\\", "ffi\\", "zstd\\", "ds\\", "swoole\\", "openswoole\\"]
+    static let namespacePrefixes = ["random\\", "dom\\", "pdo\\", "intl\\", "uri\\", "mongodb\\", "ffi\\", "zstd\\", "ds\\", "swoole\\", "openswoole\\", "composer\\"]
 
     static func contains(_ fqn: String) -> Bool {
         let l = fqn.lowercased()
