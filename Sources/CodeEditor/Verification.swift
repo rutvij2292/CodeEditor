@@ -20,6 +20,10 @@ enum Verification {
             case "plans", "plan-diff": PlanSupport.decorate(w, picker!, shot: shot)
             case "files": w.showGoToFile()
             case "recent": w.showRecentFiles()
+            case "locations":
+                if let u = w.projectFiles.first.map({ w.root!.appendingPathComponent($0) }) { w.locationTracker.seedForSnapshot(u) }
+                w.showRecentLocations()
+            case "newfile": w.showNewFile(); QuickPicker.type(AppEnv.value("CE_NEWFILE") ?? "app/Models/Post.php")
             case "actions": w.showFindAction()
             case "artisan": w.showArtisanPalette()
             case "routes": w.showRouteBrowser()

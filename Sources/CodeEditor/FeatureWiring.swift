@@ -24,6 +24,7 @@ extension ProjectWindow {
         installTodoAndBookmarks(root: root)
         installClaudeBridge()
         PlanSupport.start()
+        installRecentLocations()
         onFindInFiles = { [weak self] in self?.showFind(replace: false) }
         onReplaceInFiles = { [weak self] in self?.showFind(replace: true) }
     }

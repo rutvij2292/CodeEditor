@@ -86,6 +86,7 @@ enum SelfTest {
                     fastTierChecks()
                     SelfTestSpeedSearch.run(w: w)
                     SelfTestToolFocus.run(w: w)
+                    SelfTestLocationsNewFile.run(w: w)
                     SelfTestCodeActions.run()
                     SelfTestStructure.run(w: w)
                     SelfTestToolStrip.run(w: w)

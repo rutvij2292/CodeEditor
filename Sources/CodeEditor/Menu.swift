@@ -46,6 +46,7 @@ enum MainMenu {
         recentMenu.delegate = a
         recent.submenu = recentMenu
         main.addItem(menu("File", [
+            item("New File…", #selector(NewFileSupport.show(_:)), "n", target: NewFileSupport.shared),
             item("Open Project…", #selector(AppDelegate.openProjectPanel(_:)), "o", [.command, .control], target: a),
             recent,
             item("Open Project in New Instance…", #selector(AppDelegate.openProjectInNewInstancePanel(_:)), target: a),
@@ -140,6 +141,7 @@ enum MainMenu {
             item("Go to Symbol…", #selector(AppDelegate.goToSymbol(_:)), "o", [.command, .option], target: a),
             item("File Structure", #selector(AppDelegate.fileStructure(_:)), f12, [.command], target: a),
             item("Recent Files", #selector(AppDelegate.recentFiles(_:)), "e", target: a),
+            item("Recent Locations", #selector(RecentLocationsSupport.show(_:)), "e", [.command, .shift], target: RecentLocationsSupport.shared),
             item("Plans…", #selector(PlanSupport.showPlans(_:)), "p", [.command, .option], target: PlanSupport.shared),
             item("Plan Changes Since Last Viewed…", #selector(PlanSupport.showPlanChanges(_:)), target: PlanSupport.shared),
             item("Mark Plan as Reviewed", #selector(PlanSupport.markReviewed(_:)), target: PlanSupport.shared),

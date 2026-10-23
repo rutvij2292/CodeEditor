@@ -91,6 +91,8 @@ final class QuickPicker: NSObject, NSTextFieldDelegate, NSTableViewDataSource, N
         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
     }
 
+    static var isOpen: Bool { current != nil }
+
     static func dismiss() { current?.close(refocus: true) }
 
     /// Re-runs the provider / filter for the open picker (rows that arrive after it was shown, e.g. artisan output).
