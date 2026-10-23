@@ -10,6 +10,14 @@ final class LanguagesPane: SettingsPane {
     private var licenceField: NSSecureTextField?
 
     override func build() {
+        section("PHP")
+        let nativeOnly = NSButton(checkboxWithTitle: "Use native PHP engine only (stop Intelephense)", target: nil, action: nil)
+        nativeOnly.target = action { c in NativePHP.setNativeOnly((c as? NSButton)?.state == .on) }
+        nativeOnly.action = #selector(SettingsAction.fire(_:))
+        nativeOnly.setAccessibilityLabel("Use native PHP engine only")
+        onRefresh { nativeOnly.state = NativePHP.nativeOnly ? .on : .off }
+        row(nil, nativeOnly, help: "Go to definition and hover come from Kode's built-in PHP index (about 0 MB extra). Intelephense (160-600 MB) is not started; features not yet native (find usages, rename, signature help, diagnostics) are unavailable meanwhile. See docs/native-php.md.")
+
         section("Language servers")
         for server in LanguageServers.serverIds {
             let status = infoLabel { [weak self] in self?.statusText(for: server.id) ?? "" }

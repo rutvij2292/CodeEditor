@@ -6,7 +6,7 @@ extension LSPSession {
     func updateLinkHighlight(flags: NSEvent.ModifierFlags, point: NSPoint?) {
         guard flags.contains(.command), !flags.contains(.shift), !flags.contains(.option), let tv = textView,
               let point, tv.visibleRect.contains(point), let off = offsetUnderPoint(point),
-              instance(supporting: "definitionProvider") != nil else { clearLinkHighlight(); return }
+              instance(supporting: "definitionProvider") != nil || NativePHP.handles(url) else { clearLinkHighlight(); return }
         if tab.map({ LanguageServers.suppressHoverUnderline?($0, off) == true }) == true { clearLinkHighlight(); return }
         let word = wordRange(at: off)
         guard word.length > 0 else { clearLinkHighlight(); return }
@@ -15,17 +15,30 @@ extension LSPSession {
         linkToken += 1
         let token = linkToken
         flushChanges()
-        let params: [String: Any] = ["textDocument": ["uri": uri], "position": LSPLineTable(text as NSString).lspPosition(off)]
-        requestChain("definitionProvider", "textDocument/definition", params, timeout: 3) { [weak self] result, _ in
+        let applyLink: () -> Void = { [weak self] in
             guard let self, token == self.linkToken, let tv = self.textView, let lm = tv.layoutManager,
-                  !LSPUIParse.locations(from: (try? result.get()) ?? nil).isEmpty,
-                  NSMaxRange(word) <= (tv.string as NSString).length else { return }
-            // Re-check the modifier is still down and the pointer still over the word.
-            guard NSEvent.modifierFlags.contains(.command) else { return }
+                  NSMaxRange(word) <= (tv.string as NSString).length, NSEvent.modifierFlags.contains(.command) else { return }
             lm.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: NSColor.linkColor,
                                        .foregroundColor: NSColor.linkColor], forCharacterRange: word)
             self.linkRange = word
             NSCursor.pointingHand.set()
+        }
+        if NativePHP.handles(url) {            // native PHP first; Intelephense confirms only when native has no target
+            NativePHP.lookupAsync(url: url, text: text as NSString, offset: off) { [weak self] hit in
+                guard let self, token == self.linkToken else { return }
+                if let hit, hit.targets.contains(where: { !($0.path == self.url.standardizedFileURL.path && NSLocationInRange($0.offset, hit.range)) }) { applyLink(); return }
+                if self.instance(supporting: "definitionProvider") != nil { self.lspLinkCheck(off: off, token: token, apply: applyLink) }
+            }
+            return
+        }
+        lspLinkCheck(off: off, token: token, apply: applyLink)
+    }
+
+    private func lspLinkCheck(off: Int, token: Int, apply: @escaping () -> Void) {
+        let params: [String: Any] = ["textDocument": ["uri": uri], "position": LSPLineTable(text as NSString).lspPosition(off)]
+        requestChain("definitionProvider", "textDocument/definition", params, timeout: 3) { [weak self] result, _ in
+            guard let self, token == self.linkToken, !LSPUIParse.locations(from: (try? result.get()) ?? nil).isEmpty else { return }
+            apply()    // re-checks the modifier is still down and the pointer still over the word
         }
     }
 

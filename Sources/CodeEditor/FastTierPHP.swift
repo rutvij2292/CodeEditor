@@ -10,6 +10,8 @@ struct FTMethod {
     var vis: Int            // 0 public, 1 protected, 2 private
     var params: String      // "Foo $x, int $y = 1" (whitespace collapsed)
     var ret: String         // raw return type text, "" when undeclared
+    var loc = 0             // UTF-16 offset of the name token (NativePHP go-to / hover)
+    var declStart = 0       // offset of the first modifier / `function` (docblock lookup starts before it)
 }
 
 struct FTProp {
@@ -17,7 +19,11 @@ struct FTProp {
     var type: String
     var isStatic: Bool
     var vis: Int
+    var loc = 0
+    var declStart = 0
 }
+
+struct FTLoc { var loc: Int; var declStart: Int }
 
 struct FTRelation {
     var name: String
@@ -46,6 +52,9 @@ final class FTClass {
     var nsLineEnd: Int?
     var openTagEnd: Int?
     var isAbstract = false
+    var nameLoc = 0                 // offset of the class name token
+    var declStart = 0               // offset of the first modifier / class keyword
+    var declLocs: [String: FTLoc] = [:]   // "const:NAME" / "case:NAME" -> position
     // Eloquent
     var table: String?
     var fillable: [String] = []
@@ -150,10 +159,13 @@ enum FTParser {
         guard declIndex >= 0 else { return c }
         c.kind = lex.text(declIndex)
         c.name = lex.text(declIndex + 1)
+        c.nameLoc = lex.toks[declIndex + 1].loc
+        c.declStart = lex.toks[declIndex].loc
         c.fqn = c.ns.isEmpty ? c.name : c.ns + "\\" + c.name
         var j = declIndex - 1
         while j >= 0, lex.toks[j].kind == .ident, ["abstract", "final", "readonly"].contains(lex.text(j)) {
             if lex.text(j) == "abstract" { c.isAbstract = true }
+            c.declStart = lex.toks[j].loc
             j -= 1
         }
         // header
@@ -226,7 +238,8 @@ enum FTParser {
         var k = from
         var mods = Set<String>()
         var typeText = ""
-        func reset() { mods.removeAll(); typeText = "" }
+        var declStart = -1
+        func reset() { mods.removeAll(); typeText = ""; declStart = -1 }
         func vis() -> Int { mods.contains("private") ? 2 : mods.contains("protected") ? 1 : 0 }
         while k < to {
             let t = lex.toks[k]
@@ -239,6 +252,7 @@ enum FTParser {
                 k += 1
             case .ident:
                 let w = lex.text(k)
+                if declStart < 0 { declStart = t.loc }
                 if modifiers.contains(w) { mods.insert(w); k += 1; continue }
                 if w == "use" && typeText.isEmpty {
                     k += 1
@@ -251,13 +265,14 @@ enum FTParser {
                 }
                 if w == "const" && typeText.isEmpty {
                     var name = ""
+                    var nameLoc = 0
                     k += 1
                     while k < to, !lex.isPunct(k, ";") {
                         if lex.isPunct(k, "=") { break }
-                        if lex.toks[k].kind == .ident { name = lex.text(k) }
+                        if lex.toks[k].kind == .ident { name = lex.text(k); nameLoc = lex.toks[k].loc }
                         k += 1
                     }
-                    if !name.isEmpty { c.consts.append(name) }
+                    if !name.isEmpty { c.consts.append(name); c.declLocs["const:" + name] = FTLoc(loc: nameLoc, declStart: declStart) }
                     while k < to, !lex.isPunct(k, ";") {
                         if lex.toks[k].kind == .punct, [40, 91, 123].contains(lex.toks[k].ch), lex.match[k] > k { k = lex.match[k] + 1 } else { k += 1 }
                     }
@@ -265,18 +280,19 @@ enum FTParser {
                 }
                 if w == "case", c.kind == "enum", k + 1 < to, lex.toks[k + 1].kind == .ident {
                     c.cases.append(lex.text(k + 1))
+                    c.declLocs["case:" + lex.text(k + 1)] = FTLoc(loc: lex.toks[k + 1].loc, declStart: declStart)
                     while k < to, !lex.isPunct(k, ";") { k += 1 }
                     k += 1; reset(); continue
                 }
                 if w == "function" {
-                    k = parseFunction(lex, text, c, k, to, mods: mods)
+                    k = parseFunction(lex, text, c, k, to, mods: mods, declStart: declStart)
                     reset(); continue
                 }
                 typeText += (typeText.isEmpty || typeText.hasSuffix("?") || typeText.hasSuffix("|") ? "" : " ") + w
                 k += 1
             case .variable:
                 let name = String(lex.text(k).dropFirst())
-                c.props.append(FTProp(name: name, type: typeText, isStatic: mods.contains("static"), vis: vis()))
+                c.props.append(FTProp(name: name, type: typeText, isStatic: mods.contains("static"), vis: vis(), loc: t.loc, declStart: declStart < 0 ? t.loc : declStart))
                 k += 1
                 if lex.isPunct(k, "="), eloquentArrays.contains(name) {
                     k = parseDefault(lex, c, name, k + 1, to)
@@ -325,11 +341,12 @@ enum FTParser {
         return end + 1
     }
 
-    private static func parseFunction(_ lex: PHPLex, _ text: NSString, _ c: FTClass, _ at: Int, _ to: Int, mods: Set<String>) -> Int {
+    private static func parseFunction(_ lex: PHPLex, _ text: NSString, _ c: FTClass, _ at: Int, _ to: Int, mods: Set<String>, declStart: Int = -1) -> Int {
         var k = at + 1
         if lex.isPunct(k, "&") { k += 1 }
         guard k < to, lex.toks[k].kind == .ident else { return k }
         let name = lex.text(k)
+        let nameTok = k
         k += 1
         guard lex.isPunct(k, "("), lex.match[k] > k else { return k }
         let pOpen = k, pClose = lex.match[k]
@@ -347,7 +364,8 @@ enum FTParser {
                 k += 1
             }
         }
-        c.methods.append(FTMethod(name: name, isStatic: isStatic, vis: vis, params: params, ret: ret))
+        c.methods.append(FTMethod(name: name, isStatic: isStatic, vis: vis, params: params, ret: ret, loc: lex.toks[nameTok].loc,
+                                  declStart: declStart < 0 ? lex.toks[at].loc : declStart))
         var bodyFrom = -1, bodyTo = -1
         if k < to, lex.isPunct(k, "{"), lex.match[k] > k { bodyFrom = k + 1; bodyTo = lex.match[k]; k = lex.match[k] + 1 } else { k += 1 }
 
@@ -400,6 +418,7 @@ enum FTParser {
         func seg(_ a: Int, _ b: Int) {
             guard a < b else { return }
             var v = 0, isProm = false
+            var varLoc = 0
             var type = ""
             var name: String?
             for q in a..<b {
@@ -409,10 +428,10 @@ enum FTParser {
                     if w == "private" { v = 2; isProm = true } else if w == "protected" { v = 1; isProm = true }
                     else if w == "public" || w == "readonly" { isProm = true }
                     else if name == nil { type += w }
-                } else if t.kind == .variable, name == nil { name = String(lex.text(q).dropFirst()) }
+                } else if t.kind == .variable, name == nil { name = String(lex.text(q).dropFirst()); varLoc = t.loc }
                 else if t.kind == .punct, name == nil, t.ch == 63 || t.ch == 124 { type += lex.text(q) }
             }
-            if isProm, let name { c.props.append(FTProp(name: name, type: type, isStatic: false, vis: v)) }
+            if isProm, let name { c.props.append(FTProp(name: name, type: type, isStatic: false, vis: v, loc: varLoc, declStart: lex.toks[a].loc)) }
         }
         while i < to {
             let t = lex.toks[i]

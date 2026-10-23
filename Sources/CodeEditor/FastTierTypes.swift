@@ -242,6 +242,8 @@ final class FTEval {
         case .builder(let m):
             return builderStep(m, member, isCall: isCall, args: args)
         case .instance(let f), .staticRef(let f):
+            if case .staticRef = t, !isCall || member == "from" || member == "tryFrom", let k = hierarchy(f).first, k.kind == "enum",
+               k.cases.contains(member) || member == "from" || member == "tryFrom" { return .instance(f) }     // Status::Draft, Status::from('x')
             if isModel(f) {
                 if let r = findRelation(f, member), !(isStatic) { return relationType(r, call: isCall) }
                 if hierarchy(f).contains(where: { $0.scopes.contains(member) }) { return .builder(f) }
@@ -276,9 +278,9 @@ final class FTEval {
 
     // MARK: Variables
 
-    private struct FnScope { var fn: Int; var params: (Int, Int); var bodyOpen: Int; var bodyClose: Int }
+    struct FnScope { var fn: Int; var params: (Int, Int); var bodyOpen: Int; var bodyClose: Int }
 
-    private func enclosingFunctions(_ at: Int) -> [FnScope] {
+    func enclosingFunctions(_ at: Int) -> [FnScope] {
         var out: [FnScope] = []
         var i = at - 1
         var steps = 0

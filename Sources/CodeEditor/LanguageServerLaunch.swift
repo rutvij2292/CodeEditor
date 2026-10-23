@@ -16,7 +16,10 @@ struct LSPLaunch {
 /// Per-server user preferences (UserDefaults `lsp.<id>.enabled`, default true).
 enum LanguageServerPrefs {
     static func key(_ id: String) -> String { "lsp.\(id).enabled" }
-    static func isEnabled(_ id: String) -> Bool { UserDefaults.standard.object(forKey: key(id)) as? Bool ?? true }
+    static func isEnabled(_ id: String) -> Bool {
+        if id == "intelephense", NativePHP.nativeOnly { return false }      // Settings > Languages > native PHP engine only
+        return UserDefaults.standard.object(forKey: key(id)) as? Bool ?? true
+    }
     static func setEnabled(_ id: String, _ on: Bool) { UserDefaults.standard.set(on, forKey: key(id)) }
     /// Files larger than this are never sent to a language server.
     static let maxFileBytes = 2 * 1024 * 1024
