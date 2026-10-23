@@ -433,10 +433,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         previousProblemHandler = { w in if let tab = w.current, !LanguageServers.nextProblem(in: tab, forward: false) { NSSound.beep() } }
         findUsagesHandler = { w in
             guard let tab = w.current else { return }
+            if NativePHPUI.findUsages(w) { return }
             if !LanguageServers.findUsages(in: tab) { unavailable(w, "Find Usages isn’t available", "No language server is running for this file type yet.") }
         }
         renameHandler = { w in
             guard let tab = w.current else { return }
+            switch NativePHPUI.rename(w) {
+            case .handled: return
+            case .refused(let why):
+                if !LanguageServers.rename(in: tab, over: w.window) { unavailable(w, "Rename isn’t available here", why) }
+                return
+            case .notNative: break
+            }
             if !LanguageServers.rename(in: tab, over: w.window) {
                 unavailable(w, "Rename isn’t available", "The language server for this file doesn’t offer rename. Intelephense’s rename needs a premium licence.")
             }

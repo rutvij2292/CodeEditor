@@ -86,6 +86,7 @@ enum SelfTest {
                     fastTierChecks()
                     SelfTestNativePHP.run()
                     SelfTestNativePHPSig.run()
+                    SelfTestNativePHPRefs.run(w: w)
                     SelfTestSpeedSearch.run(w: w)
                     SelfTestToolFocus.run(w: w)
                     SelfTestLocationsNewFile.run(w: w)
