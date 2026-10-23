@@ -143,6 +143,8 @@ final class TerminalPane: SettingsPane {
         number("Scrollback", range: 500...100_000, step: 500, unit: "lines", get: { Double(Prefs.terminalScrollback) }, set: { Prefs.terminalScrollback = Int($0) })
         checkbox("Notify when a background terminal finishes", label: "Agents", help: "Badge and dock bounce when a background tab stops producing output.",
                  get: { Prefs.terminalNotifyOnIdle }, set: { Prefs.terminalNotifyOnIdle = $0 })
+        checkbox("Alert when an agent finishes or needs input", label: "Alerts", help: "Tab dot, Dock badge / bounce and a macOS notification (not while you are looking at that tab). Uses Claude Code hooks (see docs/claude-code-alerts.md) with the terminal bell and title as fallback.",
+                 get: { Prefs.terminalAgentAlerts }, set: { Prefs.terminalAgentAlerts = $0 })
 
         section("Claude Code")
         checkbox("IDE integration", label: "Enable", help: "Lets the claude CLI connect to this window (selection, diffs, diagnostics) over a localhost-only WebSocket with a random token. Applies to terminals started afterwards.",

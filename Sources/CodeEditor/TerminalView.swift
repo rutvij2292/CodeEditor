@@ -53,6 +53,8 @@ final class CETerminalView: LocalProcessTerminalView {
     var onCycleTab: ((Int) -> Void)?
     /// BEL received (agents such as Claude Code ring it when they need attention). No sound is played.
     var onBell: (() -> Void)?
+    /// Cmd-F: open the terminal find bar.
+    var onFind: (() -> Void)?
     /// Files dropped on the terminal (from the file tree or Finder).
     var onFileDrop: (([URL]) -> Void)?
     var dead = false
@@ -111,6 +113,7 @@ final class CETerminalView: LocalProcessTerminalView {
             case ("c", _): if selection.active { copy(self) }; return true
             case ("v", _): paste(self); return true
             case ("a", _): selectAll(self); return true
+            case ("f", _): if let f = onFind { f(); return true }; return false
             case (_, 123): send(txt: "\u{01}"); return true      // Cmd-Left: line start
             case (_, 124): send(txt: "\u{05}"); return true      // Cmd-Right: line end
             case (_, 51): send(txt: "\u{15}"); return true       // Cmd-Backspace: kill line

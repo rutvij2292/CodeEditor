@@ -345,11 +345,11 @@ extension SelfTest {
         check("notify: output in the watched visible tab is ignored", !term.tabUnread(bg))
         TerminalPanelController.isUserLooking = { _ in false }
         now = now.addingTimeInterval(100)
-        Prefs.terminalNotifyOnIdle = false
+        Prefs.terminalNotifyOnIdle = false; Prefs.terminalAgentAlerts = false
         term.select(0)
         term.simulateBell(tab: bg)
         check("notify: disabled by Prefs.terminalNotifyOnIdle", !term.tabDone(bg))
-        Prefs.terminalNotifyOnIdle = true
+        Prefs.terminalNotifyOnIdle = true; Prefs.terminalAgentAlerts = true
 
         // Status bar toggle.
         tw.statusBar.clickTerminalButton()
