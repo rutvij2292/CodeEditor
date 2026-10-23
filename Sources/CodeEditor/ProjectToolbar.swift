@@ -57,11 +57,11 @@ final class ProjectToolbar: NSObject {
             let b = NSButton(frame: NSRect(x: 0, y: 0, width: 28, height: 24))
             b.bezelStyle = .regularSquare
             b.isBordered = false
-            b.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: item.tip)?
+            b.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: KeymapStore.retip(item.tip))?
                 .withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
             b.imagePosition = .imageOnly
             b.contentTintColor = item.id == "run" ? .systemGreen : .secondaryLabelColor
-            b.toolTip = item.tip
+            b.toolTip = KeymapStore.retip(item.tip)
             b.target = item.target
             b.action = item.action
             b.translatesAutoresizingMaskIntoConstraints = false

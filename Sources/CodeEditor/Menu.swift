@@ -236,6 +236,7 @@ enum MainMenu {
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
             item("Zoom", #selector(NSWindow.performZoom(_:))),
         ]))
+        KeymapStore.apply(to: main)       // user shortcut overrides (Settings > Keymap)
         return main
     }
 
