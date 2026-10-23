@@ -165,7 +165,10 @@ final class CompletionController: NSObject {
             case 116: move(-CompletionListView.visibleRows, clamp: true); return true
             case 121: move(CompletionListView.visibleRows, clamp: true); return true
             case 36, 76: if !cmd { acceptSelected(); return true }
-            case 48: if shift { close(); return false } else { acceptSelected(); return true }
+            case 48:
+                if shift { close(); return false }
+                if flags.isDisjoint(with: [.command, .control, .option]), expandTemplate(requireTopMatch: true) { return true }
+                acceptSelected(); return true
             case 53: close(); return true
             case 123, 124, 115, 119: close(); return false
             case 45 where ctrl: move(1); return true
@@ -173,15 +176,40 @@ final class CompletionController: NSObject {
             case 49 where cmd: return false
             default: break
             }
-        } else if session != nil {
-            if code == 48, flags.isDisjoint(with: [.command, .control, .option]) { return shift ? previousStop() : nextStop() }
-            if code == 53 { endSession(); return true }
+        } else {
+            if code == 48, flags.isDisjoint(with: [.command, .control, .option, .shift]), expandTemplate(requireTopMatch: false) { return true }
+            if session != nil {
+                if code == 48, flags.isDisjoint(with: [.command, .control, .option]) { return shift ? previousStop() : nextStop() }
+                if code == 53 { endSession(); return true }
+            }
         }
         if !cmd, !ctrl, let ch = e.characters?.unicodeScalars.first, ch.value >= 32, ch.value != 127, !(0xF700...0xF8FF).contains(ch.value) {
             pendingTyped = true
             DispatchQueue.main.async { [weak self] in self?.pendingTyped = false }
         }
         return false
+    }
+
+    /// Tab after a complete live-template abbreviation (LiveTemplates.swift) expands it through the snippet machinery.
+    /// With the popup open (`requireTopMatch`) only when the highlighted row is that very abbreviation.
+    private func expandTemplate(requireTopMatch: Bool) -> Bool {
+        let sel = textView.selectedRange()
+        guard sel.length == 0, textView.selectedRanges.count == 1, !textView.multiCaretActive else { return false }
+        let ns = textView.string as NSString
+        let caret = min(sel.location, ns.length)
+        let start = CompletionLex.runStart(ns, caret, CompletionLex.isIdent)
+        guard caret > start, caret - start <= 40, caret >= ns.length || !CompletionLex.isIdent(ns.character(at: caret)) else { return false }
+        let abbrev = ns.substring(with: NSRange(location: start, length: caret - start))
+        guard LiveTemplates.shared.knows(abbrev: abbrev) else { return false }
+        if start > 0, !LiveTemplateCompletion.mayExpand(after: ns.character(at: start - 1)) { return false }
+        if requireTopMatch, !(ranked.indices.contains(selected) && ranked[selected].item.label.lowercased() == abbrev.lowercased()) { return false }
+        let ctx = CompletionContext(text: textView.string, caret: caret, fileURL: url, fileExtension: ext, triggerCharacter: nil, isManual: true,
+                                    prefixRange: NSRange(location: start, length: caret - start))
+        if ext != "md", ext != "markdown", CompletionLex.state(ctx) != .code { return false }
+        guard let t = LiveTemplates.shared.lookup(abbrev, scopes: LiveTemplates.scopes(for: ctx)) else { return false }
+        close()
+        insert(LiveTemplates.item(t, fileURL: url, range: NSRange(location: start, length: caret - start)))
+        return true
     }
 
     private func move(_ delta: Int, clamp: Bool = false) {

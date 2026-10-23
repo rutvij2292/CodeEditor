@@ -2,7 +2,7 @@ import AppKit
 
 enum CompletionKind: String {
     case text, keyword, variable, function, method, property, `class`, interface, `enum`, enumMember, namespace,
-         constant, snippet, file, field, constructor, value, module, `struct`, typeParameter, color, folder, `operator`
+         constant, snippet, template, file, field, constructor, value, module, `struct`, typeParameter, color, folder, `operator`
 }
 
 struct CompletionItem {

@@ -33,6 +33,7 @@ private enum PopupStyle {
         case .keyword, .operator: return ("k", c(0.70, 0.40, 0.80))
         case .constant, .value: return ("c", c(0.80, 0.50, 0.25))
         case .snippet: return ("s", c(0.35, 0.70, 0.40))
+        case .template: return ("⌘", c(0.95, 0.65, 0.20))
         case .module, .namespace: return ("n", c(0.50, 0.55, 0.60))
         case .color: return ("#", c(0.85, 0.35, 0.65))
         case .file, .folder: return ("f", c(0.55, 0.60, 0.65))

@@ -88,6 +88,8 @@ enum SelfTest {
                     SelfTestToolFocus.run(w: w)
                     SelfTestLocationsNewFile.run(w: w)
                     SelfTestCodeActions.run()
+                    SelfTestPHPImports.run(w: w)
+                    SelfTestLiveTemplates.run(w: w)
                     SelfTestStructure.run(w: w)
                     SelfTestToolStrip.run(w: w)
                     SelfTestKeymap.run(app: app)

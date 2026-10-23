@@ -760,6 +760,8 @@ enum SnippetCompletion {
             table = html
         case .css: return []
         }
+        let scopes = LiveTemplates.scopes(for: ctx)
+        table = table.filter { !LiveTemplates.shared.has($0.0, scopes: scopes) }   // live templates shadow built-in snippets
         return table.map { CI.make($0.0, .snippet, detail: $0.1, insert: $0.2, snippet: true, sort: "s" + $0.0, doc: "```\n\($0.2)\n```") }
     }
 }
