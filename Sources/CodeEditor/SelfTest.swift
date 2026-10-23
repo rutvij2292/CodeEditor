@@ -87,6 +87,8 @@ enum SelfTest {
                     SelfTestSpeedSearch.run(w: w)
                     SelfTestToolFocus.run(w: w)
                     SelfTestCodeActions.run()
+                    SelfTestPHPImports.run(w: w)
+                    SelfTestLiveTemplates.run(w: w)
                     SelfTestStructure.run(w: w)
                     SelfTestToolStrip.run(w: w)
                     try? fm.removeItem(at: dir)

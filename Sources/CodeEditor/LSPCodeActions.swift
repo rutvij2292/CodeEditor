@@ -59,19 +59,20 @@ struct LSPCodeAction {
 extension LSPSession {
     /// Alt-Return: asks every server of this file for actions at the caret / selection (with the diagnostics under it) and
     /// shows them in a picker; choosing one applies its edit and / or runs its command.
-    func showCodeActions() {
+    func showCodeActions(extra: [PickerItem] = []) {
         guard let tv = textView else { return }
         let range = tv.selectedRange()
+        if !extra.isEmpty, instances(supporting: "codeActionProvider").isEmpty {
+            LanguageServers.presentActions(extra, in: tv)
+            return
+        }
         fetchCodeActions(range: range) { [weak self] actions in
             guard let self else { return }
-            guard !actions.isEmpty else { LanguageServers.report("No quick fixes or actions available here", session: self); return }
-            let items = actions.map { a in
+            guard !actions.isEmpty || !extra.isEmpty else { LanguageServers.report("No quick fixes or actions available here", session: self); return }
+            let items = extra + actions.map { a in
                 PickerItem(title: a.title, detail: a.kindLabel, symbol: a.symbol, key: a.title + " " + a.kindLabel) { [weak self] in self?.run(a) }
             }
-            let placeholder = "Quick fixes and actions (\(actions.count))"
-            if let hook = LanguageServers.presentPicker { hook(tv.window, placeholder, items); return }
-            guard let window = tv.window else { return }
-            QuickPicker.present(over: window, placeholder: placeholder, items: items)
+            LanguageServers.presentActions(items, in: tv)
         }
     }
 
@@ -163,8 +164,17 @@ extension LanguageServers {
     /// Alt-Return. Returns false (after a hint) when the file has no language-server session.
     @discardableResult
     static func showCodeActions(in tab: EditorTab) -> Bool {
-        guard let s = session(for: tab) else { return false }
-        s.showCodeActions()
+        let native = PHPQuickFixes.items(for: tab)      // native PHP: Import class, Optimize imports
+        if let s = session(for: tab) { s.showCodeActions(extra: native); return true }
+        guard !native.isEmpty else { return false }
+        presentActions(native, in: tab.textView)
         return true
+    }
+
+    static func presentActions(_ items: [PickerItem], in tv: NSTextView) {
+        let placeholder = "Quick fixes and actions (\(items.count))"
+        if let hook = presentPicker { hook(tv.window, placeholder, items); return }
+        guard let window = tv.window else { return }
+        QuickPicker.present(over: window, placeholder: placeholder, items: items)
     }
 }

@@ -119,6 +119,8 @@ enum MainMenu {
             sep,
             item("Reformat Code", #selector(AppDelegate.reformatCode(_:)), "l", [.command, .option], target: a),
             item("Show Quick Fixes and Actions…", #selector(AppDelegate.showQuickFixes(_:)), "\r", [.option], target: a),
+            item("Edit Live Templates…", #selector(LiveTemplates.openTemplatesFile(_:)), "", target: LiveTemplates.shared),
+            item("Optimize PHP Imports", #selector(PHPImportActions.optimizeImports(_:)), "o", [.control, .option], target: PHPImportActions.shared),
             item("Format Document", #selector(AppDelegate.formatDocument(_:)), "l", [.command, .option, .shift], target: a),
             item("Toggle Soft Wrap", Selector(("toggleSoftWrap:")), ""),
             item("Format JSON", #selector(ViewerSystem.formatJSON(_:)), target: ViewerSystem.shared),
