@@ -15,6 +15,10 @@ final class SpeedSearch: NSObject, NSTextFieldDelegate {
     /// Return pressed while nothing matches: the owner may widen the search (the tree hands the query to Go to File).
     var onSearchEverywhere: ((String) -> Void)?
 
+    /// Optional path-style matching ("app/http", "app.http"): expands folders as segments resolve and returns the row to select,
+    /// or nil to fall back to plain fuzzy matching.
+    var pathResolver: ((String) -> Int?)?
+
     private var container: NSView?
     private var field: NSTextField?
     private var hint: NSTextField?
@@ -111,6 +115,16 @@ final class SpeedSearch: NSObject, NSTextFieldDelegate {
     private func update() {
         guard let table, let field else { return }
         let q = field.stringValue
+        if let row = pathResolver?(q) {
+            matches = [row]
+            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            table.scrollRowToVisible(row)
+            hint?.stringValue = "path"
+            field.textColor = .labelColor
+            queryChars = []
+            reloadVisible(table)
+            return
+        }
         queryChars = Array(q.lowercased().filter { !$0.isWhitespace })
         matches = []
         var best: (row: Int, score: Int)?

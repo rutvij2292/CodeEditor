@@ -11,7 +11,8 @@ enum TreeStyle {
     static var muted: NSColor { Theme.hex(dark ? 0x8B93A1 : 0x5D6470) }
     static var guide: NSColor { dark ? NSColor(white: 1, alpha: 0.09) : Theme.hex(0xE6E8EC) }
     static var hover: NSColor { dark ? NSColor(white: 1, alpha: 0.06) : Theme.hex(0xF1F3F5) }
-    static var selection: NSColor { dark ? Theme.hex(0x2F6FEB, alpha: 0.28) : Theme.hex(0xEAF0FC) }
+    static var selection: NSColor { dark ? Theme.hex(0x2F6FEB, alpha: 0.40) : Theme.hex(0xCFE0FC) }
+    static var focusRing: NSColor { Theme.hex(0x2F6FEB, alpha: dark ? 0.9 : 0.8) }
     static var selectionInactive: NSColor { dark ? NSColor(white: 1, alpha: 0.10) : Theme.hex(0xEEF0F3) }
     static var selectionText: NSColor { Theme.hex(dark ? 0xBBD3FF : 0x0B3A8C) }
     static let font = NSFont.systemFont(ofSize: 13)
@@ -113,6 +114,12 @@ final class TreeRowView: NSTableRowView {
     override func drawSelection(in dirtyRect: NSRect) {
         (isEmphasized ? TreeStyle.selection : TreeStyle.selectionInactive).setFill()
         NSBezierPath(roundedRect: pillRect, xRadius: 6, yRadius: 6).fill()
+        if isEmphasized {   // tree has keyboard focus: outline the pill so the focus move (⌘1) is obvious
+            let p = NSBezierPath(roundedRect: pillRect.insetBy(dx: 0.75, dy: 0.75), xRadius: 6, yRadius: 6)
+            p.lineWidth = 1.5
+            TreeStyle.focusRing.setStroke()
+            p.stroke()
+        }
     }
 
     override var isSelected: Bool {

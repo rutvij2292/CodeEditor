@@ -216,6 +216,7 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         outline.onNewFile = { [weak self] in self?.newFile(in: self?.targetDirectory(for: self?.selectedURL)) }
         speed.attach(to: outline) { [weak self] row in (self?.outline.item(atRow: row) as? FileNode)?.url.lastPathComponent }
         speed.onReturn = { [weak self] in self?.activateSelection() }
+        speed.pathResolver = { [weak self] q in self?.resolvePath(query: q) }
         speed.onSearchEverywhere = { [weak self] q in self?.onSearchEverywhere?(q) }
         outline.speedSearch = speed
         outline.registerForDraggedTypes([.fileURL])
@@ -293,6 +294,37 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
             node = next
         }
         return node
+    }
+
+    /// Path-style speed search: "app/http" or "app.http" expands app, then Http, and selects the best entry for the last
+    /// segment. Every segment but the last must name a folder (case-insensitive prefix, else substring); otherwise nil, so
+    /// "app.php" and plain names keep using ordinary fuzzy matching. Expanded folders stay expanded.
+    func resolvePath(query: String) -> Int? {
+        guard let root, query.contains(where: { $0 == "/" || $0 == "." }) else { return nil }
+        let parts = query.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "/" || $0 == "." }).map { String($0).lowercased() }
+        guard parts.count >= 2, !parts[0].isEmpty else { return nil }
+        func pick(_ nodes: [FileNode], _ seg: String, dirsOnly: Bool) -> FileNode? {
+            let pool = dirsOnly ? nodes.filter(\.isDirectory) : nodes
+            return pool.first { $0.url.lastPathComponent.lowercased() == seg }
+                ?? pool.first { $0.url.lastPathComponent.lowercased().hasPrefix(seg) }
+                ?? pool.first { $0.url.lastPathComponent.lowercased().contains(seg) }
+        }
+        var node = root
+        var toExpand: [FileNode] = [root]
+        for seg in parts.dropLast() {
+            if seg.isEmpty { continue }
+            guard let next = pick(node.children, seg, dirsOnly: true) else { return nil }
+            node = next
+            toExpand.append(next)
+        }
+        let last = parts[parts.count - 1]
+        var target = node
+        if !last.isEmpty, let hit = pick(node.children, last, dirsOnly: false) { target = hit }
+        else if !last.isEmpty { return nil }
+        for n in toExpand { outline.expandItem(n) }
+        if target.isDirectory, target === node, last.isEmpty { outline.expandItem(target) }
+        let row = outline.row(forItem: target)
+        return row >= 0 ? row : nil
     }
 
     /// Expands the ancestors of `url` and selects it.

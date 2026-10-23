@@ -25,6 +25,7 @@ final class BranchCompareWindow: NSObject, NSTableViewDataSource, NSTableViewDel
                           backing: .buffered, defer: false)
         super.init()
         window.isReleasedWhenClosed = false
+        DialogMemory.remember(window, as: "BranchCompare")
         window.title = workingTree ? "“\(comparison.other)” vs Working Tree" : "Compare “\(comparison.other)” with “\(current)”"
         if !workingTree { commitRows.append(.header("In \(comparison.other), not in \(current)  (\(comparison.onlyInOther.count))"))
         commitRows += comparison.onlyInOther.map { .commit($0) }

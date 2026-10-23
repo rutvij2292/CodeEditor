@@ -40,6 +40,7 @@ extension ProjectWindow {
         let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         win.isReleasedWhenClosed = false
         win.contentView = host
+        DialogMemory.remember(win, as: "LocalHistoryDiff")
         win.title = "Local History – \(editor.url.lastPathComponent) – \(LocalHistory.describe(revision))"
         let actions = HistoryDiffActions(restore: { [weak self, weak editor, weak win] in
             win?.close()

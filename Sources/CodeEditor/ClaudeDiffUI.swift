@@ -15,6 +15,7 @@ final class ClaudeDiffWindowController: NSObject, NSWindowDelegate {
                           styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         super.init()
         window.isReleasedWhenClosed = false
+        DialogMemory.remember(window, as: "ClaudeDiff")
         window.title = "Claude proposes changes \u{2013} \(diff.url.lastPathComponent)"
         window.delegate = self
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 1100, height: 640 + barHeight))

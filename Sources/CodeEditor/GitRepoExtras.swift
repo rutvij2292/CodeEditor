@@ -269,12 +269,16 @@ extension GitRepo {
 
     /// Files changed across everything a push would send: against the upstream, or from before the oldest new commit.
     func pushChangedFiles(_ p: GitPushPreview) -> [GitFileChange] {
-        let base: String
-        if let up = p.upstream { base = up }
-        else if let oldest = p.commits.last { base = oldest.parents.isEmpty ? "4b825dc642cb6eb9a060e54bf8d69288fbee4904" : oldest.hash + "^" }
-        else { return [] }
+        guard let base = pushBase(p) else { return [] }
         guard let data = try? git(["diff", "--name-status", "-M", "-z", base, "HEAD"], optionalLocks: true) else { return [] }
         return parseNameStatus(data)
+    }
+
+    /// The revision a push is compared against (the empty tree for a root commit).
+    func pushBase(_ p: GitPushPreview) -> String? {
+        if let up = p.upstream { return up }
+        guard let oldest = p.commits.last else { return nil }
+        return oldest.parents.isEmpty ? "4b825dc642cb6eb9a060e54bf8d69288fbee4904" : oldest.hash + "^"
     }
 
     private func parseNameStatus(_ data: Data) -> [GitFileChange] {

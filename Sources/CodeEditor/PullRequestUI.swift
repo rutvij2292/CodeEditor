@@ -290,6 +290,7 @@ final class PRResolverController: NSObject, NSWindowDelegate, NSTableViewDataSou
         super.init()
         window.title = "Resolve Pull Request #\(session.info.number)"
         window.isReleasedWhenClosed = false
+        DialogMemory.remember(window, as: "PullRequestResolve")
         window.minSize = NSSize(width: 980, height: 600)
         window.delegate = self
         window.tabbingMode = .disallowed

@@ -40,6 +40,7 @@ final class PushWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate, NS
     private let reader = DispatchQueue(label: "git.push-window", qos: .userInitiated)
     private var token = 0
     private var root: Node?
+    private var diffWindows: [String: NSWindow] = [:]
 
     private final class Node {
         let name: String
@@ -57,6 +58,7 @@ final class PushWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate, NS
         super.init()
         window.title = "Push Commits to \(repo.root.lastPathComponent)"
         window.minSize = NSSize(width: 620, height: 340)
+        DialogMemory.remember(window, as: "PushWindow")
         build()
         loadFiles(for: nil)
     }
@@ -126,6 +128,8 @@ final class PushWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate, NS
         fileOutline.dataSource = self
         fileOutline.delegate = self
         fileOutline.style = .plain
+        fileOutline.target = self
+        fileOutline.doubleAction = #selector(fileDoubleClicked)
         let fileScroll = NSScrollView()
         fileScroll.documentView = fileOutline
         fileScroll.hasVerticalScroller = true
@@ -134,6 +138,7 @@ final class PushWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate, NS
         let split = NSSplitView()
         split.isVertical = true
         split.dividerStyle = .thin
+        split.autosaveName = "PushWindowSplit"
         split.addArrangedSubview(left)
         split.addArrangedSubview(fileScroll)
         split.setHoldingPriority(.init(260), forSubviewAt: 1)
@@ -192,8 +197,53 @@ final class PushWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate, NS
     }
 
     private func finish(_ request: PushRequest?) {
+        diffWindows.values.forEach { $0.close() }
+        diffWindows = [:]
         if window.sheetParent != nil { window.sheetParent?.endSheet(window) } else { NSApp.stopModal(); window.orderOut(nil) }
         done(request)
+    }
+
+    // MARK: diff
+
+    /// Double-click a file: side-by-side diff of that file before / after the selected commit (or the whole push).
+    @objc private func fileDoubleClicked() {
+        let row = fileOutline.clickedRow
+        guard row >= 0, let node = fileOutline.item(atRow: row) as? Node, let change = node.change else { return }
+        let r = commitTable.selectedRow
+        let commit = preview.commits.indices.contains(r) ? preview.commits[r] : nil
+        let repo = repo, preview = preview
+        let key = (commit?.hash ?? "push") + ":" + change.path
+        if let w = diffWindows[key], w.isVisible { w.makeKeyAndOrderFront(nil); return }
+        reader.async { [weak self] in
+            let oldRev: String? = commit != nil ? commit?.parents.first : repo.pushBase(preview)
+            let newRev = commit?.hash ?? "HEAD"
+            let old = change.status == "A" ? "" : (oldRev.flatMap { try? repo.content(of: change.oldPath ?? change.path, at: $0) } ?? "")
+            let new = change.status == "D" ? "" : ((try? repo.content(of: change.path, at: newRev)) ?? "")
+            let oldTitle = oldRev.map { $0.count > 12 ? String($0.prefix(8)) : $0 } ?? "(none)"
+            let newTitle = commit.map { $0.shortHash } ?? "HEAD"
+            DispatchQueue.main.async {
+                self?.showDiff(key: key, change: change, old: old, new: new, oldTitle: oldTitle, newTitle: newTitle)
+            }
+        }
+    }
+
+    private func showDiff(key: String, change: GitFileChange, old: String, new: String, oldTitle: String, newTitle: String) {
+        guard !AppEnv.headless else { return }
+        let ext = (change.path as NSString).pathExtension
+        let diff = SideBySideDiffView(frame: NSRect(x: 0, y: 0, width: 1100, height: 700))
+        diff.autoresizingMask = [.width, .height]
+        diff.show(old: old, new: new, oldTitle: oldTitle, newTitle: newTitle, fileExtension: ext)
+        let w = NSWindow(contentRect: diff.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        w.isReleasedWhenClosed = false
+        w.contentView = diff
+        w.title = change.path
+        w.minSize = NSSize(width: 600, height: 300)
+        DialogMemory.remember(w, as: "PushFileDiff")
+        if let frame = window.sheetParent?.frame ?? Optional(window.frame) {
+            w.setFrameTopLeftPoint(NSPoint(x: frame.minX + 40, y: frame.maxY - 40))
+        }
+        diffWindows[key] = w
+        w.makeKeyAndOrderFront(nil)
     }
 
     // MARK: files

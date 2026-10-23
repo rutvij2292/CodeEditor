@@ -199,7 +199,7 @@ final class ChangeReviewPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
         let baseTitle = e.baseline == nil ? "No baseline" : "Before Claude (\(e.source?.rawValue ?? "baseline"))"
         diff.show(old: c.old, new: c.new, oldTitle: baseTitle, newTitle: "Current", fileExtension: c.ext)
         window.contentView = diff
-        if diffWindows[e.path] == nil { window.center(); diffWindows[e.path] = window }
+        if diffWindows[e.path] == nil { DialogMemory.remember(window, as: "ClaudeChangesDiff"); window.center(); diffWindows[e.path] = window }
         window.makeKeyAndOrderFront(nil)
     }
 }

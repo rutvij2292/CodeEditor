@@ -51,6 +51,7 @@ final class ClaudeAskPanel: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         super.init()
         panel.title = "Ask Claude · \(context.path):\(context.startLine)–\(context.endLine)"
         panel.isFloatingPanel = true
+        DialogMemory.remember(panel, as: "ClaudeAsk")
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.delegate = self

@@ -878,6 +878,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         win.isReleasedWhenClosed = false
         win.contentView = view
         win.title = "Diff – \(editor.url.lastPathComponent)"
+        DialogMemory.remember(win, as: "BufferDiff")
         diffWindows.append(win)
         win.makeKeyAndOrderFront(nil)
     }
@@ -967,7 +968,9 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
 
     func focusTree() {
         if let id = tabs.selectedID { tree.reveal(URL(fileURLWithPath: id)) }
+        if tree.outline.selectedRow < 0, tree.outline.numberOfRows > 0 { tree.outline.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
         window.makeFirstResponder(tree.outline)
+        tree.outline.enclosingScrollView?.flashScrollers()
     }
 
     func focusEditor() { window.makeFirstResponder(current?.textView) }
