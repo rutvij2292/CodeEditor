@@ -135,7 +135,7 @@ final class PlanDiffWindow: NSObject {
     }
 
     init(title: String, lines: [PlanReview.DiffLine]) {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 520), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window = DialogWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 520), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = title
         window.isReleasedWhenClosed = false
         DialogMemory.remember(window, as: "PlanReviewDiff")

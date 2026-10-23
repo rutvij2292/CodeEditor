@@ -233,7 +233,7 @@ final class PushWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate, NS
         let diff = SideBySideDiffView(frame: NSRect(x: 0, y: 0, width: 1100, height: 700))
         diff.autoresizingMask = [.width, .height]
         diff.show(old: old, new: new, oldTitle: oldTitle, newTitle: newTitle, fileExtension: ext)
-        let w = NSWindow(contentRect: diff.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let w = DialogWindow(contentRect: diff.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         w.isReleasedWhenClosed = false
         w.contentView = diff
         w.title = change.path

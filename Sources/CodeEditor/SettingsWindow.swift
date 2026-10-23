@@ -57,7 +57,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         var index = UserDefaults.standard.integer(forKey: Self.lastTabKey)
         if let pane, let i = Self.panes.firstIndex(where: { $0.title == pane }) { index = i }
         tvc.selectedTabViewItemIndex = min(max(0, index), Self.panes.count - 1)
-        let w = NSWindow(contentViewController: tvc)
+        let w = DialogWindow(contentViewController: tvc)
         w.styleMask = [.titled, .closable, .miniaturizable]
         w.title = Self.panes[tvc.selectedTabViewItemIndex].title
         w.isReleasedWhenClosed = false

@@ -21,7 +21,7 @@ final class BranchCompareWindow: NSObject, NSTableViewDataSource, NSTableViewDel
         self.repo = repo
         self.cmp = comparison
         self.current = current
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 700), styleMask: [.titled, .closable, .resizable],
+        window = DialogWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 700), styleMask: [.titled, .closable, .resizable],
                           backing: .buffered, defer: false)
         super.init()
         window.isReleasedWhenClosed = false

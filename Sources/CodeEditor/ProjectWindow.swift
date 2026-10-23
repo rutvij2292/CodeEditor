@@ -874,7 +874,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         let view = SideBySideDiffView(frame: NSRect(x: 0, y: 0, width: 1100, height: 680))
         view.show(old: disk, new: editor.textView.string, oldTitle: "On disk", newTitle: "Your buffer",
                   fileExtension: editor.url.pathExtension)
-        let win = NSWindow(contentRect: view.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        let win = DialogWindow(contentRect: view.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         win.isReleasedWhenClosed = false
         win.contentView = view
         win.title = "Diff – \(editor.url.lastPathComponent)"

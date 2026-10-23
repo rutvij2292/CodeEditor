@@ -21,3 +21,10 @@ enum DialogMemory {
         }
     }
 }
+
+/// Window for dialogs and read-only viewers: Escape closes it (ends it, when it is a sheet) unless a field is mid-edit.
+final class DialogWindow: NSWindow {
+    override func cancelOperation(_ sender: Any?) {
+        if let parent = sheetParent { parent.endSheet(self) } else { performClose(nil) }
+    }
+}

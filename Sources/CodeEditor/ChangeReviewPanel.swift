@@ -190,7 +190,7 @@ final class ChangeReviewPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
     private func presentDiffWindow(_ e: ChangeReviewStore.Entry) {
         guard !AppEnv.headless else { return }
         let c = diffContents(for: e)
-        let window = diffWindows[e.path] ?? NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 640),
+        let window = diffWindows[e.path] ?? DialogWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 640),
                                                       styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.title = "Claude changes \u{2013} \(e.rel)"
