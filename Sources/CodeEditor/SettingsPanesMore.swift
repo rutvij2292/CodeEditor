@@ -18,6 +18,29 @@ final class LanguagesPane: SettingsPane {
         onRefresh { nativeOnly.state = NativePHP.nativeOnly ? .on : .off }
         row(nil, nativeOnly, help: "Go to definition and hover come from Kode's built-in PHP index (about 0 MB extra). Intelephense (160-600 MB) is not started; features not yet native (find usages, rename, signature help, diagnostics) are unavailable meanwhile. See docs/native-php.md.")
 
+        section("PHP diagnostics")
+        for g in NPDiagGroup.allCases {
+            let box = NSButton(checkboxWithTitle: g.title, target: nil, action: nil)
+            box.target = action { c in
+                g.enabled = (c as? NSButton)?.state == .on
+                NotificationCenter.default.post(name: NativePHPDiagController.settingsDidChange, object: nil)
+            }
+            box.action = #selector(SettingsAction.fire(_:))
+            box.setAccessibilityLabel("PHP diagnostics: \(g.title)")
+            onRefresh { box.state = g.enabled ? .on : .off }
+            row(nil, box, help: g == .syntax ? "Native checks run after edits settle, for the open file only. Rules stay silent when they cannot be certain; with Intelephense running the same problem is never listed twice." : nil)
+        }
+        let severity = NSPopUpButton(frame: .zero, pullsDown: false)
+        severity.addItems(withTitles: ["Warning", "Error"])
+        severity.target = action { c in
+            NativePHPDiag.classSeverity = (c as? NSPopUpButton)?.indexOfSelectedItem == 1 ? 1 : 2
+            NotificationCenter.default.post(name: NativePHPDiagController.settingsDidChange, object: nil)
+        }
+        severity.action = #selector(SettingsAction.fire(_:))
+        severity.setAccessibilityLabel("Severity of undefined classes")
+        onRefresh { severity.selectItem(at: NativePHPDiag.classSeverity == 1 ? 1 : 0) }
+        row("Undefined class severity", severity)
+
         section("Language servers")
         for server in LanguageServers.serverIds {
             let status = infoLabel { [weak self] in self?.statusText(for: server.id) ?? "" }

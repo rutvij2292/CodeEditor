@@ -104,8 +104,14 @@ final class PHPLex {
                     while k < n {
                         var e = k
                         while e < n, u[e] != 10 { e += 1 }
-                        let lineText = ns.substring(with: NSRange(location: k, length: e - k)).trimmingCharacters(in: .whitespaces)
-                        if lineText.hasPrefix(ident) { endAt = e; break }
+                        let rawLine = ns.substring(with: NSRange(location: k, length: e - k))
+                        let lineText = rawLine.trimmingCharacters(in: .whitespaces)
+                        if lineText.hasPrefix(ident) {
+                            // The token ends right after the closing identifier, so the `;` / `)` that follows stays a token of its own.
+                            let lead = rawLine.utf16.count - rawLine.drop(while: { $0 == " " || $0 == "\t" }).utf16.count
+                            endAt = min(e, k + lead + ident.utf16.count)
+                            break
+                        }
                         k = e + 1
                     }
                     for q in start..<endAt where u[q] == 10 { line += 1; lineStart = q + 1 }
