@@ -58,6 +58,21 @@ final class CETerminalView: LocalProcessTerminalView {
     /// Files dropped on the terminal (from the file tree or Finder).
     var onFileDrop: (([URL]) -> Void)?
     var dead = false
+    /// Set by ClaudeComposerWiring: "Ask Claude about selection" for a terminal selection (the window's project handles it).
+    static var askClaudeHandler: ((NSWindow?) -> Bool)?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        if let sel = getSelection(), !sel.isEmpty, Self.askClaudeHandler != nil {
+            let item = NSMenuItem(title: "Ask Claude About Selection…", action: #selector(askClaudeAboutTerminalSelection(_:)), keyEquivalent: "")
+            item.target = self
+            menu.insertItem(item, at: 0)
+            menu.insertItem(.separator(), at: 1)
+        }
+        return menu
+    }
+
+    @objc private func askClaudeAboutTerminalSelection(_ sender: Any?) { _ = Self.askClaudeHandler?(window) }
 
     override func bell(source: Terminal) { onBell?() }
 

@@ -65,9 +65,10 @@ extension LSPSession {
         fetchCodeActions(range: range) { [weak self] actions in
             guard let self else { return }
             guard !actions.isEmpty else { LanguageServers.report("No quick fixes or actions available here", session: self); return }
-            let items = actions.map { a in
+            var items = actions.map { a in
                 PickerItem(title: a.title, detail: a.kindLabel, symbol: a.symbol, key: a.title + " " + a.kindLabel) { [weak self] in self?.run(a) }
             }
+            if let fix = LanguageServers.fixWithClaude { items.append(PickerItem(title: "Fix with Claude…", detail: "Claude Code", symbol: "sparkles") { [weak self] in if let self { fix(self) } }) }
             let placeholder = "Quick fixes and actions (\(actions.count))"
             if let hook = LanguageServers.presentPicker { hook(tv.window, placeholder, items); return }
             guard let window = tv.window else { return }

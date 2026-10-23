@@ -190,6 +190,7 @@ extension ProjectWindow {
 
     /// Opens the Ask Claude chat for the selected code (answered by the Claude Code CLI login, no API key).
     func askClaudeAboutSelection() {
+        if askClaudeAboutTerminalSelection() { return }
         guard let root, let editor = current else { statusBar.flash("Open a file and select some code first"); return }
         let tv = editor.textView
         let sel = tv.selectedRange()

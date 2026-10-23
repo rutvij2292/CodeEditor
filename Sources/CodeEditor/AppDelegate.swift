@@ -322,6 +322,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func sendSelectionTextToTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.sendSelectionText?($0) } }
     @objc func askClaudeAboutSelection(_ sender: Any?) { active?.askClaudeAboutSelection() }
     @objc func sendSelectionToClaude(_ sender: Any?) { active?.sendMentionToClaude() }
+    @objc func showClaudeComposer(_ sender: Any?) { active?.showClaudeComposer() }
+    @objc func reviewDiffWithClaude(_ sender: Any?) { active?.reviewDiffWithClaude() }
     @objc func focusTerminal(_ sender: Any?) {
         guard let w = active else { return }
         if let focus = Self.terminalHandlers.focus { focus(w) } else { w.showTerminal() }
