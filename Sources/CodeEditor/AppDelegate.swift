@@ -8,6 +8,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private weak var lastKeyWindow: ProjectWindow?
     /// Owns session restore (the reopen-windows list). Instances started with `--project`, or while another primary lives, don't.
     private var isPrimaryInstance = true
+    /// Files Finder / "Open With" hands over before launch has finished: opened once every editor hook (viewers, LSP, ...) is installed.
+    private var finishedLaunching = false
+    private var queuedOpens: [URL] = []
 
     // Handlers other features install (menu items call them with the active window; no-ops until set).
     static var nextProblemHandler: ((ProjectWindow) -> Void)?
@@ -114,7 +117,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         installInstanceSupport()
         let launch = LaunchArguments.current
         isPrimaryInstance = !launch.isProjectLaunch && InstanceRegistry.claimPrimary()
-        for url in launch.projects + launch.paths { openPath(url) }
+        finishedLaunching = true
+        for url in launch.projects + launch.paths + queuedOpens { openPath(url) }
+        queuedOpens = []
         if launch.isProjectLaunch, windows.isEmpty, !AppEnv.headless, launch.projects.contains(where: { InstanceRegistry.owner(of: $0) != nil }) {
             NSApp.terminate(nil)      // the project is already open in another instance (which was just raised)
             return
@@ -148,7 +153,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         LanguageServers.stopAll()
     }
 
-    func application(_ application: NSApplication, open urls: [URL]) { urls.forEach(openPath) }
+    func application(_ application: NSApplication, open urls: [URL]) {
+        // macOS delivers these before applicationDidFinishLaunching; a tab created that early misses the EditorEvents hooks
+        // (no Markdown preview, no language server).
+        if finishedLaunching { urls.forEach(openPath) } else { queuedOpens += urls }
+    }
 
     // MARK: Windows and projects
 
