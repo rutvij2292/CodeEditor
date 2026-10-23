@@ -19,6 +19,11 @@ final class FTEval {
     let lex: PHPLex
     let cur: FTClass?
     private var hier: [String: [FTClass]] = [:]
+    // Per-request caches / state for the docblock-aware inference (NativePHPSigTypes.swift).
+    var docCache: [String: NPDoc] = [:]
+    var authGuard: String?
+    var authModelCache: [String: String] = [:]
+    var facadeRootCache: [String: String] = [:]
 
     init(fp: FastProject, text: NSString, lex: PHPLex, cur: FTClass?) {
         self.fp = fp; ns = text; self.lex = lex; self.cur = cur
@@ -52,7 +57,7 @@ final class FTEval {
     private static let sameBuilderCallbacks: Set<String> = ["where", "orWhere", "when", "unless", "tap", "whereNot", "orWhereNot", "chunk", "each"]
     private static let relationCallbacks: Set<String> = ["whereHas", "orWhereHas", "whereDoesntHave", "withWhereHas", "has", "orHas", "with",
                                                          "withCount", "load", "loadMissing", "whereRelation"]
-    private static let keywords: Set<String> = ["return", "echo", "print", "if", "elseif", "while", "foreach", "for", "switch", "match", "fn",
+    static let keywords: Set<String> = ["return", "echo", "print", "if", "elseif", "while", "foreach", "for", "switch", "match", "fn",
                                                 "function", "and", "or", "xor", "new", "use", "throw", "yield", "as", "else", "case", "isset", "empty", "catch"]
 
     // MARK: Hierarchy
@@ -150,6 +155,7 @@ final class FTEval {
 
     func eval(_ lo: Int, _ hi: Int, depth: Int = 0) -> FTType? {
         guard lo < hi, lo < lex.count, depth < 6 else { return nil }
+        authGuard = nil
         var i = lo
         var t: FTType?
         let first = lex.toks[lo]
@@ -181,10 +187,15 @@ final class FTEval {
                 switch w.lowercased() {
                 case "app", "resolve", "make":
                     if let (a, b) = argTokens(open), let n = firstClassConst(a, b), let f = fp.resolveClass(n, in: cur) { t = .instance(f) }
+                    else { t = containerHelper(w.lowercased(), args: argTokens(open)) }
                 case "now", "today": t = .instance("Illuminate\\Support\\Carbon")
                 case "request": t = .instance("Illuminate\\Http\\Request")
                 case "collect": t = .collection(nil)
-                default: break
+                case "auth":
+                    authGuard = nil
+                    if let (a, b) = argTokens(open), a < b, lex.toks[a].kind == .string { authGuard = lex.strValue(a) }
+                    t = .instance(Self.guardFQN)
+                default: t = functionReturn(w, args: argTokens(open))
                 }
                 i = lex.match[open] + 1
             } else { return nil }
@@ -214,7 +225,11 @@ final class FTEval {
         return FTParser.singleRelations.contains(r.kind) ? .instance(rel) : .collection(rel)
     }
 
-    private func methodReturn(_ owner: FTClass, _ m: FTMethod, selfType: String, isStatic: Bool) -> FTType? {
+    private func methodReturn(_ owner: FTClass, _ m: FTMethod, selfType: String, isStatic: Bool, args: (Int, Int)? = nil) -> FTType? {
+        refineReturn(declaredReturn(owner, m, selfType: selfType, isStatic: isStatic), owner: owner, m: m, selfType: selfType, args: args)
+    }
+
+    private func declaredReturn(_ owner: FTClass, _ m: FTMethod, selfType: String, isStatic: Bool) -> FTType? {
         let raw = m.ret
         guard !raw.isEmpty else { return nil }
         let first = FTClass.firstClassName(raw) ?? ""
@@ -242,6 +257,7 @@ final class FTEval {
         case .builder(let m):
             return builderStep(m, member, isCall: isCall, args: args)
         case .instance(let f), .staticRef(let f):
+            if let au = authStep(f, member, isCall: isCall, args: args) { return au }
             if case .staticRef = t, !isCall || member == "from" || member == "tryFrom", let k = hierarchy(f).first, k.kind == "enum",
                k.cases.contains(member) || member == "from" || member == "tryFrom" { return .instance(f) }     // Status::Draft, Status::from('x')
             if isModel(f) {
@@ -254,14 +270,16 @@ final class FTEval {
             if f == "Illuminate\\Support\\Facades\\DB", member == "table", let (a, b) = args, a < b, lex.toks[a].kind == .string { return .table(lex.strValue(a)) }
             if isCall {
                 if let (owner, m) = findMethod(f, member) {
-                    var selfT = f
-                    if case .staticRef = t { selfT = f }
-                    return methodReturn(owner, m, selfType: selfT, isStatic: isStatic)
+                    return methodReturn(owner, m, selfType: f, isStatic: isStatic, args: args)
                 }
-            } else if let (owner, p) = findProp(f, member), !p.type.isEmpty, let ct = owner.classType(p.type), let r = fp.resolveClass(ct, in: nil) {
-                return .instance(r)
+                if case .staticRef = t, let root = facadeRoot(f), findMethod(root, member) != nil {
+                    return step(.instance(root), member, isCall: isCall, isStatic: false, args: args)
+                }
+                return docMemberType(f, member, isCall: true)
+            } else if let (owner, p) = findProp(f, member) {
+                return propType(owner, p, selfType: f)
             }
-            return nil
+            return docMemberType(f, member, isCall: false)
         }
     }
 
@@ -411,7 +429,9 @@ final class FTEval {
         for sc in scopes {
             let pt = paramType(name, sc.params)
             if pt.found {
-                if !pt.type.isEmpty, let c = cur ?? Optional(FTClass()), let ct = c.classType(pt.type), let f = fp.resolveClass(ct, in: nil) {
+                if let dt = docParamType(sc.fn, name, declared: pt.type) {
+                    candidates.append((lex.toks[sc.fn].loc, dt))
+                } else if !pt.type.isEmpty, let c = cur ?? Optional(FTClass()), let ct = c.classType(pt.type), let f = fp.resolveClass(ct, in: nil) {
                     candidates.append((lex.toks[sc.fn].loc, .instance(f)))
                 } else if pt.type.isEmpty, let t = callbackParamType(sc, depth: depth) {
                     candidates.append((lex.toks[sc.fn].loc, t))
@@ -428,10 +448,21 @@ final class FTEval {
         // @var Type $name docblocks between the function start and here
         if atLoc > startLoc {
             let rng = NSRange(location: startLoc, length: atLoc - startLoc)
-            let pat = "@var\\s+([\\\\\\w|?]+)\\s+\\$" + NSRegularExpression.escapedPattern(for: String(name.dropFirst())) + "\\b"
+            let pat = "@var\\s+((?:[^\\s$<]|<[^>]*>)+)\\s+\\$" + NSRegularExpression.escapedPattern(for: String(name.dropFirst())) + "\\b"
             if let re = try? NSRegularExpression(pattern: pat), let m = re.matches(in: ns as String, range: rng).last {
                 let raw = ns.substring(with: m.range(at: 1))
-                if let ct = (cur ?? FTClass()).classType(raw), let f = fp.resolveClass(ct, in: nil) { candidates.append((m.range.location, .instance(f))) }
+                if let t = typeFromDoc(raw, owner: cur, selfType: cur?.fqn ?? "") {
+                    // a docblock directly above `$name = ...` overrides that assignment's inferred type
+                    var loc = m.range.location
+                    let after = NSRange(location: NSMaxRange(m.range), length: min(240, ns.length - NSMaxRange(m.range)))
+                    let close = ns.range(of: "*/", options: .literal, range: after)
+                    if close.location != NSNotFound {
+                        var q = NSMaxRange(close)
+                        while q < ns.length, [32, 9, 10, 13].contains(ns.character(at: q)) { q += 1 }
+                        if q + name.utf16.count <= ns.length, ns.substring(with: NSRange(location: q, length: name.utf16.count)) == name { loc = q + 1 }
+                    }
+                    candidates.append((loc, t))
+                }
             }
         }
         return candidates.max(by: { $0.loc < $1.loc })?.type

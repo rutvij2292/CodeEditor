@@ -27,6 +27,14 @@ Wiring (all additive): `AppDelegate` `beforeDefinition` calls `NativePHP.goToDef
 Adding a feature (phase 2+) means a new method on `NPResolver` / a new `NativePHP*.swift` file that reuses
 `NativePHP.resolver(...)`, `NPResolver.tokenAt`, `findMember`, `memberHit`, `NPFiles`.
 
+## Phase 2a (signature help, type inference, implementation)
+
+| File | Role |
+| --- | --- |
+| `NativePHPSig.swift` | `NPResolver.signatureHelp(at:)`: backward token scan for the innermost call (skips strings/comments, nested calls, arrays; stops at `{` and `;`), callee resolution (member / static / `new` / function / closure variable), parameter splitting, active parameter, LSP-shaped payload rendered by `LSPUIParse.signature`. `LSPSession.showSignature` asks native first and only falls back to Intelephense on `.unknown`. |
+| `NativePHPSigTypes.swift` | FTEval extension: docblock `@return`/`@var`/`@param` types (unions, `static`, `$this`, `Foo[]`, `array<K,V>`, `Collection<K,V>` -> `.collection(Foo)` element hint, `class-string<T>`, basic `@template` and conditional `($x is class-string<T> ? T : mixed)`), property docs, `@property`/`@method`, helper function return types (user + vendor helpers), `auth()->user()` / `Auth::user()` / `$request->user()` / guards from `config/auth.php`, `app(Foo::class)` / `app('cache')` / `app()->make(Foo::class)`, facade roots from `getFacadeAccessor` (alias table) or `@see`. Per-request caches only. |
+| `NativePHPImpl.swift` | Go to Implementation / Type Declaration (`NativePHPNav` menu targets). Implementers: one pass over project PSR-4 files (text prefilter, header regex into a transient array), FQN-confirmed with the class parser, capped at 200 results / 8000 files. No resident inheritance table. |
+
 ## Intelephense features vs native
 
 | Feature | Native status |
@@ -42,21 +50,28 @@ Adding a feature (phase 2+) means a new method on `NPResolver` / a new `NativePH
 | Blade-embedded PHP (`{{ }}`, `{!! !!}`, `@php`, directive arguments) | done |
 | Cmd-hover link underline | done |
 | Completion | done earlier (fast tier) |
-| Signature help | planned (phase 2: reuse `findMember` + param split; trigger on `(` and `,`) |
+| Signature help | done (phase 2a): functions, built-ins, methods, static methods, constructors, closure variables, facades, Eloquent builder forwarding/scopes; active parameter incl. named args, variadics, nested calls, strings/comments; Intelephense only as fallback when the callee is unresolved |
 | Find usages | planned (phase 2: token scan over project files that mention the name, filtered by resolve) |
 | Rename | planned (phase 2, on top of usages; Intelephense needs a licence for it) |
 | Diagnostics (undefined symbol/method, unused import, syntax) | planned (phase 3; tree-sitter syntax errors first) |
 | Document / workspace symbols | partly (SymbolIndex / Go to Symbol exist) |
-| Go to implementation, type definition | planned |
+| Go to implementation (Cmd-Opt-B), type declaration (Ctrl-Shift-B) | done (phase 2a): interface/abstract/concrete method -> implementers + overriders, class/interface -> transitive subclasses (project PSR-4 code only), variable/property/call -> its class |
 | Code actions / formatting | exist separately (PHP import quick fix, Pint) |
 | Inlay hints, semantic tokens, folding via LSP | not planned (tree-sitter highlighting exists) |
 
 ## Accuracy limits
 
 * Only the first type in a file is parsed (one class per file, PSR-4 style).
-* Types come from FTEval: declared types, `new`, assignments, `@var`, params, foreach, Eloquent chains. Docblock-only return
-  types (`@return Foo`) are not used for inference yet, so `auth()->user()->` has no type.
-* No generics, no flow analysis, no union/intersection narrowing beyond the first class name.
+* Types come from FTEval: declared types, docblock `@return`/`@var`/`@param`, `new`, assignments, params, foreach, Eloquent chains,
+  auth/container/facade helpers (see phase 2a). A docblock directly above `$x = ...` overrides the inferred type.
+* Generics are element hints only: `Collection<int, Foo>`, `array<int, Foo>`, `Foo[]` all become one collection-of-Foo type (a plain
+  array of Foo therefore lists Collection members in completion). Templates: only `of Bound` bounds and `class-string<T>` params.
+  No flow analysis, no union/intersection narrowing beyond the first resolvable class name.
+* Auth user: first provider model of the guard in `config/auth.php` (regex parse, not an evaluator); falls back to `App\Models\User`.
+* Signature help: no overload lists (one signature per callee), no help inside `#[Attribute(...)]` or for dynamic callees
+  (`$obj->$m()`, `$class::make()`); callee must be resolvable by the fast tier.
+* Go to Implementation scans the project's PSR-4 source only (not vendor); implementers declared in vendor or generated at runtime are
+  not listed; trait-provided implementations are not followed.
 * Overloads: `__call`/`__get` magic only for Eloquent builder forwarding, facades and `@method`/`@property` tags.
 * Dynamic names (`$obj->$name`, `$class::make()` with variable class) are not resolved.
 * Built-in function/constant/class docs are a curated subset; unknown built-ins give no hover.

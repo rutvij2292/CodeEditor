@@ -18,7 +18,7 @@ struct NPHit {
 }
 
 /// A resolved class member (or Eloquent virtual member).
-private struct NPMember {
+struct NPMember {
     enum Kind: String { case method, property, constant, enumCase, column, docProperty, docMethod, attribute }
     var kind: Kind
     var owner: FTClass
@@ -92,8 +92,8 @@ final class NPResolver {
         return nil
     }
 
-    private func tokText(_ i: Int) -> String { lex.text(i) }
-    private func isOpTok(_ i: Int) -> Bool { lex.isPunct(i, code: PHPTok.arrow) || lex.isPunct(i, code: PHPTok.dcolon) }
+    func tokText(_ i: Int) -> String { lex.text(i) }
+    func isOpTok(_ i: Int) -> Bool { lex.isPunct(i, code: PHPTok.arrow) || lex.isPunct(i, code: PHPTok.dcolon) }
 
     private func lastRange(_ s: String, before: Int) -> Int {
         guard before > 0 else { return -1 }
@@ -140,33 +140,33 @@ final class NPResolver {
 
     // MARK: Paths and texts
 
-    private func rel(_ path: String) -> String {
+    func rel(_ path: String) -> String {
         let root = fp.path + "/"
         return path.hasPrefix(root) ? String(path.dropFirst(root.count)) : path
     }
 
     private func isCurrentFile(_ path: String) -> Bool { path == url.standardizedFileURL.path || path == url.path }
 
-    private func path(of k: FTClass) -> String? {
+    func path(of k: FTClass) -> String? {
         if k === cur { return url.path }
         return fp.classPath(k.fqn)
     }
 
-    private func text(ofFile path: String) -> NSString? { isCurrentFile(path) ? ns : NPFiles.text(path) }
+    func text(ofFile path: String) -> NSString? { isCurrentFile(path) ? ns : NPFiles.text(path) }
 
-    private func text(of k: FTClass) -> NSString? {
+    func text(of k: FTClass) -> NSString? {
         if k === cur { return ns }
         guard let p = fp.classPath(k.fqn) else { return nil }
         return NPFiles.text(p)
     }
 
-    private func target(path: String, offset: Int) -> NPTarget? {
+    func target(path: String, offset: Int) -> NPTarget? {
         guard let t = text(ofFile: path) else { return NPTarget(path: path, offset: offset, line: 1, column: 1) }
         let (l, c) = NPText.lineCol(t, offset)
         return NPTarget(path: path, offset: offset, line: l, column: c)
     }
 
-    private func originLine(owner: String?, path: String?, offset: Int?) -> String {
+    func originLine(owner: String?, path: String?, offset: Int?) -> String {
         var parts: [String] = []
         if let owner, !owner.isEmpty { parts.append("`" + owner + "`") }
         if let path {
@@ -265,7 +265,7 @@ final class NPResolver {
 
     // MARK: Classes
 
-    private func resolveClassName(_ written: String) -> (fqn: String, builtin: Bool)? {
+    func resolveClassName(_ written: String) -> (fqn: String, builtin: Bool)? {
         var w = written
         let lower = w.lowercased()
         if lower == "self" || lower == "static" { return cur.flatMap { $0.fqn.isEmpty ? nil : ($0.fqn, false) } }
@@ -278,7 +278,7 @@ final class NPResolver {
         return nil
     }
 
-    private func classHit(_ written: String, _ range: NSRange) -> NPHit? {
+    func classHit(_ written: String, _ range: NSRange) -> NPHit? {
         guard let (fqn, builtin) = resolveClassName(written) else { return nil }
         if builtin {
             let kind = NPBuiltins.classes[fqn] ?? "class"
@@ -287,7 +287,7 @@ final class NPResolver {
         return classHit(fqn: fqn, range)
     }
 
-    private func classHit(fqn: String, _ range: NSRange) -> NPHit? {
+    func classHit(fqn: String, _ range: NSRange) -> NPHit? {
         var k: FTClass?
         var path: String?
         if let c = cur, c.fqn == fqn { k = c; path = url.path }
@@ -304,7 +304,7 @@ final class NPResolver {
         return NPHit(range: range, targets: targets, markdown: classMarkdown(k, path: path), kind: "class")
     }
 
-    private func short(_ fqn: String) -> String { fqn.split(separator: "\\").last.map(String.init) ?? fqn }
+    func short(_ fqn: String) -> String { fqn.split(separator: "\\").last.map(String.init) ?? fqn }
 
     private func classMarkdown(_ k: FTClass, path: String) -> String {
         var sig = ""
@@ -550,7 +550,7 @@ final class NPResolver {
     }
 
     /// All classes to search for a member: the hierarchy (traits, parents, interfaces), then @mixin/@see targets for facades.
-    private func searchClasses(_ owner: String) -> [FTClass] {
+    func searchClasses(_ owner: String) -> [FTClass] {
         var out: [FTClass] = []
         var seen = Set<String>()
         func add(_ k: FTClass) { if seen.insert(k.fqn).inserted { out.append(k) } }
@@ -569,7 +569,7 @@ final class NPResolver {
         }
     }
 
-    private func findMember(owners: [String], model: String?, name: String, isCall: Bool, isStatic: Bool, kindVariable: Bool) -> NPMember? {
+    func findMember(owners: [String], model: String?, name: String, isCall: Bool, isStatic: Bool, kindVariable: Bool) -> NPMember? {
         var visited = Set<String>()
         var queue = owners
         var extraDocOwners: [FTClass] = []
@@ -708,7 +708,7 @@ final class NPResolver {
 
     // MARK: Member output
 
-    private func memberHit(_ mem: NPMember, _ range: NSRange) -> NPHit? {
+    func memberHit(_ mem: NPMember, _ range: NSRange) -> NPHit? {
         guard let path = mem.path ?? self.path(of: mem.owner) else { return nil }
         var targets: [NPTarget] = []
         if let t = target(path: path, offset: mem.loc) { targets.append(t) }

@@ -373,13 +373,14 @@ extension LSPSession {
 
     func scheduleSignatureCheck() {
         signatureWork?.cancel()
-        guard let tv = textView, let inst = instance(supporting: "signatureHelpProvider") else { return }
+        let inst = instance(supporting: "signatureHelpProvider")
+        guard let tv = textView, inst != nil || NativePHP.handles(url) else { return }
         let ns = tv.string as NSString
         let caret = tv.selectedRange().location
         var trigger: String?
         if caret > 0, caret <= ns.length {
             let c = ns.substring(with: NSRange(location: caret - 1, length: 1))
-            let sig = inst.capabilities["signatureHelpProvider"] as? [String: Any]
+            let sig = inst?.capabilities["signatureHelpProvider"] as? [String: Any]
             let triggers = ((sig?["triggerCharacters"] as? [String]) ?? ["(", ","])
             if triggers.contains(c) { trigger = c }
         }
@@ -397,8 +398,27 @@ extension LSPSession {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 
+    /// Native PHP answers first (Parameter Info / `(` / `,`); Intelephense is asked only when native cannot resolve the callee.
     func showSignature(manual: Bool, trigger: String?) {
-        guard let tv = textView, instance(supporting: "signatureHelpProvider") != nil else { return }
+        guard let tv = textView else { return }
+        guard NativePHP.handles(url) else { lspSignature(manual: manual, trigger: trigger); return }
+        let caret = tv.selectedRange().location
+        NativePHP.signatureHelpAsync(url: url, text: tv.string as NSString, caret: caret) { [weak self] outcome in
+            guard let self, let tv = self.textView, tv.selectedRange().location == caret else { return }
+            switch outcome {
+            case .help(let help):
+                guard let attributed = LSPUIParse.signature(help.lspPayload) else { LSPPopups.signature.hide(); return }
+                let popup = LSPPopups.signature
+                popup.setContent(attributed)
+                popup.show(for: self, anchor: self.screenRect(forCharacterRange: NSRange(location: max(0, caret - 1), length: 1)))
+            case .notInCall: LSPPopups.signature.hide()
+            case .unknown: self.lspSignature(manual: manual, trigger: trigger)
+            }
+        }
+    }
+
+    private func lspSignature(manual: Bool, trigger: String?) {
+        guard let tv = textView, instance(supporting: "signatureHelpProvider") != nil else { LSPPopups.signature.hide(); return }
         flushChanges()
         let caret = tv.selectedRange().location
         let table = LSPLineTable(tv.string as NSString)

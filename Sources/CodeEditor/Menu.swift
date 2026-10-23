@@ -132,6 +132,8 @@ enum MainMenu {
             item("Parameter Info", Selector(("showParameterInfo:")), "p"),
             item("Quick Documentation", Selector(("showQuickDocumentation:")), "j", [.control]),
             item("Go to Declaration", Selector(("goToDefinition:")), "b"),
+            item("Go to Implementation", #selector(NativePHPNav.goToImplementation(_:)), "b", [.command, .option], target: NativePHPNav.shared),
+            item("Go to Type Declaration", #selector(NativePHPNav.goToTypeDeclaration(_:)), "b", [.control, .shift], target: NativePHPNav.shared),
         ]))
 
         main.addItem(menu("Navigate", [
