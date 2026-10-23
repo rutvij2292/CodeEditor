@@ -40,6 +40,8 @@ final class NPResolver {
     let cur: FTClass?
     let ev: FTEval
     let isBlade: Bool
+    /// Resolve-only mode (find usages / rename): no markdown, no file reads for line numbers, no per-call revalidation.
+    var light = false
 
     init(fp: FastProject, url: URL, text: NSString, lex: PHPLex, cur: FTClass?) {
         self.fp = fp; self.url = url; ns = text; self.lex = lex; self.cur = cur
@@ -64,7 +66,8 @@ final class NPResolver {
     // MARK: Public entry
 
     func lookup(at offset: Int, wantDoc: Bool = true) -> NPHit? {
-        fp.beginRequest()
+        light = !wantDoc
+        if wantDoc { fp.beginRequest() }
         if let i = tokenAt(offset) {
             guard inPHP(lex.toks[i].loc) else { return nil }
             let t = lex.toks[i]
@@ -161,6 +164,7 @@ final class NPResolver {
     }
 
     private func target(path: String, offset: Int) -> NPTarget? {
+        if light { return NPTarget(path: path, offset: offset, line: 0, column: 0) }
         guard let t = text(ofFile: path) else { return NPTarget(path: path, offset: offset, line: 1, column: 1) }
         let (l, c) = NPText.lineCol(t, offset)
         return NPTarget(path: path, offset: offset, line: l, column: c)
@@ -307,6 +311,7 @@ final class NPResolver {
     private func short(_ fqn: String) -> String { fqn.split(separator: "\\").last.map(String.init) ?? fqn }
 
     private func classMarkdown(_ k: FTClass, path: String) -> String {
+        if light { return "" }
         var sig = ""
         if k.isAbstract { sig += "abstract " }
         sig += k.kind + " " + (k.name.isEmpty ? k.fqn : k.name)
@@ -371,6 +376,7 @@ final class NPResolver {
             md += "\n\n" + originLine(owner: nil, path: f.path, offset: f.loc)
             return NPHit(range: range, targets: target(path: f.path, offset: f.loc).map { [$0] } ?? [], markdown: md, kind: "function")
         }
+        if light, let f = found { return NPHit(range: range, targets: [NPTarget(path: f.path, offset: f.loc, line: 0, column: 0)], markdown: "", kind: "function") }
         // 3. documented built-ins (no source to jump to)
         if let b = NPBuiltins.functions[name.lowercased()] {
             return NPHit(range: range, targets: [], markdown: "```php\nfunction \(b.signature)\n```\n\n\(b.doc)\n\nPHP built-in function.", kind: "function")
@@ -382,6 +388,7 @@ final class NPResolver {
         var name = written
         if name.hasPrefix("\\") { name.removeFirst() }
         if let b = name.lastIndex(of: "\\") { name = String(name[name.index(after: b)...]) }
+        if light, let f = NPFuncIndex.shared(root: fp.path).constant(name) { return NPHit(range: range, targets: [NPTarget(path: f.path, offset: f.loc, line: 0, column: 0)], markdown: "", kind: "constant") }
         if let f = NPFuncIndex.shared(root: fp.path).constant(name), let t = text(ofFile: f.path) {
             let line = NPText.lineText(t, f.loc)
             let md = "```php\n\(line)\n```\n\n" + originLine(owner: nil, path: f.path, offset: f.loc)
@@ -718,6 +725,7 @@ final class NPResolver {
     private func visWord(_ v: Int) -> String { v == 2 ? "private " : v == 1 ? "protected " : "public " }
 
     private func memberMarkdown(_ mem: NPMember) -> String {
+        if light { return "" }
         var sig = ""
         var docNS: NSString?
         let docPos = mem.declStart

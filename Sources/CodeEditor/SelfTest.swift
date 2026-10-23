@@ -85,6 +85,7 @@ enum SelfTest {
                     multiCaretChecks(w: w, dir: fm.temporaryDirectory)
                     fastTierChecks()
                     SelfTestNativePHP.run()
+                    SelfTestNativePHPRefs.run(w: w)
                     SelfTestSpeedSearch.run(w: w)
                     SelfTestToolFocus.run(w: w)
                     SelfTestLocationsNewFile.run(w: w)

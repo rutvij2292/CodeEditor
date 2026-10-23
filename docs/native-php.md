@@ -43,13 +43,34 @@ Adding a feature (phase 2+) means a new method on `NPResolver` / a new `NativePH
 | Cmd-hover link underline | done |
 | Completion | done earlier (fast tier) |
 | Signature help | planned (phase 2: reuse `findMember` + param split; trigger on `(` and `,`) |
-| Find usages | planned (phase 2: token scan over project files that mention the name, filtered by resolve) |
-| Rename | planned (phase 2, on top of usages; Intelephense needs a licence for it) |
+| Find usages (Alt-F7) | done (phase 2b): classes, members (override/interface family), props, consts, enum cases, functions, global consts, local vars/params; native first, LSP only when native finds nothing. See "Find usages and rename" |
+| Rename (Shift-F6) | done (phase 2b): classes (+ PSR-4 file, `use`, `::class`, FQCN strings, docblocks), methods (family through hierarchy, array callables, scopes), props (incl. promoted), consts, enum cases, functions, variables/params; preview list, conflict refusal, vendor warning |
 | Diagnostics (undefined symbol/method, unused import, syntax) | planned (phase 3; tree-sitter syntax errors first) |
 | Document / workspace symbols | partly (SymbolIndex / Go to Symbol exist) |
 | Go to implementation, type definition | planned |
 | Code actions / formatting | exist separately (PHP import quick fix, Pint) |
 | Inlay hints, semantic tokens, folding via LSP | not planned (tree-sitter highlighting exists) |
+
+## Find usages and rename (phase 2b)
+
+| File | Role |
+| --- | --- |
+| `NativePHPRefs.swift` | `NPRefs.identify` (symbol at caret via `NPResolver` in light mode), bounded mmap byte prefilter of PHP files (vendor only on request), per-file lex + resolve of name-matching tokens, `collect` / `collectAsync` (chunks of 6 files on the project's fast-tier queue, cancellable `CancelToken`, cap 2000), `NPRelations` (hierarchy on demand). |
+| `NativePHPRename.swift` | `NPRename.plan` (validation, conflicts, member family roots, file rename), `prepare` + `apply` (open tabs via text view, one undo group per file; closed files atomic after a disk re-check; then PSR-4 file move). |
+| `NativePHPRefsUI.swift` | Alt-F7 list (existing `QuickPicker`, rows `snippet - rel:line [role]`), Shift-F6 prompt, preview list whose first row applies, vendor confirm. |
+
+Matching rule: a token counts when `NPResolver` resolves it to a declaration of the same kind and name in a class related to the target (same class, ancestor or descendant). Rename widens this to the whole family (every class below the topmost declaring ancestor, so interface implementations and siblings are renamed together). Roles: declaration, import, read, write, usage, docblock, string. Member usages whose receiver type is unknown are listed as "possible" (find) and never edited (rename warns with a count).
+
+Cost: nothing resident. A search maps each candidate file once, lexes it once, keeps hits only (snippet text, no file text), and uses at most the 6-entry `NPFiles` cache. Rename of a vendor symbol scans vendor/ and asks for confirmation.
+
+## Accuracy limits (find usages / rename)
+
+* Untyped receivers (`$x->publish()` with unknown `$x`) are not resolved: shown as possible in Find Usages, not renamed.
+* Eloquent columns/attributes, `@property`/`@method` members and accessors are not supported (rename refuses accessors); scopes and relations are.
+* Named arguments, `compact('x')`, `$$var`, `'callable'` function strings, Blade components and `route()`/`view()` names are not followed.
+* Only the first type per file is parsed; members of additional classes in one file are invisible.
+* String and docblock hits for classes are matched by FQCN/short name resolved through the file's `use` list; aliases are found but never edited.
+* The target's declaration file is read from disk unless the tab is dirty; dirty tabs are scanned from their buffer.
 
 ## Accuracy limits
 
