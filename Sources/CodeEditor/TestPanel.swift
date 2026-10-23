@@ -2,12 +2,14 @@ import AppKit
 
 /// "Tests" tab of the bottom panel: toolbar (status, Re-run, Re-run Failed, Stop, Output), the result list of the last run,
 /// and a text area showing the raw run output or the selected failure's message.
-final class TestPanelController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+final class TestPanelController: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
     let view = NSView()
     var onRerun: (() -> Void)?
     var onRerunFailed: (() -> Void)?
     var onStop: (() -> Void)?
     var onOpen: ((String, Int) -> Void)?
+    /// "Fix with Claude" on a failed test row (context menu).
+    var onFixWithClaude: ((TestResult) -> Void)?
 
     private let status = NSTextField(labelWithString: "")
     private let rerun = NSButton(title: "Re-run", target: nil, action: nil)
@@ -46,6 +48,7 @@ final class TestPanelController: NSObject, NSTableViewDataSource, NSTableViewDel
         table.dataSource = self
         table.delegate = self
         table.doubleAction = #selector(doubleClicked)
+        let ctx = NSMenu(); ctx.delegate = self; table.menu = ctx
         speed.attach(to: table) { [weak self] row in
             guard let r = self?.rows, r.indices.contains(row) else { return nil }
             return (r[row].className.map { $0 + " " } ?? "") + r[row].name
@@ -154,6 +157,19 @@ final class TestPanelController: NSObject, NSTableViewDataSource, NSTableViewDel
         let r = rows[table.selectedRow]
         text.string = r.message.isEmpty ? r.name : r.message
         text.scrollToBeginningOfDocument(nil)
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard onFixWithClaude != nil, table.clickedRow >= 0, table.clickedRow < rows.count, rows[table.clickedRow].isFailure else { return }
+        let item = NSMenuItem(title: "Fix with Claude…", action: #selector(fixClicked), keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+    }
+
+    @objc private func fixClicked() {
+        guard table.clickedRow >= 0, table.clickedRow < rows.count else { return }
+        onFixWithClaude?(rows[table.clickedRow])
     }
 
     @objc private func doubleClicked() {

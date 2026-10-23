@@ -131,6 +131,7 @@ extension ProjectWindow {
             self?.open(URL(fileURLWithPath: path), line: line)
             self?.current?.textView.goToLine(line, column: 1)
         }
+        c.panel.onFixWithClaude = { [weak self] r in self?.fixTestWithClaude(r) }
         registerToolPanel(id: "tests", title: "Tests", view: c.panel.view)
         // Lives as long as the window (weak self); the token is not needed.
         _ = NotificationCenter.default.addObserver(forName: TestResultsStore.didChange, object: nil, queue: .main) { [weak self] n in

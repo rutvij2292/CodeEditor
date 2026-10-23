@@ -92,6 +92,7 @@ enum MainMenu {
             item("Send Selection Text to Terminal", #selector(AppDelegate.sendSelectionTextToTerminal(_:)), "k", [.command, .option, .shift], target: a),
             item("Ask Claude About Selection…", #selector(AppDelegate.askClaudeAboutSelection(_:)), "/", [.command, .option], target: a),
             item("Send Selection to Claude (@mention)", #selector(AppDelegate.sendSelectionToClaude(_:)), "j", [.command, .option], target: a),
+            item("Write Claude Prompt…", #selector(AppDelegate.showClaudeComposer(_:)), "\r", [.command, .shift], target: a),
         ]))
 
         main.addItem(menu("Code", [
@@ -178,6 +179,7 @@ enum MainMenu {
             item("Show History for File", #selector(AppDelegate.showFileHistory(_:)), "", target: a),
             item("Annotate with Git Blame", #selector(AppDelegate.toggleBlameAnnotations(_:)), "a", [.command, .option], target: a),
             toggleItem("Toggle Inline Blame", "inlineBlame", a),
+            item("Review Diff with Claude…", #selector(AppDelegate.reviewDiffWithClaude(_:)), "", target: a),
             sep,
             item("Show Git Panel", #selector(AppDelegate.toggleGit(_:)), "9", target: a),
         ]))

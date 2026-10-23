@@ -138,10 +138,12 @@ private final class ProblemCell: NSTableCellView {
 }
 
 /// Problems tool window: files with diagnostics, expandable to individual problems.
-final class ProblemsPanelController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate {
+final class ProblemsPanelController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
     let view = NSView()
     /// Returns the file shown in the editor; used by the "Current file" filter.
     var currentFileProvider: (() -> URL?)?
+    /// "Fix with Claude" on a problem row (context menu).
+    var onFixWithClaude: ((URL, FileProblems.Diagnostic) -> Void)?
 
     private let root: URL
     private let openFile: (URL, Int, Int) -> Void
@@ -198,6 +200,7 @@ final class ProblemsPanelController: NSObject, NSOutlineViewDataSource, NSOutlin
         outline.delegate = self
         outline.target = self
         outline.doubleAction = #selector(activate)
+        let ctx = NSMenu(); ctx.delegate = self; outline.menu = ctx
         outline.onActivate = { [weak self] in self?.activate() }
         speed.attach(to: outline) { [weak self] row in
             switch self?.outline.item(atRow: row) {
@@ -384,6 +387,19 @@ final class ProblemsPanelController: NSObject, NSOutlineViewDataSource, NSOutlin
         }
         cell.needsLayout = true
         return cell
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard onFixWithClaude != nil, outline.clickedRow >= 0, outline.item(atRow: outline.clickedRow) is ProblemNode else { return }
+        let item = NSMenuItem(title: "Fix with Claude…", action: #selector(fixClicked), keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+    }
+
+    @objc private func fixClicked() {
+        guard outline.clickedRow >= 0, let p = outline.item(atRow: outline.clickedRow) as? ProblemNode else { return }
+        onFixWithClaude?(p.url, p.d)
     }
 
     @objc private func activate() {

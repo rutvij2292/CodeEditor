@@ -14,7 +14,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     private var history: [String] = []
     private var historyIndex = -1
     private var navigating = false
-    private var index: ProjectIndex?
+    private(set) var index: ProjectIndex?
     var findPanel: FindPanelController?
     var problemsPanel: ProblemsPanelController?
     var terminalPanel: TerminalPanelController?

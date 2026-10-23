@@ -23,6 +23,7 @@ extension ProjectWindow {
         installTestsPanel(root: root)
         installTodoAndBookmarks(root: root)
         installClaudeBridge()
+        ClaudeComposerWiring.install()
         PlanSupport.start()
         onFindInFiles = { [weak self] in self?.showFind(replace: false) }
         onReplaceInFiles = { [weak self] in self?.showFind(replace: true) }
@@ -64,6 +65,7 @@ extension ProjectWindow {
             self?.current?.textView.goToLine(line, column: column)
         }
         problems.currentFileProvider = { [weak self] in self?.current?.url }
+        problems.onFixWithClaude = { [weak self] url, d in self?.fixProblemWithClaude(url: url, d) }
         problemsPanel = problems
         registerToolPanel(id: "problems", title: "Problems", view: problems.view)
         problemsObserver = NotificationCenter.default.addObserver(forName: LanguageServers.problemsDidChange, object: nil, queue: .main) { [weak self] _ in
