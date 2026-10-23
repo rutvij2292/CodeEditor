@@ -65,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         CompletionSystem.start()
         ViewerSystem.start()
+        NativePHPDiagController.start()
         CompletionSystem.symbolProvider = { [weak self] in self?.active?.symbolEntries ?? [] }
         LanguageServers.start()
         LanguageServers.openLocation = { [weak self] url, line, _ in self?.active?.open(url, line: line) }

@@ -160,6 +160,7 @@ enum SettingsDefaults {
     static func restoreLanguages() {
         for s in LanguageServers.serverIds { UserDefaults.standard.removeObject(forKey: LanguageServerPrefs.key(s.id)) }
         UserDefaults.standard.removeObject(forKey: NativePHP.nativeOnlyKey)
+        NativePHPDiag.resetPrefs()
     }
 
     static func restoreTerminal() {

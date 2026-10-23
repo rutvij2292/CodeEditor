@@ -42,7 +42,7 @@ extension LanguageServers {
                 return FileProblems.Diagnostic(severity: d.severity, message: d.message, line: a.line + 1, column: a.character + 1,
                                                endLine: b.line + 1, endColumn: b.character + 1, source: d.source, code: d.code)
             }
-            out.append(FileProblems(url: s.url.standardizedFileURL, diagnostics: ds))
+            out.append(FileProblems(url: s.url.standardizedFileURL, diagnostics: NativePHPDiag.merged(ds, path: path)))
         }
         out += NativeProblems.problems(forRoot: root, excluding: seen)     // JSON / YAML syntax checks (ViewerSystem.swift)
         out = TestResultsStore.shared.merged(into: out, root: root)         // failed tests (TestResultsStore.swift)
