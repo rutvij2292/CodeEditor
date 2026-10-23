@@ -138,7 +138,7 @@ enum SettingsDefaults {
                               "foldImportsOnOpen", "inlineBlame", "defaultIndentSize", "defaultIndentUsesTabs",
                               "completionMinChars", "completionDelayMs"]
     static let terminalPrefs = ["terminalDock", "terminalFontName", "terminalFontSize", "terminalCursorStyle", "terminalScrollback",
-                                "terminalShell", "terminalAgents", "terminalNotifyOnIdle"]
+                                "terminalShell", "terminalAgents", "terminalNotifyOnIdle", "terminalAgentAlerts"]
 
     static func restoreGeneral() {
         Theme.setMode(.system)

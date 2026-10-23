@@ -4,7 +4,7 @@ import SwiftTerm
 // MARK: - Tab strip
 
 private final class TerminalTabStrip: NSView {
-    struct Item { var title: String; var unread: Bool; var done: Bool; var dead: Bool }
+    struct Item { var title: String; var unread: Bool; var done: Bool; var dead: Bool; var waiting = false }
     var items: [Item] = [] { didSet { needsDisplay = true } }
     var selected = 0 { didSet { needsDisplay = true } }
     /// Label of the Agent button when there is room ("Claude Code"); nil shows "Agent".
@@ -55,7 +55,7 @@ private final class TerminalTabStrip: NSView {
             let item = items[i]
             var x = r.minX + 8
             if item.unread || item.done {
-                (item.done ? NSColor.systemGreen : NSColor.systemOrange).setFill()
+                (item.waiting ? NSColor.systemRed : (item.done ? NSColor.systemGreen : NSColor.systemOrange)).setFill()
                 NSBezierPath(ovalIn: NSRect(x: x, y: r.midY - 3, width: 6, height: 6)).fill()
                 x += 10
             }
@@ -163,6 +163,10 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         var lockedTitle = false
         var unread = false
         var done = false
+        /// Set by a hook / BEL / title signal (nil for plain idle detection).
+        var alert: AgentAlertKind?
+        /// Last window title looked like a working agent (spinner), so the next idle title means "finished".
+        var titleWorking = false
         var exited = false
         var launchedAt = Date()
         init(view: CETerminalView, title: String) {
@@ -190,6 +194,7 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
     private var observers: [NSObjectProtocol] = []
     private var idleTracker = TerminalIdleTracker()
     private var idleTimer: Timer?
+    private var findBar: TerminalFindBar?
     /// Clock for the idle detector (tests inject a fake one).
     var clock: () -> Date = Date.init
     private var appliedScrollback = TerminalPanelController.scrollbackLines
@@ -360,6 +365,7 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
     /// Kills every shell (process groups) and frees all views. Safe to call repeatedly.
     func terminate() {
         let hadDone = hasDoneTabs
+        closeFind(refocus: false)
         for t in tabs { Self.kill(t, wait: false); t.view.removeFromSuperview(); idleTracker.clear(t.id) }
         tabs.removeAll()
         active = 0
@@ -373,6 +379,7 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
             for t in c.tabs { kill(t, wait: true); t.view.removeFromSuperview() }
             c.tabs.removeAll()
         }
+        AgentAlertServer.shared.stop()
     }
 
     /// Ctrl-Tab / Shift-Cmd-] style cycling, wrapping at both ends.
@@ -383,6 +390,7 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
 
     func select(_ index: Int) {
         guard tabs.indices.contains(index) else { return }
+        if index != active { closeFind(refocus: false) }
         active = index
         for (i, t) in tabs.enumerated() { t.view.isHidden = i != index }
         clearUnread(index)
@@ -449,6 +457,7 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         tv.onCloseTab = { [weak self] in self?.closeTab() }
         tv.onCycleTab = { [weak self] d in self?.cycleTab(d) }
         tv.onLink = { [weak self] in self?.handleLink($0) }
+        tv.onFind = { [weak self] in self?.showFind() }
         tv.onBell = { [weak self, weak tab] in if let self, let tab { self.bellRang(tab) } }
         tv.onFileDrop = { [weak self] in self?.onFilesDropped?($0) }
         tv.enableFileDrops()
@@ -467,9 +476,10 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         let hooks = Self.testHooks
         let exe: String, args: [String]
         if let e = hooks.executable { exe = e; args = hooks.args } else { exe = TerminalEnvironment.resolvedShell; args = ["-l", "-i"] }
+        let extra = hooks.extraEnvironment.merging(extraEnvironment) { _, new in new }
+            .merging(AgentAlerts.environment(tabID: tab.id)) { _, new in new }
         let env = TerminalEnvironment.build(base: ProcessInfo.processInfo.environment,
-                                            path: TerminalEnvironment.effectivePath(),
-                                            extra: hooks.extraEnvironment.merging(extraEnvironment) { _, new in new })
+                                            path: TerminalEnvironment.effectivePath(), extra: extra)
         tab.exited = false; tab.view.dead = false; tab.launchedAt = Date()
         tab.view.startProcess(executable: exe, args: args, environment: env, execName: nil, currentDirectory: root.path)
     }
@@ -514,10 +524,14 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         for (i, t) in tabs.enumerated() where i == active {
             t.view.frame = NSRect(x: 4, y: h, width: max(40, b.width - 4), height: max(20, b.height - h))
         }
+        if let bar = findBar {
+            let w = min(TerminalFindBar.size.width, max(200, b.width - 24))
+            bar.frame = NSRect(x: b.width - w - 14, y: h + 4, width: w, height: TerminalFindBar.size.height)
+        }
     }
 
     private func refreshStrip() {
-        strip.items = tabs.map { .init(title: $0.title, unread: $0.unread, done: $0.done, dead: $0.exited) }
+        strip.items = tabs.map { .init(title: $0.title, unread: $0.unread, done: $0.done, dead: $0.exited, waiting: $0.alert == .waiting) }
         strip.selected = active
         strip.agentTitle = TerminalAgents.primary(in: TerminalAgents.detected())?.title
     }
@@ -542,15 +556,36 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
     }
 
     private func bellRang(_ tab: Tab) {
+        if Prefs.terminalAgentAlerts { raiseAlert(tab, .waiting); return }
         guard Prefs.terminalNotifyOnIdle else { return }
         if idleTracker.bell(tab.id, watched: isWatched(tab)) { markDone([tab.id]) }
     }
 
     private func markDone(_ ids: [Int]) {
-        for t in tabs where ids.contains(t.id) { t.done = true; t.unread = true }
+        for t in tabs where ids.contains(t.id) && !t.done { t.done = true; t.unread = true }
         refreshStrip()
         onActivity?()
         Self.refreshNotifier(newlyDone: true)
+    }
+
+    /// Hook event from `AgentAlertServer` (tab ids are process-wide). Returns whether a tab took it.
+    @discardableResult
+    static func deliverAlert(tab id: Int, kind: AgentAlertKind) -> Bool {
+        for c in live.allObjects { if let t = c.tabs.first(where: { $0.id == id }) { c.raiseAlert(t, kind); return true } }
+        return false
+    }
+
+    /// An agent tab finished a turn or wants input: dot on the tab, dock badge / bounce (app inactive) and a user notification.
+    /// Nothing happens while the user is looking at that tab. A "waiting" alert replaces "finished", never the other way round.
+    private func raiseAlert(_ tab: Tab, _ kind: AgentAlertKind) {
+        guard Prefs.terminalAgentAlerts, !isWatched(tab) else { return }
+        if tab.done, tab.alert == kind || tab.alert == .waiting { return }
+        idleTracker.bell(tab.id, watched: false)   // keeps the idle detector from alerting a second time
+        tab.alert = kind; tab.done = true; tab.unread = true
+        refreshStrip()
+        onActivity?()
+        Self.refreshNotifier(newlyDone: true)
+        AgentNotifier.post(title: tab.title, body: "\(tab.lockedTitle ? tab.title : "The terminal") \(kind.message)")
     }
 
     private func startIdleTimer() {
@@ -580,7 +615,7 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         idleTracker.clear(t.id)
         guard t.unread || t.done else { return }
         let wasDone = t.done
-        t.unread = false; t.done = false
+        t.unread = false; t.done = false; t.alert = nil
         refreshStrip()
         onActivity?()
         if wasDone { Self.refreshNotifier(newlyDone: false) }
@@ -609,7 +644,7 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         let view = tab.view
         view.processDelegate = nil
         view.onData = nil; view.onLink = nil; view.onRestartKey = nil
-        view.onNewTab = nil; view.onCloseTab = nil; view.onCycleTab = nil
+        view.onNewTab = nil; view.onCloseTab = nil; view.onCycleTab = nil; view.onFind = nil; view.onBell = nil
         let pid = view.process?.shellPid ?? 0
         let running = view.process?.running ?? false
         view.terminate()   // closes the pty (kernel HUPs the foreground group), SIGTERM to shell
@@ -633,6 +668,11 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         DispatchQueue.main.async { [weak self] in
             guard let self, let t = self.tab(for: source) else { return }
             let clean = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+            if t.lockedTitle {   // fallback signal: the agent's spinner title went idle
+                let state = AgentAlertProtocol.titleState(clean)
+                if state == .working { t.titleWorking = true }
+                else if state == .idle, t.titleWorking { t.titleWorking = false; self.raiseAlert(t, .finished) }
+            }
             guard !t.lockedTitle, !clean.isEmpty, clean != t.title else { return }
             t.title = clean
             self.refreshStrip()
@@ -654,6 +694,65 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
             self.refreshStrip()
         }
     }
+
+    // MARK: Find
+
+    var isFindOpen: Bool { findBar != nil }
+
+    /// Cmd-F in the terminal: opens (or refocuses) the find bar. Nothing is allocated until then.
+    func showFind() {
+        guard tabs.indices.contains(active) else { return }
+        if let bar = findBar { bar.focus(); return }
+        let bar = TerminalFindBar(frame: NSRect(origin: .zero, size: TerminalFindBar.size))
+        bar.onChange = { [weak self] q, cs in self?.runFind(q, caseSensitive: cs, forward: true, restart: true) }
+        bar.onStep = { [weak self] fwd, q, cs in self?.runFind(q, caseSensitive: cs, forward: fwd, restart: false) }
+        bar.onClose = { [weak self] in self?.closeFind(refocus: true) }
+        findBar = bar
+        container.addSubview(bar)
+        layoutAll()
+        let sel = tabs[active].view.getSelection() ?? ""
+        if !sel.isEmpty, !sel.contains("\n") { bar.field.stringValue = String(sel.prefix(200)) }
+        bar.focus()
+        if !bar.query.isEmpty { runFind(bar.query, caseSensitive: bar.caseSensitive, forward: true, restart: true) }
+    }
+
+    func closeFind(refocus: Bool) {
+        guard let bar = findBar else { return }
+        findBar = nil
+        bar.removeFromSuperview()
+        guard tabs.indices.contains(active) else { return }
+        tabs[active].view.clearSearch()
+        if refocus, let w = tabs[active].view.window { w.makeFirstResponder(tabs[active].view) }
+    }
+
+    /// Selects the next / previous match (SwiftTerm scrolls it into view) and updates the "n/total" label.
+    @discardableResult
+    func runFind(_ query: String, caseSensitive: Bool, forward: Bool, restart: Bool) -> Bool {
+        guard tabs.indices.contains(active) else { return false }
+        let v = tabs[active].view
+        if query.isEmpty { v.clearSearch(); findBar?.setCount("", found: true); return false }
+        let opts = SearchOptions(caseSensitive: caseSensitive)
+        if restart { v.clearSearch() }
+        let found = forward ? v.findNext(query, options: opts) : v.findPrevious(query, options: opts)
+        let summary = v.searchMatchSummary(query, options: opts, limit: 1000)
+        findBar?.setCount(found ? "\(summary.index)/\(summary.total)\(summary.total >= 1000 ? "+" : "")" : "No matches", found: found)
+        return found
+    }
+
+    /// Current selection of the active tab (verification).
+    var activeSelectionText: String { tabs.indices.contains(active) ? (tabs[active].view.getSelection() ?? "") : "" }
+    var findCountText: String { findBar?.countText ?? "" }
+    func simulateFindBar(query: String, caseSensitive: Bool = false) {
+        showFind()
+        findBar?.field.stringValue = query
+        findBar?.setCaseSensitive(caseSensitive)
+        findBar?.onChange?(query, caseSensitive)
+    }
+    func simulateFindStep(forward: Bool) { if let b = findBar { b.onStep?(forward, b.query, b.caseSensitive) } }
+    func tabAlert(_ i: Int) -> AgentAlertKind? { tabs.indices.contains(i) ? tabs[i].alert : nil }
+    func tabID(_ i: Int) -> Int? { tabs.indices.contains(i) ? tabs[i].id : nil }
+    func simulateTitle(_ title: String, tab i: Int) { if tabs.indices.contains(i) { setTerminalTitle(source: tabs[i].view, title: title) } }
+    func setTabLocked(_ i: Int) { if tabs.indices.contains(i) { tabs[i].lockedTitle = true } }
 
     // MARK: Verification helpers
 

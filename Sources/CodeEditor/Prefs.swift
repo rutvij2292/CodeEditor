@@ -71,6 +71,8 @@ enum Prefs {
     /// Extra AI CLI launchers shown in the terminal's Run menu, one per line as `Title|command`.
     static var terminalAgents: String { get { get("terminalAgents", "") } set { set("terminalAgents", newValue) } }
     /// Show a badge/bounce when a background terminal tab produced output and then went quiet (an agent finished).
+    /// Hook / bell driven agent alerts (tab dot, dock, user notification) and the hook socket.
+    static var terminalAgentAlerts: Bool { get { get("terminalAgentAlerts", true) } set { set("terminalAgentAlerts", newValue) } }
     static var terminalNotifyOnIdle: Bool { get { get("terminalNotifyOnIdle", true) } set { set("terminalNotifyOnIdle", newValue) } }
 
     /// Claude Code IDE bridge: loopback-only server + ~/.claude/ide lock file so the `claude` CLI can connect (default on).
@@ -93,7 +95,7 @@ enum Prefs {
         "softWrap", "bracketPairColorization", "showBreadcrumbs", "showToolbar", "showToolStrip","foldingEnabled", "foldImportsOnOpen", "highlightOccurrences", "inlineBlame", "powerSaver", "gpuAssist",
         "defaultIndentSize", "defaultIndentUsesTabs",
         "terminalDock", "terminalFontName", "terminalFontSize", "terminalCursorStyle", "terminalScrollback", "terminalShell",
-        "terminalAgents", "terminalNotifyOnIdle", "claudeBridgeEnabled", "completionMinChars", "completionDelayMs", "intelephenseLicenceConfigured",
+        "terminalAgents", "terminalNotifyOnIdle", "terminalAgentAlerts", "claudeBridgeEnabled", "completionMinChars", "completionDelayMs", "intelephenseLicenceConfigured",
         "viewerMode.markdown", "viewerMode.json", "viewerMode.yaml",
     ]
 

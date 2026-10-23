@@ -46,7 +46,9 @@ extension SelfTest {
                       && !withVendor.files.contains("node_modules/m/i.js"))
                 ProjectIndex.includeVendor = savedVendor
                 terminalChecks(app: app, w: w, dir: dir) {
+                  terminalAlertChecks(app: app, dir: dir) {
                     claudeChecks(app: app, w: w, dir: dir) { coalescingChecks(w: w, dir: dir) { treeDeleteChecks(w: w, dir: dir, done: done) } }
+                  }
                 }
             }
         }
