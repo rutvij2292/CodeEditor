@@ -19,7 +19,7 @@ final class BranchWidget: NSView {
 
     override init(frame: NSRect) {
         super.init(frame: NSRect(x: 0, y: 0, width: 120, height: Self.height))
-        toolTip = "Branches (⌘⌥B)"
+        toolTip = KeymapStore.retip("Branches (⌘⌥B)")
         setAccessibilityRole(.button)
         setAccessibilityLabel("Git branch")
     }
@@ -41,7 +41,7 @@ final class BranchWidget: NSView {
         setFrameSize(NSSize(width: min(max(w, 70), 420), height: Self.height))
         onResize?()
         needsDisplay = true
-        toolTip = "Branch \(branch) — click for branches (⌘⌥B)"
+        toolTip = KeymapStore.retip("Branch \(branch) — click for branches (⌘⌥B)")
         setAccessibilityValue(branch)
     }
 

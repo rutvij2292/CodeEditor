@@ -216,7 +216,7 @@ final class FileTreePanel: NSView {
         let reload = TreeIconButton(drawing: { p in
             p.appendArc(withCenter: NSPoint(x: 8, y: 8), radius: 5, startAngle: 40, endAngle: 330, clockwise: false)
             p.move(to: NSPoint(x: 12.8, y: 2.8)); p.line(to: NSPoint(x: 12.9, y: 6.1)); p.line(to: NSPoint(x: 9.7, y: 6.0))
-        }, tooltip: "Refresh (⌥⌘Y)", target: tree, action: #selector(FileTreeController.panelReload))
+        }, tooltip: KeymapStore.retip("Refresh (⌥⌘Y)"), target: tree, action: #selector(FileTreeController.panelReload))
         let buttons = NSStackView(views: [newFile, newFolder, reload, collapse])
         buttons.spacing = 2
         for v in [title, buttons, section, tree.scrollView] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }

@@ -14,7 +14,7 @@ final class ToolStripView: NSView {
         let title: String
         let shortcut: String?
         let kind: Kind
-        var tooltip: String { shortcut.map { "\(title) (\($0))" } ?? title }
+        var tooltip: String { shortcut.map { KeymapStore.retip("\(title) (\($0))") } ?? title }
     }
 
     static let top: [Entry] = [
@@ -87,7 +87,7 @@ final class ToolStripView: NSView {
         b.image = Self.icon(e.symbol, e.title)
         b.toolTip = e.tooltip
         b.setAccessibilityLabel(e.title)
-        if let s = e.shortcut { b.setAccessibilityHelp("Shortcut \(s)") }
+        if let s = e.shortcut { b.setAccessibilityHelp(KeymapStore.retip("Shortcut (\(s))")) }
         b.identifier = NSUserInterfaceItemIdentifier(e.id)
         b.target = self
         b.action = #selector(clicked(_:))
@@ -242,7 +242,7 @@ final class ToolStripView: NSView {
             item.representedObject = e.id
             item.image = Self.icon(e.symbol, e.title)
             item.state = isActive(e) ? .on : .off
-            if let s = e.shortcut { item.toolTip = "\(e.title) (\(s))" }
+            if let s = e.shortcut { item.toolTip = KeymapStore.retip("\(e.title) (\(s))") }
             menu.addItem(item)
         }
         menu.popUp(positioning: nil, at: NSPoint(x: sender.bounds.maxX + 4, y: sender.bounds.maxY), in: sender)
