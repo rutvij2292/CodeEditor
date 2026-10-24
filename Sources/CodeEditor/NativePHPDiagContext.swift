@@ -42,7 +42,13 @@ final class NPDiagContext {
     static let filesLock = NSLock()
     static var filesCache: [String: (stamp: Int64, names: Set<String>)] = [:]
 
+    /// Live instances (leak guard: a context must be freed when its analysis ends; see the self-tests).
+    private(set) static var liveCount = 0
+    deinit { Self.liveLock.lock(); Self.liveCount -= 1; Self.liveLock.unlock() }
+    private static let liveLock = NSLock()
+
     init(fp: FastProject, url: URL, text: NSString, lex: PHPLex, classSeverity: Int) {
+        Self.liveLock.lock(); Self.liveCount += 1; Self.liveLock.unlock()
         self.fp = fp; self.url = url; ns = text; self.lex = lex; toks = lex.toks; n = lex.count; self.classSeverity = classSeverity
         kind = [UInt8](repeating: 0, count: lex.count)
         inImport = [Bool](repeating: false, count: lex.count)

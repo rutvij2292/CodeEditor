@@ -115,7 +115,7 @@ extension NPResolver {
         for (k, path) in subs {
             let off: Int
             if let name = subject.method {
-                guard let m = k.methods.first(where: { $0.name == name }) ?? k.methods.first(where: { $0.name.lowercased() == name.lowercased() }) else { continue }
+                guard let m = k.method(named: name) else { continue }
                 off = m.loc
             } else { off = k.nameLoc }
             if let t = target(path: path, offset: off) { targets.append(t) }
@@ -133,7 +133,7 @@ extension NPResolver {
         guard !baseShort.isEmpty else { return [] }
         var headers: [NPHeader] = []
         let needles = [Data("extends".utf8), Data("implements".utf8)]
-        guard let re = try? NSRegularExpression(pattern: #"(?m)^[ \t]*(?:(?:abstract|final|readonly)[ \t]+)*(?:class|interface|enum)[ \t]+\w+([^{;]*)\{"#) else { return [] }
+        guard let re = NPRe.make(pattern: #"(?m)^[ \t]*(?:(?:abstract|final|readonly)[ \t]+)*(?:class|interface|enum)[ \t]+\w+([^{;]*)\{"#) else { return [] }
         var scanned = 0
         var seenPaths = Set<String>()
         for ref in fp.projectClasses() {

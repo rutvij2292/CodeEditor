@@ -27,7 +27,7 @@ struct NPHier {
     }
     /// Any hierarchy file declares `function name(` (the parser may have missed it: conditional declarations, odd layouts).
     func declaresInText(_ name: String) -> Bool {
-        guard let re = try? NSRegularExpression(pattern: #"function\s*&?\s*"# + NSRegularExpression.escapedPattern(for: name) + #"\s*\("#, options: .caseInsensitive) else { return true }
+        guard let re = NPRe.make(pattern: #"function\s*&?\s*"# + NSRegularExpression.escapedPattern(for: name) + #"\s*\("#, options: .caseInsensitive) else { return true }
         return texts.contains { re.firstMatch(in: $0 as String, range: NSRange(location: 0, length: $0.length)) != nil }
     }
     func hasProp(_ name: String) -> Bool { classes.contains { k in k.props.contains { $0.name == name } } }
@@ -144,12 +144,12 @@ extension NPDiagContext {
 
     private func fileMentionsAssignment(_ name: String, in ns: NSString) -> Bool {
         let pat = "->" + NSRegularExpression.escapedPattern(for: name) + #"\s*(\[[^\]]*\]\s*)*(=(?!=)|[.+\-*/?]=|\+\+|--)"#
-        guard let re = try? NSRegularExpression(pattern: pat) else { return true }
+        guard let re = NPRe.make(pattern: pat) else { return true }
         return re.firstMatch(in: ns as String, range: NSRange(location: 0, length: ns.length)) != nil
     }
 
     private func aliasedInTraits(_ name: String, _ h: NPHier) -> Bool {
-        guard let re = try? NSRegularExpression(pattern: #"\bas\s+(?:(?:public|protected|private)\s+)?"# + NSRegularExpression.escapedPattern(for: name) + #"\b"#, options: .caseInsensitive) else { return true }
+        guard let re = NPRe.make(pattern: #"\bas\s+(?:(?:public|protected|private)\s+)?"# + NSRegularExpression.escapedPattern(for: name) + #"\b"#, options: .caseInsensitive) else { return true }
         return h.texts.contains { re.firstMatch(in: $0 as String, range: NSRange(location: 0, length: $0.length)) != nil }
     }
 

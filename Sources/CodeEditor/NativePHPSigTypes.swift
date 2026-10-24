@@ -37,17 +37,17 @@ extension FTEval {
     }
 
     /// Parsed docblock above `declStart` in `k`'s file (nil when none). Cached per request.
-    func docOf(_ k: FTClass, declStart: Int, key: String) -> NPDoc? {
+    func docOf(_ k: FTClass, declStart: Int, key: String, query: NPDoc.Query? = nil) -> NPDoc? {
         if let d = docCache[key] { return d.raw.isEmpty ? nil : d }
         guard let t = fileText(of: k), let d = NPDoc.leading(t, before: declStart) else { docCache[key] = NPDoc(); return nil }
-        let doc = NPDoc.parse(d.text, start: d.start)
+        let doc = (query ?? (key.hasSuffix("::class") ? .classInfo : nil)).map { NPDoc.parse(d.text, start: d.start, query: $0) } ?? NPDoc.parse(d.text, start: d.start)
         docCache[key] = doc
         return doc
     }
 
     /// `@template T of Bound` names declared in a docblock (name -> resolved bound FQN or "").
     func templates(_ doc: NPDoc, owner: FTClass?) -> [String: String] {
-        guard doc.raw.contains("@template"), let re = try? NSRegularExpression(pattern: #"@template(?:-covariant|-contravariant)?\s+(\w+)(?:\s+of\s+([\\\w]+))?"#) else { return [:] }
+        guard doc.raw.contains("@template"), let re = NPRe.make(pattern: #"@template(?:-covariant|-contravariant)?\s+(\w+)(?:\s+of\s+([\\\w]+))?"#) else { return [:] }
         var out: [String: String] = [:]
         let r = doc.raw as NSString
         for m in re.matches(in: doc.raw, range: NSRange(location: 0, length: r.length)) {
@@ -199,7 +199,7 @@ extension FTEval {
         guard let doc, let ret = doc.ret?.type, !ret.isEmpty else { return nil }
         // conditional: ($abstract is class-string<T> ? T : mixed)
         if ret.hasPrefix("(") {
-            guard let re = try? NSRegularExpression(pattern: #"^\(\s*(\$\w+)\s+is\s+class-string<"#), let mm = re.firstMatch(in: ret, range: NSRange(location: 0, length: (ret as NSString).length)),
+            guard let re = NPRe.make(pattern: #"^\(\s*(\$\w+)\s+is\s+class-string<"#), let mm = re.firstMatch(in: ret, range: NSRange(location: 0, length: (ret as NSString).length)),
                   let args else { return nil }
             let pname = (ret as NSString).substring(with: mm.range(at: 1))
             if let idx = splitParamNames(m.params).firstIndex(of: pname) {
@@ -240,7 +240,7 @@ extension FTEval {
     /// `@property` / `@method` tags on the class chain (IDE-helper annotations, facade `@method static`).
     func docMemberType(_ f: String, _ member: String, isCall: Bool) -> FTType? {
         for k in hierarchy(f).prefix(6) {
-            guard let doc = docOf(k, declStart: k.declStart, key: k.fqn + "::class") else { continue }
+            guard let doc = docOf(k, declStart: k.declStart, key: k.fqn + (isCall ? "::class@m:" : "::class@p:") + member, query: isCall ? .method(member) : .prop(member)) else { continue }
             if isCall {
                 guard let m = doc.methods.first(where: { $0.name == member }) else { continue }
                 var line = m.line.trimmingCharacters(in: .whitespaces)
@@ -262,12 +262,13 @@ extension FTEval {
     /// Minimal owner for names written in a helper file: namespace + `use` imports.
     func pseudoOwner(_ text: NSString) -> FTClass {
         let k = FTClass()
-        let s = text as String
-        if let re = try? NSRegularExpression(pattern: #"(?m)^namespace\s+([\\\w]+)\s*;"#), let m = re.firstMatch(in: s, range: NSRange(location: 0, length: text.length)) {
+        let len = min(text.length, 24_000)       // namespace / use statements sit at the top of a helper file
+        let s = text.substring(to: len)
+        if let re = NPRe.make(pattern: #"(?m)^namespace\s+([\\\w]+)\s*;"#), let m = re.firstMatch(in: s, range: NSRange(location: 0, length: len)) {
             k.ns = text.substring(with: m.range(at: 1))
         }
-        if let re = try? NSRegularExpression(pattern: #"(?m)^use\s+([\\\w]+)(?:\s+as\s+(\w+))?\s*;"#) {
-            for m in re.matches(in: s, range: NSRange(location: 0, length: text.length)).prefix(80) {
+        if let re = NPRe.make(pattern: #"(?m)^use\s+([\\\w]+)(?:\s+as\s+(\w+))?\s*;"#) {
+            for m in re.matches(in: s, range: NSRange(location: 0, length: len)).prefix(80) {
                 let full = text.substring(with: m.range(at: 1)).trimmingCharacters(in: CharacterSet(charactersIn: "\\"))
                 let alias = m.range(at: 2).location != NSNotFound ? text.substring(with: m.range(at: 2)) : String(full.split(separator: "\\").last ?? "")
                 k.uses[alias] = full
@@ -336,7 +337,7 @@ extension FTEval {
             let s = t as String
             let full = NSRange(location: 0, length: t.length)
             func first(_ pattern: String) -> String? {
-                guard let re = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]), let m = re.firstMatch(in: s, range: full), m.numberOfRanges > 1,
+                guard let re = NPRe.make(pattern: pattern, options: [.dotMatchesLineSeparators]), let m = re.firstMatch(in: s, range: full), m.numberOfRanges > 1,
                       m.range(at: 1).location != NSNotFound else { return nil }
                 return t.substring(with: m.range(at: 1))
             }
@@ -364,7 +365,7 @@ extension FTEval {
         let h = hierarchy(f)
         guard let k = h.first, f.hasPrefix("Illuminate\\Support\\Facades\\") || h.contains(where: { $0.fqn == "Illuminate\\Support\\Facades\\Facade" }),
               let t = fileText(of: k) else { return nil }
-        if let re = try? NSRegularExpression(pattern: #"getFacadeAccessor\s*\(\s*\)[^{]*\{\s*return\s+(?:'([^']+)'|"([^"]+)"|\\?([\\\w]+)::class)"#),
+        if let re = NPRe.make(pattern: #"getFacadeAccessor\s*\(\s*\)[^{]*\{\s*return\s+(?:'([^']+)'|"([^"]+)"|\\?([\\\w]+)::class)"#),
            let m = re.firstMatch(in: t as String, range: NSRange(location: 0, length: t.length)) {
             for g in 1...2 where m.range(at: g).location != NSNotFound {
                 let alias = t.substring(with: m.range(at: g))

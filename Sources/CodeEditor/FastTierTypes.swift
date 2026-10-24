@@ -459,7 +459,7 @@ final class FTEval {
         if atLoc > startLoc {
             let rng = NSRange(location: startLoc, length: atLoc - startLoc)
             let pat = "@var\\s+((?:[^\\s$<]|<[^>]*>)+)\\s+\\$" + NSRegularExpression.escapedPattern(for: String(name.dropFirst())) + "\\b"
-            if let re = try? NSRegularExpression(pattern: pat), let m = re.matches(in: ns as String, range: rng).last {
+            if let re = NPRe.make(pattern: pat), let m = re.matches(in: ns as String, range: rng).last {
                 let raw = ns.substring(with: m.range(at: 1))
                 if let t = typeFromDoc(raw, owner: cur, selfType: cur?.fqn ?? "") {
                     // a docblock directly above `$name = ...` overrides that assignment's inferred type

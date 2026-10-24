@@ -159,7 +159,7 @@ extension NPDiagContext {
         if let hit = NPDiagContext.filesCache[key], hit.stamp == stamp { NPDiagContext.filesLock.unlock(); return hit.names }
         NPDiagContext.filesLock.unlock()
         var names = Set<String>()
-        let re = try? NSRegularExpression(pattern: #"(?m)^[ \t]*(?:(?:abstract|final|readonly)[ \t]+)*(?:class|interface|trait|enum)[ \t]+([A-Za-z_]\w*)"#)
+        let re = NPRe.make(pattern: #"(?m)^[ \t]*(?:(?:abstract|final|readonly)[ \t]+)*(?:class|interface|trait|enum)[ \t]+([A-Za-z_]\w*)"#)
         for f in Self.autoloadFilePaths(root: key) {
             guard let t = FastProject.read(f), t.length < 600_000 else { continue }
             for m in re?.matches(in: t as String, range: NSRange(location: 0, length: t.length)) ?? [] { names.insert(t.substring(with: m.range(at: 1)).lowercased()) }
@@ -176,7 +176,7 @@ extension NPDiagContext {
         var seen = Set<String>()
         func add(_ p: String) { if seen.insert(p).inserted, LaravelFS.isFile(p) { out.append(p) } }
         if let t = FastProject.read(root + "/vendor/composer/autoload_files.php") {
-            let re = try? NSRegularExpression(pattern: #"\$(vendorDir|baseDir)\s*\.\s*'([^']+)'"#)
+            let re = NPRe.make(pattern: #"\$(vendorDir|baseDir)\s*\.\s*'([^']+)'"#)
             for m in re?.matches(in: t as String, range: NSRange(location: 0, length: t.length)) ?? [] {
                 add((t.substring(with: m.range(at: 1)) == "vendorDir" ? root + "/vendor" : root) + t.substring(with: m.range(at: 2)))
             }
@@ -190,7 +190,7 @@ extension NPDiagContext {
     private var aliasNames: Set<String> {
         var out = Set(FastProject.facadeAliases.keys.map { $0.lowercased() })
         if let t = FastProject.read(fp.path + "/config/app.php") {
-            let re = try? NSRegularExpression(pattern: #"['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*=>"#)
+            let re = NPRe.make(pattern: #"['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*=>"#)
             let s = t as NSString
             for m in re?.matches(in: t as String, range: NSRange(location: 0, length: min(s.length, 200_000))) ?? [] {
                 out.insert(s.substring(with: m.range(at: 1)).lowercased())

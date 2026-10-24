@@ -42,6 +42,7 @@ final class NPResolver {
     let isBlade: Bool
     /// Resolve-only mode (find usages / rename): no markdown, no file reads for line numbers, no per-call revalidation.
     var light = false
+    private var docMemo: [String: NPDoc] = [:]
 
     init(fp: FastProject, url: URL, text: NSString, lex: PHPLex, cur: FTClass?) {
         self.fp = fp; self.url = url; ns = text; self.lex = lex; self.cur = cur
@@ -104,12 +105,43 @@ final class NPResolver {
         return r.location == NSNotFound ? -1 : r.location
     }
 
+    /// Sorted positions of every `<?` and `?>` in the text (one chunked pass; a backwards substring search per lookup was O(file) in
+    /// CFStringFind and dominated lookups in big pure-PHP files that have no closing tag).
+    private lazy var phpTags: (opens: [Int], closes: [Int]) = {
+        var opens: [Int] = [], closes: [Int] = []
+        let n = ns.length
+        var buf = [unichar](repeating: 0, count: 4097)
+        var pos = 0
+        while pos < n {
+            let len = min(4096, n - pos)
+            ns.getCharacters(&buf, range: NSRange(location: pos, length: len + (pos + len < n ? 1 : 0)))
+            let m = pos + len < n ? len : len - 1
+            if m > 0 {
+                for i in 0..<m {
+                    let c = buf[i]
+                    if c == 60, buf[i + 1] == 63 { opens.append(pos + i) } else if c == 63, buf[i + 1] == 62 { closes.append(pos + i) }
+                }
+            }
+            pos += len
+        }
+        return (opens, closes)
+    }()
+
+    /// Greatest element <= `limit` (-1 when none).
+    private func lastAtOrBefore(_ a: [Int], _ limit: Int) -> Int {
+        var lo = 0, hi = a.count
+        while lo < hi { let mid = (lo + hi) / 2; if a[mid] <= limit { lo = mid + 1 } else { hi = mid } }
+        return lo == 0 ? -1 : a[lo - 1]
+    }
+
     /// Is `offset` inside PHP code (not template HTML)? Plain files without any `<?` tag count as PHP.
     func inPHP(_ offset: Int) -> Bool {
         if !isBlade {
-            let o = lastRange("<?", before: offset + 2), c = lastRange("?>", before: offset)
+            let tags = phpTags
+            // same windows as the former backwards searches: "<?" wholly inside [0, offset + 2), "?>" wholly inside [0, offset)
+            let o = lastAtOrBefore(tags.opens, min(offset, ns.length - 2)), c = lastAtOrBefore(tags.closes, min(offset, ns.length) - 2)
             if o >= 0 { return o > c }
-            return ns.range(of: "<?", options: .literal).location == NSNotFound
+            return tags.opens.isEmpty
         }
         if lastRange("{{--", before: offset) > lastRange("--}}", before: offset) { return false }
         let o = max(lastRange("{{", before: offset), lastRange("{!!", before: offset))
@@ -329,7 +361,7 @@ final class NPResolver {
             out += "\n\nCases: " + k.cases.prefix(12).map { "`\($0)`" }.joined(separator: ", ") + (k.cases.count > 12 ? ", ..." : "")
         }
         if let t = text(ofFile: path), let d = NPDoc.leading(t, before: k.declStart) {
-            let md = NPDoc.parse(d.text, start: d.start).markdown()
+            let md = NPDoc.parse(d.text, start: d.start, query: .core).markdown()
             if !md.isEmpty { out += "\n\n" + md }
         }
         out += "\n\n" + originLine(owner: nil, path: path, offset: k.nameLoc)
@@ -577,9 +609,19 @@ final class NPResolver {
         return out
     }
 
+    /// Class-level docblock of `k` parsed for `query`, memoised for the lifetime of this request (a Carbon / facade docblock is asked
+    /// for several times while the hierarchy is walked). `tag` distinguishes queries.
+    private func classDoc(_ k: FTClass, _ query: NPDoc.Query, tag: String) -> NPDoc? {
+        let key = k.fqn + "|" + tag
+        if let d = docMemo[key] { return d.raw.isEmpty ? nil : d }
+        guard let t = text(of: k), let d = NPDoc.leading(t, before: k.declStart) else { docMemo[key] = NPDoc(); return nil }
+        let doc = NPDoc.parse(d.text, start: d.start, query: query)
+        docMemo[key] = doc
+        return doc
+    }
+
     private func docTagClasses(_ k: FTClass, facade: Bool) -> [String] {
-        guard let t = text(of: k), let d = NPDoc.leading(t, before: k.declStart) else { return [] }
-        let doc = NPDoc.parse(d.text, start: d.start)
+        guard let doc = classDoc(k, .sees, tag: "sees") else { return [] }
         return doc.sees.compactMap { s -> String? in
             guard s.hasPrefix("\\") || s.contains("\\"), s.first != "h" else { return nil }
             return fp.resolveClass(s, in: k).map { $0 }
@@ -591,7 +633,6 @@ final class NPResolver {
         var queue = owners
         var extraDocOwners: [FTClass] = []
         var idx = 0
-        let lname = name.lowercased()
         while idx < queue.count, idx < 12 {
             let owner = queue[idx]; idx += 1
             guard visited.insert(owner).inserted else { continue }
@@ -607,7 +648,7 @@ final class NPResolver {
                     if let l = k.declLocs["case:" + name] { return NPMember(kind: .enumCase, owner: k, name: name, loc: l.loc, declStart: l.declStart) }
                 }
                 if isCall {
-                    if let m = k.methods.first(where: { $0.name == name }) ?? k.methods.first(where: { $0.name.lowercased() == lname }) {
+                    if let m = k.method(named: name) {
                         return NPMember(kind: .method, owner: k, name: m.name, loc: m.loc, declStart: m.declStart, method: m)
                     }
                 } else if !isStatic {
@@ -672,8 +713,7 @@ final class NPResolver {
         // @property / @method tags in the owner's docblocks (IDE-helper annotations, facade @method static ...)
         var seenDoc = Set<String>()
         for k in extraDocOwners where seenDoc.insert(k.fqn).inserted {
-            guard let t = text(of: k), let d = NPDoc.leading(t, before: k.declStart) else { continue }
-            let doc = NPDoc.parse(d.text, start: d.start)
+            guard let doc = classDoc(k, isCall ? .method(name) : .prop(name), tag: (isCall ? "m:" : "p:") + name) else { continue }
             if isCall, let m = doc.methods.first(where: { $0.name == name }) {
                 return NPMember(kind: .docMethod, owner: k, name: name, loc: m.loc, declStart: m.loc, extra: m.line)
             }
@@ -703,7 +743,7 @@ final class NPResolver {
                 patterns.append("->(?:nullable|uuid|ulid)?[mM]orphs\\(\\s*['\"]\(base)['\"]")
             }
         }
-        let regexes = patterns.compactMap { try? NSRegularExpression(pattern: $0) }
+        let regexes = patterns.compactMap { NPRe.make(pattern: $0) }
         let tableQuoted = ["'" + table + "'", "\"" + table + "\""]
         let preferred = all.filter { $0.contains(table) }
         for list in [preferred, all.filter { !$0.contains(table) }] {
@@ -768,7 +808,7 @@ final class NPResolver {
         }
         var out = "```php\n\(sig)\n```"
         if let docNS, let d = NPDoc.leading(docNS, before: docPos) {
-            var doc = NPDoc.parse(d.text, start: d.start)
+            var doc = NPDoc.parse(d.text, start: d.start, query: .core)
             if mem.kind == .property, let v = doc.varType, doc.summary.isEmpty { doc.summary = "`\(v)`" }
             let md = doc.markdown()
             if !md.isEmpty { out += "\n\n" + md }

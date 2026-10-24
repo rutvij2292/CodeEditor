@@ -65,9 +65,12 @@ enum PHPStubs {
 
     /// True when `path` lies inside the stub directory (cheap textual pre-check, then the real root).
     static func isStubFile(_ path: String) -> Bool {
-        guard path.contains("/" + dirName + "/"), let r = root else { return false }
-        return path.hasPrefix(r + "/")
+        lock.lock(); defer { lock.unlock() }
+        guard let r = rootLocked() else { return false }
+        if r != slashRoot.0 { slashRoot = (r, r + "/") }
+        return path.hasPrefix(slashRoot.1)
     }
+    private static var slashRoot: (String, String) = ("", "")
 
     static var isLoaded: Bool { lock.lock(); defer { lock.unlock() }; return indexData != nil }
 
@@ -165,6 +168,9 @@ enum PHPStubs {
     private static var classCache: [String: FTClass?] = [:]
     private static var classOrder: [String] = []
     static let maxCachedClasses = 24
+
+    /// Frees the parsed stub classes (the mapped index stays: it is file backed and clean).
+    static func dropParsed() { cacheLock.lock(); classCache.removeAll(); classOrder.removeAll(); cacheLock.unlock() }
 
     static var cachedClassCount: Int { cacheLock.lock(); defer { cacheLock.unlock() }; return classCache.count }
 

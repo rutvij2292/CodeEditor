@@ -34,6 +34,8 @@ enum NativePHP {
     private static let parseLock = NSLock()
     private static var lastParse: (key: String, lex: PHPLex, cur: FTClass?)?
 
+    static func dropLastParse() { parseLock.lock(); lastParse = nil; parseLock.unlock() }
+
     static func resolver(fp: FastProject, url: URL, text: NSString) -> NPResolver {
         let key = url.path + "|\(text.length)|\(text.hash)"
         parseLock.lock()

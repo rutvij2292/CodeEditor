@@ -58,7 +58,11 @@ final class FastProject {
         let revalidate = dirty || now.timeIntervalSince(lastCheck) > 1.5
         if revalidate { lastCheck = now; dirty = false; epoch += 1 }
         flagLock.unlock()
-        if revalidate { classCache = classCache.filter { LaravelFS.mtime($0.key) == $0.value.stamp }; pathCache.removeAll() }
+        if revalidate {
+            classCache = classCache.filter { LaravelFS.mtime($0.key) == $0.value.stamp }
+            classBytes = classCache.values.reduce(0) { $0 + $1.bytes }
+            pathCache.removeAll()
+        }
     }
 
     @inline(__always) private func section<T>(_ s: FTSection<T>, stamp: () -> Int64, build: () -> T) -> T {
@@ -185,9 +189,11 @@ final class FastProject {
     }
 
     static func read(_ path: String) -> NSString? {
-        guard let d = FileManager.default.contents(atPath: path), d.count < 2_000_000,
-              let s = String(data: d, encoding: .utf8) ?? String(data: d, encoding: .isoLatin1) else { return nil }
-        return s as NSString
+        let t0 = NPStats.now()
+        defer { NPStats.readNs &+= NPStats.now() &- t0; NPStats.reads += 1 }
+        guard let d = FileManager.default.contents(atPath: path), d.count < 2_000_000 else { return nil }
+        // A real (CF backed) NSString: O(1) character access, unlike a bridged Swift String whose UTF-16 view needs breadcrumbs.
+        return NSString(data: d, encoding: String.Encoding.utf8.rawValue) ?? NSString(data: d, encoding: String.Encoding.isoLatin1.rawValue)
     }
 
     private let envSec = FTSection<[FTName]>([])
@@ -217,7 +223,7 @@ final class FastProject {
             for base in bases where LaravelFS.isDir(base) {
                 var locale = "en"
                 if let t = Self.read(abs("config/app.php")),
-                   let re = try? NSRegularExpression(pattern: #"'locale'\s*=>\s*(?:env\(\s*'[^']*'\s*,\s*)?'([\w-]+)'"#),
+                   let re = NPRe.make(pattern: #"'locale'\s*=>\s*(?:env\(\s*'[^']*'\s*,\s*)?'([\w-]+)'"#),
                    let m = re.firstMatch(in: t as String, range: NSRange(location: 0, length: t.length)) { locale = t.substring(with: m.range(at: 1)) }
                 if !LaravelFS.isDir(base + "/" + locale) { locale = "en" }
                 if !LaravelFS.isDir(base + "/" + locale), let d = LaravelFS.list(base).first(where: { LaravelFS.isDir(base + "/" + $0) }) { locale = d }
@@ -288,7 +294,16 @@ final class FastProject {
 
     // MARK: Class info cache
 
-    private var classCache: [String: (stamp: Int64, cls: FTClass?)] = [:]
+    /// Parsed class declarations, least recently used evicted once the cache holds more than `maxClasses` entries or `maxClassBytes`
+    /// (estimated retained bytes) -- vendor classes like Carbon / Eloquent Builder are large, so the byte cap is what matters.
+    private struct ClassEntry { var stamp: Int64; var cls: FTClass?; var bytes: Int; var tick: Int }
+    private var classCache: [String: ClassEntry] = [:]
+    private var classBytes = 0
+    private var classTick = 0
+    static let maxClasses = 400
+    static let maxClassBytes = 6_000_000
+    var cachedClassCount: Int { classCache.count }
+    var cachedClassBytes: Int { classBytes }
     private var pathCache: [String: String] = [:]      // fqn -> path ("" = unresolved)
     private var shortCache: [String: String?] = [:]
 
@@ -304,17 +319,48 @@ final class FastProject {
         return found
     }
 
+    private static func timedParse(_ t: NSString) -> FTClass? {
+        let t0 = NPStats.now()
+        defer { NPStats.parseNs &+= NPStats.now() &- t0; NPStats.parses += 1 }
+        return FTParser.parse(t)
+    }
+
     func classInfo(path file: String) -> FTClass? {
         if PHPStubs.isStubFile(file) {      // immutable bundled files: own bounded cache, no per-project copy
-            return PHPStubs.classInfo(path: file) { Self.read(file).flatMap { FTParser.parse($0) } }
+            return PHPStubs.classInfo(path: file) { Self.read(file).flatMap { Self.timedParse($0) } }
         }
         let st = LaravelFS.mtime(file)
-        if let c = classCache[file], c.stamp == st { return c.cls }
+        classTick += 1
+        if var c = classCache[file], c.stamp == st { c.tick = classTick; classCache[file] = c; return c.cls }
         guard let t = Self.read(file) else { return nil }
-        let cls = FTParser.parse(t)
-        if classCache.count > 400 { classCache.removeAll() }
-        classCache[file] = (st, cls)
+        let cls = Self.timedParse(t)
+        if let old = classCache[file] { classBytes -= old.bytes }
+        let bytes = cls?.approxBytes ?? 64
+        classCache[file] = ClassEntry(stamp: st, cls: cls, bytes: bytes, tick: classTick)
+        classBytes += bytes
+        if classCache.count > Self.maxClasses || classBytes > Self.maxClassBytes { evictClasses(keeping: file) }
         return cls
+    }
+
+    /// Drops the least recently used quarter (at least) until both caps hold again; the entry just stored stays.
+    private func evictClasses(keeping keep: String) {
+        let order = classCache.sorted { $0.value.tick < $1.value.tick }.map(\.key)
+        var i = 0
+        while i < order.count, classCache.count > Self.maxClasses * 3 / 4 || classBytes > Self.maxClassBytes * 3 / 4 {
+            if order[i] != keep, let e = classCache.removeValue(forKey: order[i]) { classBytes -= e.bytes }
+            i += 1
+        }
+    }
+
+    /// Frees parsed classes and the name caches (memory trim). Runs on the project's queue.
+    func dropCaches() {
+        classCache.removeAll(); classBytes = 0
+        pathCache.removeAll(); shortCache.removeAll()
+    }
+
+    static func trimAll() {
+        registryLock.lock(); let all = Array(registry.values); registryLock.unlock()
+        for p in all { p.queue.async { p.dropCaches() } }
     }
 
     func classInfo(_ fqn: String) -> FTClass? {

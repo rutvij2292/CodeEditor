@@ -160,8 +160,14 @@ struct NPLineStarts {
     init(_ ns: NSString) {
         var s = [0]
         let n = ns.length
-        var i = 0
-        while i < n { if ns.character(at: i) == 10 { s.append(i + 1) }; i += 1 }
+        var buf = [unichar](repeating: 0, count: min(max(n, 1), 4096))
+        var pos = 0
+        while pos < n {
+            let len = min(4096, n - pos)
+            ns.getCharacters(&buf, range: NSRange(location: pos, length: len))
+            for i in 0..<len where buf[i] == 10 { s.append(pos + i + 1) }
+            pos += len
+        }
         starts = s; length = n
     }
     func position(of offset: Int) -> (line: Int, col: Int) {

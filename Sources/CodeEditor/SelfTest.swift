@@ -89,6 +89,7 @@ enum SelfTest {
                     SelfTestNativePHPStubs.run()
                     SelfTestNativePHPRefs.run(w: w)
                     SelfTestNativePHPDiag.run()
+                    SelfTestNativePHPPerf.run()
                     SelfTestSpeedSearch.run(w: w)
                     SelfTestToolFocus.run(w: w)
                     SelfTestLocationsNewFile.run(w: w)

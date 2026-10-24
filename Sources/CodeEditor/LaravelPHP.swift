@@ -8,12 +8,21 @@ struct PHPTok {
     static let arrow: UInt16 = 2    // -> or ?->
     static let fat: UInt16 = 3      // =>
 
+    // 24 bytes per token (was 40): len / line / col are stored as Int32 (files are capped far below 2 GB) and exposed as Int.
     var kind: Kind
     var loc: Int        // UTF-16 offset
-    var len: Int
-    var line: Int       // 1-based
-    var col: Int        // 1-based
+    private var len32: Int32
+    private var line32: Int32
+    private var col32: Int32
     var ch: UInt16 = 0  // punct code
+
+    init(kind: Kind, loc: Int, len: Int, line: Int, col: Int, ch: UInt16 = 0) {
+        self.kind = kind; self.loc = loc; len32 = Int32(truncatingIfNeeded: len); line32 = Int32(truncatingIfNeeded: line)
+        col32 = Int32(truncatingIfNeeded: col); self.ch = ch
+    }
+    var len: Int { get { Int(len32) } set { len32 = Int32(truncatingIfNeeded: newValue) } }
+    var line: Int { get { Int(line32) } set { line32 = Int32(truncatingIfNeeded: newValue) } }   // 1-based
+    var col: Int { get { Int(col32) } set { col32 = Int32(truncatingIfNeeded: newValue) } }       // 1-based
 }
 
 final class PHPLex {

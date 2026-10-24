@@ -8,7 +8,7 @@ enum NPFiles {
     private static let lock = NSLock()
     private static var entries: [(path: String, stamp: Int64, text: NSString)] = []
     private static let maxEntries = 6
-    private static let maxBytes = 6_000_000
+    private static let maxBytes = 3_000_000       // characters (<= 6 MB of UTF-16 in the worst case)
 
     static func text(_ path: String) -> NSString? {
         let st = LaravelFS.mtime(path)
@@ -32,12 +32,35 @@ enum NPFiles {
 
 enum NPText {
     /// 1-based line and column (UTF-16) of `offset`.
+    private static let tableLock = NSLock()
+    private static var tables: [(text: NSString, table: NPLineStarts)] = []
+
+    /// Line table of a big text, kept for the last 2 texts (a lookup asks for several positions in the same large vendor file).
+    private static func table(_ ns: NSString) -> NPLineStarts {
+        tableLock.lock()
+        if let i = tables.firstIndex(where: { $0.text === ns }) { let t = tables[i].table; tableLock.unlock(); return t }
+        tableLock.unlock()
+        let t = NPLineStarts(ns)
+        tableLock.lock()
+        tables.append((ns, t))
+        if tables.count > 2 { tables.removeFirst() }
+        tableLock.unlock()
+        return t
+    }
+
+    static func dropTables() { tableLock.lock(); tables.removeAll(); tableLock.unlock() }
+
     static func lineCol(_ ns: NSString, _ offset: Int) -> (line: Int, col: Int) {
+        if offset > 30_000 { return table(ns).position(of: offset) }
         let end = min(max(0, offset), ns.length)
-        var buf = [unichar](repeating: 0, count: end)
-        if end > 0 { ns.getCharacters(&buf, range: NSRange(location: 0, length: end)) }
-        var line = 1, ls = 0
-        for (i, c) in buf.enumerated() where c == 10 { line += 1; ls = i + 1 }
+        var buf = [unichar](repeating: 0, count: min(end, 4096))
+        var line = 1, ls = 0, pos = 0
+        while pos < end {                                  // chunked: no allocation proportional to the file
+            let len = min(4096, end - pos)
+            ns.getCharacters(&buf, range: NSRange(location: pos, length: len))
+            for i in 0..<len where buf[i] == 10 { line += 1; ls = pos + i + 1 }
+            pos += len
+        }
         return (line, end - ls + 1)
     }
 
@@ -129,10 +152,18 @@ struct NPDoc {
         }
         if let t = tag { tags.append(t) }
         d.summary = summary.joined(separator: " ")
+        d.fill(tags)
+        return d
+    }
+
+
+    /// Interprets collected tags (shared by the full and the query parser).
+    private mutating func fill(_ tags: [(name: String, text: String, loc: Int)]) {
+        var d = self
         for t in tags {
             switch t.name {
             case "param":
-                let (ty, rest) = splitType(t.text)
+                let (ty, rest) = NPDoc.splitType(t.text)
                 var nm = "", text = rest
                 if rest.hasPrefix("$") || rest.hasPrefix("...$") || rest.hasPrefix("&$") {
                     let w = String(rest.prefix { !$0.isWhitespace })
@@ -141,18 +172,18 @@ struct NPDoc {
                 }
                 d.params.append((nm, ty, text))
             case "return", "returns":
-                let (ty, rest) = splitType(t.text)
+                let (ty, rest) = NPDoc.splitType(t.text)
                 d.ret = (ty, rest)
             case "var":
-                d.varType = splitType(t.text).0
+                d.varType = NPDoc.splitType(t.text).0
             case "throws":
-                d.throwsList.append(splitType(t.text).0)
+                d.throwsList.append(NPDoc.splitType(t.text).0)
             case "deprecated":
                 d.deprecated = t.text.isEmpty ? "deprecated" : t.text
             case "see", "mixin":
                 if let f = t.text.split(separator: " ").first { d.sees.append(String(f)) }
             case "property", "property-read", "property-write":
-                let (ty, rest) = splitType(t.text)
+                let (ty, rest) = NPDoc.splitType(t.text)
                 if rest.hasPrefix("$") {
                     let nm = String(rest.dropFirst().prefix { $0.isLetter || $0.isNumber || $0 == "_" })
                     d.props.append((nm, ty, t.name == "property-read", t.loc))
@@ -168,6 +199,120 @@ struct NPDoc {
             default: break
             }
         }
+        self = d
+    }
+
+    // MARK: Query parsing (huge class docblocks)
+
+    /// What a caller needs from a docblock. Class docblocks of IDE-helper / Carbon style hold thousands of `@method` lines;
+    /// parsing them whole costs milliseconds on every lookup, so big docblocks are scanned once for just the requested tags.
+    struct Query {
+        var core = false          // summary, @param, @return, @var, @throws, @deprecated
+        var sees = false          // @see / @mixin
+        var templates = false     // @template lines (kept in `raw`)
+        var method: String?       // the @method line of this name
+        var prop: String?         // the @property line of this name
+        static let classInfo = Query(core: true, sees: true, templates: true)
+        static let core = Query(core: true)
+        static let sees = Query(sees: true)
+        static func method(_ n: String) -> Query { Query(method: n) }
+        static func prop(_ n: String) -> Query { Query(prop: n) }
+    }
+
+    static let bigDocBytes = 4096
+
+    /// Same result as `parse` for the requested parts; docblocks under `bigDocBytes` are simply parsed whole.
+    static func parse(_ rawText: String, start: Int = 0, query q: Query) -> NPDoc {
+        let t0 = NPStats.now()
+        defer { NPStats.docNs &+= NPStats.now() &- t0 }
+        var text = rawText
+        let big = text.utf8.count >= bigDocBytes
+        if !big { return parse(rawText, start: start) }
+        var d = NPDoc()
+        var summary: [String] = []
+        var tags: [(name: String, text: String, loc: Int)] = []
+        var tmplLines: [String] = []
+        text.withUTF8 { b in
+            let n = b.count
+            @inline(__always) func isWS(_ c: UInt8) -> Bool { c == 32 || c == 9 }
+            func has(_ lo: Int, _ hi: Int, _ needle: [UInt8]) -> Bool {
+                let m = needle.count
+                guard m > 0, hi - lo >= m else { return false }
+                var i = lo
+                let f = needle[0]
+                while i + m <= hi {
+                    if b[i] == f {
+                        var k = 1
+                        while k < m, b[i + k] == needle[k] { k += 1 }
+                        if k == m { return true }
+                    }
+                    i += 1
+                }
+                return false
+            }
+            let mNeedle: [UInt8] = q.method.map { Array(($0 + "(").utf8) } ?? []
+            let pNeedle: [UInt8] = q.prop.map { Array(("$" + $0).utf8) } ?? []
+            var tag: (name: String, text: String, loc: Int)?
+            var inSummary = true
+            var u16 = 0                       // UTF-16 offset of the current line start
+            var ls = 0
+            func flush() { if let t = tag { tags.append(t); tag = nil } }
+            while ls <= n {
+                var le = ls
+                while le < n, b[le] != 10 { le += 1 }
+                // original line handling
+                var cs = ls, ce = le, lead = 0
+                while cs < ce, b[cs] == 32 || b[cs] == 9 || b[cs] == 13 { cs += 1; lead += 1 }
+                if ce - cs >= 3, b[cs] == 47, b[cs + 1] == 42, b[cs + 2] == 42 { cs += 3; lead += 3 }
+                else if ce - cs >= 2, b[cs] == 47, b[cs + 1] == 42 { cs += 2; lead += 2 }
+                if ce - cs >= 2, b[ce - 1] == 47, b[ce - 2] == 42 { ce -= 2 }
+                if cs < ce, b[cs] == 42 { cs += 1; lead += 1 }
+                if cs < ce, b[cs] == 32 { cs += 1; lead += 1 }
+                var ts = cs, te = ce
+                while ts < te, isWS(b[ts]) { ts += 1 }
+                while te > ts, isWS(b[te - 1]) { te -= 1 }
+                if ts == te {
+                    if inSummary, !summary.isEmpty { inSummary = false }
+                    flush()
+                } else if b[ts] == 64 {
+                    flush()
+                    inSummary = false
+                    var ne = ts + 1
+                    while ne < te, !(b[ne] == 32 || b[ne] == 9 || b[ne] == 13) { ne += 1 }
+                    let name = String(decoding: UnsafeBufferPointer(rebasing: b[(ts + 1)..<ne]), as: UTF8.self)
+                    var wanted = false
+                    switch name {
+                    case "param", "return", "returns", "var", "throws", "deprecated": wanted = q.core
+                    case "see", "mixin": wanted = q.sees
+                    case "method": wanted = !mNeedle.isEmpty && (has(ts, te, mNeedle) || !has(ts, te, [40]))
+                    case "property", "property-read", "property-write": wanted = !pNeedle.isEmpty && has(ts, te, pNeedle)
+                    default:
+                        if q.templates, name.hasPrefix("template") { tmplLines.append(String(decoding: UnsafeBufferPointer(rebasing: b[ts..<te]), as: UTF8.self)) }
+                    }
+                    if wanted {
+                        let line = String(decoding: UnsafeBufferPointer(rebasing: b[ts..<te]), as: UTF8.self)
+                        tag = (name, String(line.dropFirst(name.count + 1)).trimmingCharacters(in: .whitespaces), start + u16 + lead)
+                    }
+                } else if inSummary {
+                    if q.core { summary.append(String(decoding: UnsafeBufferPointer(rebasing: b[ts..<te]), as: UTF8.self)) }
+                } else if tag != nil {
+                    tag!.text += " " + String(decoding: UnsafeBufferPointer(rebasing: b[ts..<te]), as: UTF8.self)
+                }
+                // advance (UTF-16 length of this line + newline)
+                var i = ls
+                while i < le {
+                    let c = b[i]
+                    if c & 0xC0 != 0x80 { u16 += c >= 0xF0 ? 2 : 1 }
+                    i += 1
+                }
+                u16 += 1
+                ls = le + 1
+            }
+            flush()
+        }
+        d.raw = tmplLines.isEmpty ? "*" : tmplLines.joined(separator: "\n")
+        d.summary = summary.joined(separator: " ")
+        d.fill(tags)
         return d
     }
 

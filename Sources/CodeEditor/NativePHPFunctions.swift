@@ -40,7 +40,7 @@ final class NPFuncIndex {
         var seen = Set<String>()
         func add(_ p: String) { if seen.insert(p).inserted, LaravelFS.isFile(p) { out.append(p) } }
         if let t = FastProject.read(root + "/vendor/composer/autoload_files.php") as String? {
-            let re = try? NSRegularExpression(pattern: #"\$(vendorDir|baseDir)\s*\.\s*'([^']+)'"#)
+            let re = NPRe.make(pattern: #"\$(vendorDir|baseDir)\s*\.\s*'([^']+)'"#)
             for m in re?.matches(in: t, range: NSRange(location: 0, length: (t as NSString).length)) ?? [] {
                 let base = (t as NSString).substring(with: m.range(at: 1)) == "vendorDir" ? root + "/vendor" : root
                 add(base + (t as NSString).substring(with: m.range(at: 2)))
@@ -67,20 +67,27 @@ final class NPFuncIndex {
         let st = currentStamp()
         if stamp == st { return }
         stamp = st
+        let t0 = NPStats.now()
+        defer { NPStats.funcIndexNs &+= NPStats.now() &- t0 }
         files = autoloadFiles()
         functions.removeAll(); constants.removeAll()
-        let fnRe = try? NSRegularExpression(pattern: #"(?m)(?:^|[\s;{}])function\s+&?\s*([A-Za-z_]\w*)\s*\("#)
-        let defRe = try? NSRegularExpression(pattern: #"define\(\s*['"]([A-Za-z_]\w*)['"]"#)
-        let constRe = try? NSRegularExpression(pattern: #"(?m)^const\s+([A-Za-z_]\w*)\s*="#)
+        let fnRe = NPRe.make(pattern: #"(?m)(?:^|[\s;{}])function\s+&?\s*([A-Za-z_]\w*)\s*\("#)
+        let defRe = NPRe.make(pattern: #"define\(\s*['"]([A-Za-z_]\w*)['"]"#)
+        let constRe = NPRe.make(pattern: #"(?m)^const\s+([A-Za-z_]\w*)\s*="#)
         for (idx, f) in files.enumerated() {
+            // fast path: ASCII files are scanned as bytes (no decoding, no regex); anything else takes the regex path below
+            if let data = FileManager.default.contents(atPath: f), data.count < Self.maxFileBytes, let found = Self.scanBytes(data) {
+                for e in found.functions { let key = e.name.lowercased(); if functions[key] == nil { functions[key] = Entry(file: Int32(idx), loc: Int32(e.loc), declStart: Int32(e.declStart)) } }
+                for e in found.constants where constants[e.name] == nil { constants[e.name] = Entry(file: Int32(idx), loc: Int32(e.loc), declStart: Int32(e.declStart)) }
+                continue
+            }
             guard let size = (try? FileManager.default.attributesOfItem(atPath: f))?[.size] as? NSNumber, size.intValue < Self.maxFileBytes,
                   let ns = FastProject.read(f) else { continue }
             let full = NSRange(location: 0, length: ns.length)
             for m in fnRe?.matches(in: ns as String, range: full) ?? [] {
                 let r = m.range(at: 1)
                 // skip methods: preceded by a visibility/static keyword on the same statement
-                let ctx = ns.substring(with: NSRange(location: max(0, m.range.location - 24), length: min(24, m.range.location)))
-                if ctx.range(of: #"(public|protected|private|static|abstract|final)\s*$"#, options: .regularExpression) != nil { continue }
+                if Self.followsModifier(ns, m.range.location) { continue }
                 let key = ns.substring(with: r).lowercased()
                 if functions[key] == nil { functions[key] = Entry(file: Int32(idx), loc: Int32(r.location), declStart: Int32(m.range.location)) }
             }
@@ -92,6 +99,90 @@ final class NPFuncIndex {
                 }
             }
         }
+    }
+
+    /// Byte scanner with the semantics of the regexes below (`function name(`, `define('X'`, `const X =` at a line start). Offsets are
+    /// UTF-16 offsets, which equal byte offsets only for ASCII, so non-ASCII files return nil (caller uses the regex path).
+    static func scanBytes(_ data: Data) -> (functions: [(name: String, loc: Int, declStart: Int)], constants: [(name: String, loc: Int, declStart: Int)])? {
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> (functions: [(name: String, loc: Int, declStart: Int)], constants: [(name: String, loc: Int, declStart: Int)])? in
+            let b = raw.bindMemory(to: UInt8.self)
+            let n = b.count
+            for c in b where c >= 0x80 { return nil }
+            var fns: [(name: String, loc: Int, declStart: Int)] = [], consts: [(name: String, loc: Int, declStart: Int)] = []
+            @inline(__always) func ws(_ c: UInt8) -> Bool { c == 32 || (c >= 9 && c <= 13) }
+            @inline(__always) func idStart(_ c: UInt8) -> Bool { (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 }
+            @inline(__always) func idChar(_ c: UInt8) -> Bool { idStart(c) || (c >= 48 && c <= 57) }
+            func word(_ at: Int, _ w: StaticString) -> Bool {
+                let m = w.utf8CodeUnitCount
+                guard at + m <= n else { return false }
+                let p = w.utf8Start
+                for i in 0..<m where b[at + i] != p[i] { return false }
+                return true
+            }
+            func ident(_ at: Int) -> Int { var e = at; while e < n, idChar(b[e]) { e += 1 }; return e }
+            var i = 0
+            while i < n {
+                let c = b[i]
+                if c == 102, word(i, "function"), i == 0 || ws(b[i - 1]) || b[i - 1] == 59 || b[i - 1] == 123 || b[i - 1] == 125 {
+                    var q = i + 8
+                    let w0 = q
+                    while q < n, ws(b[q]) { q += 1 }
+                    if q > w0 {
+                        if q < n, b[q] == 38 { q += 1 }
+                        while q < n, ws(b[q]) { q += 1 }
+                        if q < n, idStart(b[q]) {
+                            let e = ident(q)
+                            var r = e
+                            while r < n, ws(b[r]) { r += 1 }
+                            if r < n, b[r] == 40 {
+                                let declStart = i > 0 ? i - 1 : 0
+                                // skip methods: a visibility / static keyword right before `function`
+                                var k = declStart
+                                while k > 0, ws(b[k - 1]) { k -= 1 }
+                                var isMethod = false
+                                for mod in ["public", "protected", "private", "static", "abstract", "final"] as [StaticString] {
+                                    let m = mod.utf8CodeUnitCount
+                                    if k >= m, word(k - m, mod) { isMethod = true; break }
+                                }
+                                if !isMethod { fns.append((String(decoding: UnsafeBufferPointer(rebasing: b[q..<e]), as: UTF8.self), q, declStart)) }
+                                i = r + 1
+                                continue
+                            }
+                        }
+                    }
+                } else if c == 100, word(i, "define(") {
+                    var q = i + 7
+                    while q < n, ws(b[q]) { q += 1 }
+                    if q < n, b[q] == 39 || b[q] == 34, q + 1 < n, idStart(b[q + 1]) {
+                        let e = ident(q + 1)
+                        if e < n, b[e] == 39 || b[e] == 34 { consts.append((String(decoding: UnsafeBufferPointer(rebasing: b[(q + 1)..<e]), as: UTF8.self), q + 1, i)) }
+                    }
+                } else if c == 99, i == 0 || b[i - 1] == 10, word(i, "const") {
+                    var q = i + 5
+                    let w0 = q
+                    while q < n, ws(b[q]) { q += 1 }
+                    if q > w0, q < n, idStart(b[q]) {
+                        let e = ident(q)
+                        var r = e
+                        while r < n, ws(b[r]) { r += 1 }
+                        if r < n, b[r] == 61 { consts.append((String(decoding: UnsafeBufferPointer(rebasing: b[q..<e]), as: UTF8.self), q, i)) }
+                    }
+                }
+                i += 1
+            }
+            return (fns, consts)
+        }
+    }
+
+    /// True when the text right before `loc` (ignoring whitespace) ends in a method modifier: `public function` is a method, not a helper.
+    private static func followsModifier(_ ns: NSString, _ loc: Int) -> Bool {
+        var e = loc
+        while e > 0, [32, 9, 10, 13].contains(ns.character(at: e - 1)) { e -= 1 }
+        for w in ["public", "protected", "private", "static", "abstract", "final"] {
+            let n = w.utf16.count
+            if e >= n, ns.substring(with: NSRange(location: e - n, length: n)) == w { return true }
+        }
+        return false
     }
 
     struct Found { var path: String; var loc: Int; var declStart: Int }

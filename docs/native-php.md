@@ -16,7 +16,7 @@ When ON, `LanguageServerPrefs.isEnabled("intelephense")` is false, so the server
 | --- | --- |
 | `NativePHP.swift` | Public API: `lookup` (sync), `lookupAsync` (hover / link underline), `goToDefinition(in:at:)`, pref, picker for multiple targets. Memoises the last lex/parse of the live buffer. |
 | `NativePHPResolve.swift` | `NPResolver`: token classification (class, member, function, constant, variable, string, docblock), member search over the type hierarchy + Eloquent virtual members + facades (`@see`, `@method`), hover markdown. One instance per request on the project's fast-tier queue. |
-| `NativePHPDocs.swift` | `NPFiles` (last 6 PHP texts, 6 MB cap), `NPDoc` (docblock locate/parse/render), line/column helpers. |
+| `NativePHPDocs.swift` | `NPFiles` (last 6 PHP texts, 3 M character cap), `NPDoc` (docblock locate/parse/render), line/column helpers. |
 | `NativePHPFunctions.swift` | `NPFuncIndex`: global functions/constants from composer autoload files (app helpers + vendor `helpers.php`); names and offsets only, max 3 projects. |
 | `PHPStubs.swift` + `PhpStubs/` | Bundled PHP built-in stubs (JetBrains phpstorm-stubs, Apache-2.0): lazy index lookup, parsed-class cache. See "Built-in stubs". |
 | `NativePHPBuiltins.swift` | Offline fallback only: ~180 PHP function docs, ~50 constants, core class names (used when the stub directory is missing, and for one-line constant docs the stubs lack). |
@@ -218,3 +218,94 @@ stubs type loosely stay loosely typed; Eloquent attribute casts (`$model->create
 Verification: `SelfTestNativePHPStubs` (lazy loading, bounded cache, definition / hover / signature help / inherited members, diagnostics without false
 positives) and the benchmark `CE_SELFTEST=1 CE_NATIVE_BENCH=<project> CE_NATIVE_BENCH_OUT=x.json .build/debug/CodeEditor` followed by
 `python3 scripts/bench-intelephense.py x.json out.json` (a definition that lands in a built-in stub on both sides counts as agreement).
+
+## Performance
+
+Measured on `~/PHPStromProjects/arht_pos` (Laravel, 647 PHP files in app / routes / database / config / Modules) with a **release** build
+(`swift build -c release --build-system native`), headless:
+
+```
+CE_PHP_STUBS=<repo>/PhpStubs CE_SELFTEST=1 CE_NATIVE_BENCH=<project> CE_NATIVE_BENCH_OUT=x.json \
+  [CE_NATIVE_BENCH_FILES=40] [CE_NATIVE_BENCH_DIAG_FILES=700] [CE_NATIVE_BENCH_LOOP=600] [CE_NATIVE_BENCH_HOLD=1] .build/release/CodeEditor
+```
+
+The bench prints `NBENCH` lines: the first stub-touching lookup, cold pass (p50 / p95 / p99 / max / first, the 15 slowest lookups each with
+the read / parse / helper-index / docblock time spent in them), a warm repeat pass, a parse profile of the big vendor classes (read / lex /
+FTParser), signature help on the slowest calls, find usages for 4-5 popular symbols, diagnostics over the sample (p50 / p95 / worst file, split by
+rule group) and the footprint after every phase (plus cache sizes and the effect of `NativePHP.trimMemory()`). `CE_NATIVE_BENCH_LOOP=n` hammers the
+8 slowest lookups n times (attach `sample <pid>`), `CE_NATIVE_BENCH_HOLD=1` sleeps at the end so `heap <pid>` / `vmmap` can be run.
+The JSON answers are unchanged by the optimisations (319 + 390 recorded lookups compared target by target before / after: 0 differences).
+
+| Metric (release) | Before | After |
+| --- | --- | --- |
+| Go to definition, 319 lookups: p50 / p95 / p99 | 0.2 / 2.2 / 14.0 ms | 0.2 / 1.7 / 5.6 ms |
+| Slowest single lookup (cold: `response()->json`, first helper index) | 38.0 ms | 12.7 ms |
+| First lookup of a process | 5.7 ms | 3.1 ms |
+| First lookup touching the built-in stubs (`ZipArchive::open`) | n/m (145 ms in a debug build) | 2.3 - 3.8 ms |
+| Whole sample, cold / warm total | 245 / 99 ms | 137 / 52 ms |
+| Warm repeat pass, slowest lookup | 13.9 ms | 1.7 ms |
+| Carbon / facade `@method` lookups (`parse`, `subDays`, `addDay`) | 14 - 20 ms | 0.5 - 14 ms cold (parsing 31 Carbon files), 0.3 ms warm |
+| Signature help on the slowest calls | up to 13.4 ms | 0.5 ms |
+| Find usages (class / class / `get` / `user`) | 122 / 52 / 493 / 190 ms | 68 / 50 / 281 / 134 ms |
+| Diagnostics, 647 files: p50 / p95 / worst | 3.0 / 21.8 / 56.4 ms | 2.9 / 22.1 / 54.7 ms (unchanged: dominated by tree-sitter + member pass) |
+| Footprint growth after lookups + usages + diagnostics over 647 files | +72 MB (leak: ~85 KB per analysed file) | +12 .. 29 MB (run-to-run noise of the AppKit test harness; no per-file growth) |
+
+Targets: cold first lookup < 40 ms (**3 - 4 ms**), any single lookup < 30 ms (**12.7 ms**), p95 < 4 ms (**1.7 ms**), diagnostics worst file < 100 ms
+(**55 ms**, was already below), footprint growth < ~30 MB after the heavy sample (**met**, see below).
+
+### What was slow, and what changed
+
+* **Leak (RAM, the big one).** `NPDiagContext.flow` (lazy var) and `NPFlow.c` pointed at each other strongly, so every diagnostics pass leaked the context,
+  its token array (`PHPTok`), the per-token word cache and the lexer (about 85 KB per analysed file, on every edit). `NPFlow.c` is now `unowned`.
+  `NPDiagContext.liveCount` + a self-test (30 analyses, 0 live contexts) guard it.
+* **Huge docblocks.** Carbon / facade class docblocks hold thousands of `@method` lines and were fully parsed (string split, trim, per-line allocations) up to
+  6 times per lookup. `NPDoc.parse(_:start:query:)` scans big docblocks (> 4 KB) once as bytes and builds only what the caller needs (`@method name`,
+  `@property name`, `@see/@mixin`, summary + core tags, `@template` lines); small docblocks still take the full parser. `NPResolver` memoises class docblock
+  queries per request; `FTEval.docOf` uses the class-info query for `::class` keys.
+* **`inPHP`** (is the pointer inside PHP code) did two backwards substring searches over the whole file per lookup; in a big file without a closing tag
+  that scanned the entire text. The `<?` / `?>` positions are now collected once per request (chunked `getCharacters`) and binary-searched.
+* **Helper function index** (first `response()` / `route()` lookup): the regexes ran over every composer autoload file and compiled a regex per match.
+  ASCII files are now scanned as bytes (`NPFuncIndex.scanBytes`, same matching rules), others keep the regex path. 31 ms -> 11 ms once per session.
+* **Line / column** (`NPText.lineCol`) copied the whole file prefix into an array per target; it now counts in 4 KB chunks, and for offsets > 30 000
+  uses a line table cached for the last 2 texts. `NPLineStarts` builds its table in chunks instead of one `character(at:)` call per character.
+* **Case-insensitive method scan** lowercased every method name of every class in the hierarchy (allocation per method) when a name was not found in a
+  class; `FTClass.method(named:)` compares bytes without allocating.
+* **Regex compilation**: `NPRe.make` caches compiled expressions (64 entries) for the signature / diagnostics / helper-index patterns that were rebuilt per call.
+* **`PHPStubs.isStubFile`** did a substring search plus string concatenation per class lookup; it compares against one cached prefix.
+* **File reads** produce a CF-backed `NSString` (`NSString(data:encoding:)`) instead of a bridged Swift `String`, so UTF-16 access in the lexer / parser is O(1).
+* **`PHPTok`** is 24 bytes instead of 40 (`len` / `line` / `col` stored as `Int32`, same API).
+* **Class cache**: `FastProject.classInfo` used to wipe all 400 entries when the 401st was added (thrash on big sessions). It is now least-recently-used with
+  an entry cap (400) and a byte cap (6 MB by `FTClass.approxBytes`), evicting the oldest quarter. Stub classes keep their own 24-entry cache.
+
+What is left in a cold lookup is reading and parsing the vendor classes of the receiver's hierarchy (Carbon: 31 files, about 8 ms read + 6 ms parse in
+release). A warm lookup is 0.1 - 0.5 ms. The parse profile of 53 big vendor files (1.77 M characters) is 3.3 ms read, 3.6 ms lex, 8 ms `FTParser` per
+round, so parsing is already near 200 MB/s; making the hierarchy lazy (stop at the first class that has the member) would save more but was not done
+because the member search order and the `@mixin` / interface walks need the whole list.
+
+### RAM
+
+Retained by the engine, all bounded and all dropped by `NativePHP.trimMemory()`:
+
+| Cache | Bound | Typical |
+| --- | --- | --- |
+| `FastProject` class cache | 400 entries and 6 MB (estimated) | 360 entries, about 1.5 MB estimated after the 150-file sample |
+| `PHPStubs` parsed classes | 24 entries | 17 - 18 |
+| `NPFiles` text cache | 6 files and 3 M characters (was 6 M) | 6 files |
+| Last lexed buffer (`NativePHP.lastParse`) | 1 | 1 |
+| Line tables of big texts | 2 | 0 - 2 |
+| `NPRe` compiled regexes | 64 | about 15 |
+| `NPFuncIndex` names | 3 projects | about 1 KB per 100 helpers |
+
+`trimMemory()` (also `malloc_zone_pressure_relief`) runs on system memory pressure (warning / critical), when the app is hidden or every window is
+occluded / minimised, and when power saver switches on. It is event driven (a `DispatchSource` memory-pressure source and notifications); there are no
+timers. The next request after a trim simply re-reads what it needs (a self-test checks that the answer is identical).
+The footprint after the heavy sample (150 files, 390 lookups, 4 find usages, 647 diagnostics passes) moves by -20 .. +29 MB between runs because the
+test harness (AppKit text layout in the self-test process, about 150 MB of glyph storage) dominates the baseline; the engine's own contribution is the
+table above plus transient allocator high-water marks. Measure with `CE_NATIVE_BENCH_HOLD=1` and `heap <pid>`.
+
+### Guards
+
+`SelfTestNativePHPPerf`: docblock query parity with the full parser (methods, properties, `@see`, core tags, offsets) and a 6000-line docblock parsed
+in < 150 ms; `inPHP` tag table equals the old backwards search at every offset (including chunk boundaries); helper byte scanner rules; class cache entry
+and byte caps and LRU behaviour; no leaked diagnostics contexts; `trimMemory` empties the caches and answers stay identical; a lookup behind a
+3000-line `@method` docblock resolves and stays under 250 ms (debug build).

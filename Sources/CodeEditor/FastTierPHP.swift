@@ -66,6 +66,35 @@ final class FTClass {
     var scopes: [String] = []
     var accessors: [String] = []
 
+    /// Rough retained size (string payloads + per-member struct overhead) for the byte-capped class cache.
+    var approxBytes: Int {
+        var n = 400 + fqn.utf8.count + name.utf8.count + ns.utf8.count
+        for m in methods { n += 120 + m.name.utf8.count + m.params.utf8.count + m.ret.utf8.count }
+        for p in props { n += 100 + p.name.utf8.count + p.type.utf8.count }
+        for s in traits + implements + consts + cases + fillable + guarded + hidden + casts + appends + scopes + accessors { n += 40 + s.utf8.count }
+        for (k, v) in uses { n += 80 + k.utf8.count + v.utf8.count }
+        n += useStmts.count * 100 + declLocs.count * 90 + relations.count * 120
+        return n
+    }
+
+    /// Method by exact name, else case-insensitively (PHP method names are case-insensitive); no allocation.
+    func method(named name: String) -> FTMethod? {
+        for m in methods where m.name == name { return m }
+        let n = name.utf8.count
+        for m in methods where m.name.utf8.count == n && FTClass.equalsIgnoringASCIICase(m.name, name) { return m }
+        return nil
+    }
+
+    static func equalsIgnoringASCIICase(_ a: String, _ b: String) -> Bool {
+        var x = a.utf8.makeIterator(), y = b.utf8.makeIterator()
+        while let c = x.next() {
+            guard let d = y.next() else { return false }
+            let lc = (c >= 65 && c <= 90) ? c + 32 : c, ld = (d >= 65 && d <= 90) ? d + 32 : d
+            if lc != ld { return false }
+        }
+        return y.next() == nil
+    }
+
     /// Resolves a name as written in this file to an FQN (no leading backslash).
     func resolve(_ written: String) -> String {
         var name = written

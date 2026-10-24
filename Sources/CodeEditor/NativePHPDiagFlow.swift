@@ -24,7 +24,7 @@ struct NPScope {
 }
 
 final class NPFlow {
-    let c: NPDiagContext
+    unowned let c: NPDiagContext     // the context owns the flow (lazy var): a strong reference here leaked both per analysed file
     private(set) var fns: [Int: NPFn] = [:]
     private(set) var scopes: [NPScope] = []
     private(set) var scopeOf: [Int]
