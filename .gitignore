@@ -6,3 +6,4 @@ dist/
 .claude/
 screenshots/
 .tools/
+__pycache__/
