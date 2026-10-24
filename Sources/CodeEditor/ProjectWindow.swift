@@ -583,7 +583,10 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
                 self.statusBar.flash("Reloaded\(name) from disk (agent edit?)  ⌘Z to undo", seconds: 8)
             }
             tabs.add(id: id, title: url.lastPathComponent, view: editor.view)
-            if VendorIndex.isLibraryFile(url), !editor.isReadOnly, let container = editor.view as? EditorPane {
+            if PHPStubs.isStubFile(url.standardizedFileURL.path), let container = editor.view as? EditorPane {
+                editor.textView.isEditable = false
+                container.showBanner("PHP built-in stub — read only (JetBrains phpstorm-stubs, Apache-2.0).", actions: [])
+            } else if VendorIndex.isLibraryFile(url), !editor.isReadOnly, let container = editor.view as? EditorPane {
                 editor.textView.isEditable = false
                 container.showBanner("Library file (vendor) — read only.", actions: [("Edit Anyway", { [weak editor, weak container] in
                     editor?.textView.isEditable = true

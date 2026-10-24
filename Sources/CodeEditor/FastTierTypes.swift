@@ -417,6 +417,16 @@ final class FTEval {
                             return
                         }
                     }
+                    if i >= 2, lex.toks[i - 1].kind == .ident {
+                        // catch (A | \\B $e): the first class names the variable
+                        var s = i - 1
+                        var first = s
+                        while s >= lo, lex.toks[s].kind == .ident || lex.isPunct(s, "|") { if lex.toks[s].kind == .ident { first = s }; s -= 1 }
+                        if s >= lo, s > 0, lex.isPunct(s, "("), lex.isIdent(s - 1, "catch"), let f = fp.resolveClass(lex.text(first), in: cur) {
+                            candidates.append((lex.toks[i].loc, .instance(f)))
+                            return
+                        }
+                    }
                     if i + 2 < lex.count, lex.isIdent(i + 1, "instanceof"), lex.toks[i + 2].kind == .ident, let f = fp.resolveClass(lex.text(i + 2), in: cur) {
                         candidates.append((lex.toks[i].loc, .instance(f)))
                         return

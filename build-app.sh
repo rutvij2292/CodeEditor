@@ -17,6 +17,10 @@ cp Branding/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp -R "$BIN_DIR"/*.bundle "$APP/Contents/Resources/"
 mkdir -p "$APP/Contents/Resources/Fonts"
 cp Fonts/*.ttf Fonts/OFL.txt "$APP/Contents/Resources/Fonts/"
+# PHP built-in stubs for the native PHP engine (JetBrains phpstorm-stubs, Apache-2.0; LICENSE + SOURCE.txt travel with them).
+# Regenerate with scripts/make-php-stubs.py. Read lazily at run time, never at launch.
+[ -f PhpStubs/index.txt ] || { echo "PhpStubs/ missing: run scripts/make-php-stubs.py" >&2; exit 1; }
+cp -R PhpStubs "$APP/Contents/Resources/PhpStubs"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -29,7 +33,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleDisplayName</key><string>$NAME</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
-    <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Teccel Software. Bundled font: JetBrains Mono (SIL OFL 1.1).</string>
+    <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Teccel Software. Bundled font: JetBrains Mono (SIL OFL 1.1). PHP stubs: JetBrains phpstorm-stubs (Apache 2.0).</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$VERSION</string>

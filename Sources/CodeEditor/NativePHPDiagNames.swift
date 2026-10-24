@@ -226,7 +226,7 @@ extension NPDiagContext {
         }
         func exists(_ fqn: String) -> Bool {
             if localTypes.contains(fqn.lowercased()) { return true }
-            if NPDiagBuiltins.contains(fqn) { return true }
+            if NPDiagBuiltins.contains(fqn) || PHPStubs.hasClass(fqn) { return true }
             if fqn.hasPrefix("Facades\\") { return true }
             if fp.classPath(fqn) != nil { return true }
             if !fqn.contains("\\"), aliases.contains(fqn.lowercased()) { return true }

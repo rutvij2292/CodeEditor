@@ -296,6 +296,7 @@ final class FastProject {
         let name = fqn.hasPrefix("\\") ? String(fqn.dropFirst()) : fqn
         if let p = pathCache[name] { return p.isEmpty ? nil : p }
         var found = lp.classFile(name)
+        if found == nil { found = PHPStubs.classPath(name) }     // PHP built-ins (bundled stubs) win over vendor polyfills
         if found == nil, VendorIndex.enabled {
             found = VendorIndex.shared(for: URL(fileURLWithPath: path)).find(fqn: name).first(where: { LaravelFS.isFile($0.path) })?.path
         }
@@ -304,6 +305,9 @@ final class FastProject {
     }
 
     func classInfo(path file: String) -> FTClass? {
+        if PHPStubs.isStubFile(file) {      // immutable bundled files: own bounded cache, no per-project copy
+            return PHPStubs.classInfo(path: file) { Self.read(file).flatMap { FTParser.parse($0) } }
+        }
         let st = LaravelFS.mtime(file)
         if let c = classCache[file], c.stamp == st { return c.cls }
         guard let t = Self.read(file) else { return nil }

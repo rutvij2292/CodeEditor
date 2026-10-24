@@ -90,12 +90,15 @@ for r in data["rows"]:
     elif not np_: kind = "intelephense-only"
     elif set(ip) & set(np_): kind = "agree"
     else: kind = "differ"
-    rows.append({"word": r["word"], "file": f.replace(root, ""), "line": r["line"], "native": np_, "intelephense": ip, "kind": kind})
+    # both landed in a PHP built-in stub (Kode's bundled PhpStubs/ vs Intelephense's own copy): same symbol, different file
+    builtin = bool(np_ and ip and all("/PhpStubs/" in x for x in np_) and all("/intelephense/lib/stub/" in x for x in ip))
+    if kind == "differ" and builtin: kind = "agree"
+    rows.append({"word": r["word"], "file": f.replace(root, ""), "line": r["line"], "native": np_, "intelephense": ip, "kind": kind, "builtin": builtin})
 times.sort()
 pc = lambda q: times[min(len(times) - 1, int(len(times) * q))]
 from collections import Counter
 c = Counter(x["kind"] for x in rows)
 print(f"INTELEPHENSE lookups={len(times)} p50ms={pc(.5):.1f} p95ms={pc(.95):.1f} max={times[-1]:.1f} rssAfterMB={rss_mb():.0f}", file=sys.stderr)
-print("AGREEMENT", dict(c), file=sys.stderr)
+print("AGREEMENT", dict(c), "(agree includes %d built-in stub matches)" % sum(1 for x in rows if x["builtin"]), file=sys.stderr)
 if len(sys.argv) > 2: json.dump(rows, open(sys.argv[2], "w"), indent=1)
 p.kill()

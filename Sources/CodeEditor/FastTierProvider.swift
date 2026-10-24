@@ -335,7 +335,7 @@ enum FastEngine {
         switch e.kind { case .interface: return .interface; case .enum: return .enum; default: return .class }
     }
 
-    private struct Cand { var short: String; var fqn: String; var kind: CompletionKind; var project: Bool }
+    private struct Cand { var short: String; var fqn: String; var kind: CompletionKind; var project: Bool; var builtin = false }
 
     private static func candidates(_ query: String, fp: FastProject, limit: Int) -> [Cand] {
         let q = query.lowercased()
@@ -354,7 +354,14 @@ enum FastEngine {
                 out.append(Cand(short: e.shortName, fqn: e.fqn, kind: kind(of: e), project: false))
             }
         }
+        let have = Set(out.map(\.fqn))
+        for e in PHPStubs.search(kind: "c", prefix: query, limit: limit) where !have.contains(e.name) { out.append(stubCand(e)) }
         return out
+    }
+
+    private static func stubCand(_ e: PHPStubEntry) -> Cand {
+        let k: CompletionKind = e.extra == "interface" ? .interface : e.extra == "enum" ? .enum : .class
+        return Cand(short: e.name.split(separator: "\\").last.map(String.init) ?? e.name, fqn: e.name, kind: k, project: false, builtin: true)
     }
 
     private static func useStatementItems(typed: String, range: NSRange, fp: FastProject) -> Result {
@@ -368,9 +375,11 @@ enum FastEngine {
             let seen = Set(cands.map(\.fqn))
             for e in VendorIndex.shared(for: fp.lp.root).searchTypes(typed, limit: 40) where !seen.contains(e.fqn) { cands.append(Cand(short: e.shortName, fqn: e.fqn, kind: kind(of: e), project: false)) }
         }
+        let have = Set(cands.map(\.fqn))
+        for e in PHPStubs.search(kind: "c", prefix: typed.hasPrefix("\\") ? String(typed.dropFirst()) : typed, limit: 20) where !have.contains(e.name) { cands.append(stubCand(e)) }
         let items = cands
             .map { c -> CompletionItem in
-                var it = CI.make(c.fqn, c.kind, detail: c.project ? "project" : "vendor", insert: c.fqn, sort: (c.project ? "1" : "2") + c.short.lowercased(), range: range)
+                var it = CI.make(c.fqn, c.kind, detail: c.project ? "project" : (c.builtin ? "php" : "vendor"), insert: c.fqn, sort: (c.project ? "1" : "2") + c.short.lowercased(), range: range)
                 it.filterText = c.fqn
                 return it
             }

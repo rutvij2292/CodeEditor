@@ -173,7 +173,9 @@ final class NPResolver {
     func originLine(owner: String?, path: String?, offset: Int?) -> String {
         var parts: [String] = []
         if let owner, !owner.isEmpty { parts.append("`" + owner + "`") }
-        if let path {
+        if let path, PHPStubs.isStubFile(path) {
+            parts.append("PHP built-in stub")
+        } else if let path {
             var loc = rel(path)
             if let offset, let t = text(ofFile: path) { loc += ":\(NPText.lineCol(t, offset).line)" }
             parts.append("`" + loc + "`")
@@ -278,6 +280,8 @@ final class NPResolver {
         if let f = fp.resolveClass(w, in: cur) { return (f, false) }
         if w.hasPrefix("\\") { w.removeFirst() }
         let short = w.split(separator: "\\").last.map(String.init) ?? w
+        if PHPStubs.hasClass(w) { return (w, false) }                                  // `\PDO`, `Exception` written in a namespace without import
+        if !w.contains("\\"), PHPStubs.hasClass(short) { return (short, false) }
         if NPBuiltins.classes[w] != nil || (!w.contains("\\") || w.hasPrefix("Random")) && NPBuiltins.classes[short] != nil { return (NPBuiltins.classes[w] != nil ? w : short, true) }
         return nil
     }
@@ -391,7 +395,13 @@ final class NPResolver {
         if light, let f = NPFuncIndex.shared(root: fp.path).constant(name) { return NPHit(range: range, targets: [NPTarget(path: f.path, offset: f.loc, line: 0, column: 0)], markdown: "", kind: "constant") }
         if let f = NPFuncIndex.shared(root: fp.path).constant(name), let t = text(ofFile: f.path) {
             let line = NPText.lineText(t, f.loc)
-            let md = "```php\n\(line)\n```\n\n" + originLine(owner: nil, path: f.path, offset: f.loc)
+            var md = "```php\n\(line)\n```"
+            if let d = NPDoc.leading(t, before: f.declStart) {
+                let m = NPDoc.parse(d.text, start: d.start).markdown()
+                if !m.isEmpty { md += "\n\n" + m }
+            }
+            else if PHPStubs.isStubFile(f.path), let d = NPBuiltins.constants[name] { md += "\n\n" + d }     // stub without docblock: curated one-liner
+            md += "\n\n" + originLine(owner: nil, path: f.path, offset: f.loc)
             return NPHit(range: range, targets: target(path: f.path, offset: f.loc).map { [$0] } ?? [], markdown: md, kind: "constant")
         }
         if let d = NPBuiltins.constants[name] {

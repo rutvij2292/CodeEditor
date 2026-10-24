@@ -49,7 +49,7 @@ extension NPDiagContext {
             var info: FTClass?
             var text: NSString?
             if let cur, cur.fqn.lowercased() == name.lowercased() { info = cur; text = ns }
-            else if let p = fp.classPath(name) { info = fp.classInfo(path: p); text = FastProject.read(p) }
+            else if let p = fp.classPath(name), !PHPStubs.isStubFile(p) { info = fp.classInfo(path: p); text = FastProject.read(p) }   // built-ins stay "unknown": member / argument checks remain silent on them
             guard let k = info else {
                 if depth == 0 { return nil }
                 if !Self.safeBuiltinParents.contains(name.lowercased()) { h.complete = false }
@@ -333,7 +333,7 @@ extension NPDiagContext {
         // namespaced file: an unqualified call may resolve to a namespaced function we do not see
         if !namespace.isEmpty, localFunctions.isEmpty, false { return nil }
         let idx = NPFuncIndex.shared(root: fp.path)
-        guard let f = idx.function(key), let t = FastProject.read(f.path), t.range(of: "\nnamespace ", options: .literal).location == NSNotFound,
+        guard let f = idx.function(key, stubs: false), let t = FastProject.read(f.path), t.range(of: "\nnamespace ", options: .literal).location == NSNotFound,
               let sig = NPFuncIndex.signature(t, nameLoc: f.loc) else { return nil }
         return sig.params
     }

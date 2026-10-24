@@ -18,7 +18,8 @@ When ON, `LanguageServerPrefs.isEnabled("intelephense")` is false, so the server
 | `NativePHPResolve.swift` | `NPResolver`: token classification (class, member, function, constant, variable, string, docblock), member search over the type hierarchy + Eloquent virtual members + facades (`@see`, `@method`), hover markdown. One instance per request on the project's fast-tier queue. |
 | `NativePHPDocs.swift` | `NPFiles` (last 6 PHP texts, 6 MB cap), `NPDoc` (docblock locate/parse/render), line/column helpers. |
 | `NativePHPFunctions.swift` | `NPFuncIndex`: global functions/constants from composer autoload files (app helpers + vendor `helpers.php`); names and offsets only, max 3 projects. |
-| `NativePHPBuiltins.swift` | Doc-only tables: ~180 PHP functions, ~50 constants, core classes. |
+| `PHPStubs.swift` + `PhpStubs/` | Bundled PHP built-in stubs (JetBrains phpstorm-stubs, Apache-2.0): lazy index lookup, parsed-class cache. See "Built-in stubs". |
+| `NativePHPBuiltins.swift` | Offline fallback only: ~180 PHP function docs, ~50 constants, core class names (used when the stub directory is missing, and for one-line constant docs the stubs lack). |
 | `NativePHPDiag.swift` | Diagnostics entry: `NativePHPDiag.analyze(url:text:fp:groups:)`, rule groups (`php.diag.<group>` prefs), severity pref, `dedupe` / `merged` against Intelephense, line table. |
 | `NativePHPDiagSyntax.swift` | Syntax errors from the vendored tree-sitter PHP grammar (top-most ERROR / MISSING nodes, one per line, max 5). |
 | `NativePHPDiagLint.swift` | Optional `php -l` second opinion (only when tree-sitter already found an error): a grammar blind spot never becomes a red error. |
@@ -53,11 +54,11 @@ Adding a feature (phase 2+) means a new method on `NPResolver` / a new `NativePH
 | Go to definition: user + vendor global functions (composer autoload files), user constants | done |
 | Go to definition: variable -> declaration | done (param / assignment / foreach) |
 | Hover: signature, return type, docblock summary, `@param`/`@return`/`@throws`/deprecated, origin file:line | done |
-| Hover: built-in functions/constants/classes (doc only) | done (curated subset) |
+| Definition + hover: built-in classes / interfaces / enums / functions / constants / members (PDO, DateTime, Exception, ZipArchive, SplFileObject, ArrayObject, Closure, Generator, DOM, SimpleXML, mysqli, curl_*, mb_*, json_*, preg_*, array_* ...) | done: opens the read-only stub (banner 'PHP built-in stub'), see "Built-in stubs" |
 | Blade-embedded PHP (`{{ }}`, `{!! !!}`, `@php`, directive arguments) | done |
 | Cmd-hover link underline | done |
 | Completion | done earlier (fast tier) |
-| Signature help | done (phase 2a): functions, built-ins, methods, static methods, constructors, closure variables, facades, Eloquent builder forwarding/scopes; active parameter incl. named args, variadics, nested calls, strings/comments; Intelephense only as fallback when the callee is unresolved |
+| Signature help | done (phase 2a): functions, built-ins (all stub functions, methods and constructors), methods, static methods, constructors, closure variables, facades, Eloquent builder forwarding/scopes; active parameter incl. named args, variadics, nested calls, strings/comments; Intelephense only as fallback when the callee is unresolved |
 | Find usages (Alt-F7) | done (phase 2b): classes, members (override/interface family), props, consts, enum cases, functions, global consts, local vars/params; native first, LSP only when native finds nothing. See "Find usages and rename" |
 | Rename (Shift-F6) | done (phase 2b): classes (+ PSR-4 file, `use`, `::class`, FQCN strings, docblocks), methods (family through hierarchy, array callables, scopes), props (incl. promoted), consts, enum cases, functions, variables/params; preview list, conflict refusal, vendor warning |
 | Diagnostics: syntax errors (tree-sitter, confirmed by `php -l` when PHP is installed) | done |
@@ -108,7 +109,7 @@ Cost: nothing resident. A search maps each candidate file once, lexes it once, k
   not listed; trait-provided implementations are not followed.
 * Overloads: `__call`/`__get` magic only for Eloquent builder forwarding, facades and `@method`/`@property` tags.
 * Dynamic names (`$obj->$name`, `$class::make()` with variable class) are not resolved.
-* Built-in function/constant/class docs are a curated subset; unknown built-ins give no hover.
+* Built-ins come from the bundled stubs (PHP 8.3 + the extensions listed under "Built-in stubs"); anything outside them (e.g. imagick, mongodb, swoole) has no hover or definition. Stub members are only as typed as the stubs are (e.g. `str_replace`'s `&$count` is untyped).
 
 ## Diagnostics (phase 2c)
 
@@ -162,3 +163,58 @@ Known accuracy limits: no flow analysis (a variable defined only after its use, 
 inference beyond the receivers above; docblock-only types and generics are ignored; undefined constants, enum cases and class constants are not
 checked; Intelephense-style "Expected N arguments" for too many arguments is not reported; unused variables / private members are not
 reported; the first type of a file is the only one whose members are checked.
+
+## Built-in stubs (PHP classes, functions, constants)
+
+Source: [JetBrains/phpstorm-stubs](https://github.com/JetBrains/phpstorm-stubs) (Apache License 2.0; NOT Intelephense's proprietary bundled stubs).
+`scripts/make-php-stubs.py <phpstorm-stubs clone> PhpStubs` regenerates the committed `PhpStubs/` directory (documented in the script header):
+
+```
+git clone --depth 1 https://github.com/JetBrains/phpstorm-stubs /tmp/phpstorm-stubs
+python3 scripts/make-php-stubs.py /tmp/phpstorm-stubs PhpStubs
+```
+
+| Part | Content |
+| --- | --- |
+| `PhpStubs/classes/<Name>.php` | one class / interface / trait / enum per file (namespaced names use `_`, e.g. `Random_Randomizer.php`), 333 files |
+| `PhpStubs/functions/<ext>_<file>.php` | all functions of one upstream file (about 2000 functions) |
+| `PhpStubs/constants/<ext>_<file>.php` | `const NAME = value;` with docblocks (about 3000 constants) |
+| `PhpStubs/index.txt` | sorted `kind TAB lowercase-name TAB name TAB file TAB nameOffset TAB declOffset TAB extra [TAB signature]`, UTF-16 offsets (what NSString uses) |
+| `PhpStubs/LICENSE`, `SOURCE.txt` | Apache-2.0 text; upstream commit and the list of modifications (Apache section 4) |
+
+Extensions: Core, standard, date, SPL, json, mbstring, ctype, pcre, PDO, mysqli, curl, zip, dom, SimpleXML, libxml, xml, xmlreader, xmlwriter, fileinfo,
+filter, hash, openssl, session, iconv, intl, bcmath, gd, Reflection, random, zlib, sodium, tokenizer, posix, pcntl, calendar, exif, gmp, sqlite3, pgsql, redis,
+Phar, soap, ftp, sockets, readline, xsl (edit `EXTENSIONS` in the script to change). Generation resolves the JetBrains attributes for PHP 8.3:
+`#[PhpStormStubsElementAvailable]` removes elements that do not exist in 8.3, `#[LanguageLevelTypeAware]` becomes a real type, `#[Deprecated]` becomes
+`@deprecated`, other attributes are dropped, bodies are emptied and PHPDoc is cleaned (HTML, `@link`, URL `@see`, length caps).
+
+Location at run time (`PHPStubs.root`): `CE_PHP_STUBS`, `Kode.app/Contents/Resources/PhpStubs` (build-app.sh copies it, next to Fonts), else walking up from the
+executable to a `PhpStubs/` directory (so `.build/debug/CodeEditor` and tests find the repo copy). A copy of the binary outside the repo needs `CE_PHP_STUBS`.
+
+How it plugs in (the stubs are real PHP files, so no special cases downstream):
+
+* `FastProject.classPath(fqn)`: project PSR-4, then the stub index, then vendor. Every consumer (hierarchy walker, member search, type inference, hover,
+  go to definition, constructor signature help, member completion) therefore treats `\PDO`, `Carbon extends DateTime`, `catch (\PDOException $e)`,
+  a user class implementing `ArrayAccess` or extending `RuntimeException` exactly like project classes. `FastProject.classInfo(path:)` parses stub files into a
+  24-entry cache of their own (`PHPStubs.maxCachedClasses`). `catch (A | B $e)` variables are now typed by their first class.
+* `NPFuncIndex.function/constant(name, stubs:)`: composer helper functions first, then the stub index (the argument-count diagnostic passes `stubs: false`).
+* Definition on a built-in opens the stub file read-only at the declaration with the banner "PHP built-in stub"; hover shows signature, return type,
+  PHPDoc summary, `@param`/`@return`/`@throws`/`@since`/`@deprecated` and the origin "PHP built-in stub".
+* Completion: class names (also in `use` lines, added with an import edit), functions (prefix of 2+ characters, signature as detail, curated entries win)
+  and constants (uppercase prefix); members through the normal hierarchy.
+* Diagnostics: a class that exists in the stub index is never "undefined" (`NPDiagBuiltins` stays as an extra safety net for extensions that are not bundled);
+  stub files themselves are not analysed. Member / argument checks stay silent on receivers whose hierarchy contains a built-in class (no new false positives
+  from stub gaps such as `SimpleXMLElement` dynamic properties); this is a deliberate limit.
+
+Cost: nothing is read at launch or by lookups that do not mention a built-in. First use memory-maps `index.txt` (about 600 KB; only the pages a binary search
+touches become resident) and each lookup is a binary search over the mapping (no dictionary is built). A class lookup reads and parses one small file (typically
+2-60 KB); function and constant lookups read one grouped file (about 60 KB) through the existing 6-entry `NPFiles` cache. Function completion scans at most 60
+index lines. Bundle size: `PhpStubs/` is about 2.9 MB of text (3.9 MB on disk), no resident cost.
+
+Limits: no stubs outside the extension list; PHP 8.3 view only (8.4 / 8.5 additions are absent or partial); tabs opened on a stub file get no hover or go to
+definition (no project root); namespaced built-in functions are indexed under their full name and are not reachable from the short-name lookups; functions the
+stubs type loosely stay loosely typed; Eloquent attribute casts (`$model->created_at->format()`) are still not inferred.
+
+Verification: `SelfTestNativePHPStubs` (lazy loading, bounded cache, definition / hover / signature help / inherited members, diagnostics without false
+positives) and the benchmark `CE_SELFTEST=1 CE_NATIVE_BENCH=<project> CE_NATIVE_BENCH_OUT=x.json .build/debug/CodeEditor` followed by
+`python3 scripts/bench-intelephense.py x.json out.json` (a definition that lands in a built-in stub on both sides counts as agreement).

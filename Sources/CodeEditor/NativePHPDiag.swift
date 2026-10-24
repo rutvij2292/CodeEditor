@@ -52,6 +52,7 @@ enum NativePHPDiag {
 
     static func handles(_ url: URL) -> Bool {
         let n = url.lastPathComponent.lowercased()
+        if PHPStubs.isStubFile(url.standardizedFileURL.path) { return false }   // bundled built-in stubs are read-only
         if n.hasSuffix(".blade.php") { return false }              // Blade templates: embedded PHP is never checked
         if n.hasPrefix(".phpstorm.meta") || n.hasPrefix("_ide_helper") || n.hasPrefix("phpstorm.meta") { return false }   // IDE stubs
         return n.hasSuffix(".php") || n.hasSuffix(".phtml")

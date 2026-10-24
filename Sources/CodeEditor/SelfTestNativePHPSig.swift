@@ -265,7 +265,7 @@ enum SelfTestNativePHPSig {
         h = sig(root, "strlen(§)")
         check("built-in function", h?.label == "strlen(string $string): int")
         h = sig(root, "str_replace('a', 'b', $s, §)")
-        check("built-in with by-ref param", active(h) == "int &$count = null")
+        check("built-in with by-ref param", active(h) == "&$count = null")
         h = sig(root, "$fmt = function (int $a, string $b) { return 1; };\n        $fmt(1, §)")
         check("closure assigned to variable", active(h) == "string $b")
         h = sig(root, "$fmt = fn (int $a, $b = [1, 2]) => 1;\n        $fmt(§)")

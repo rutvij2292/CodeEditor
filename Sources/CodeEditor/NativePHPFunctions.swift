@@ -96,18 +96,29 @@ final class NPFuncIndex {
 
     struct Found { var path: String; var loc: Int; var declStart: Int }
 
-    func function(_ name: String) -> Found? {
+    /// Composer helper functions first; `stubs` adds PHP built-ins from the bundled stubs (PHPStubs) when nothing else matches.
+    func function(_ name: String, stubs: Bool = true) -> Found? {
         ensureBuilt()
-        guardLock.lock(); defer { guardLock.unlock() }
-        guard let e = functions[name.lowercased()], Int(e.file) < files.count else { return nil }
-        return Found(path: files[Int(e.file)], loc: Int(e.loc), declStart: Int(e.declStart))
+        guardLock.lock()
+        if let e = functions[name.lowercased()], Int(e.file) < files.count {
+            defer { guardLock.unlock() }
+            return Found(path: files[Int(e.file)], loc: Int(e.loc), declStart: Int(e.declStart))
+        }
+        guardLock.unlock()
+        guard stubs, let e = PHPStubs.functionEntry(name) else { return nil }
+        return Found(path: e.path, loc: e.loc, declStart: e.declStart)
     }
 
-    func constant(_ name: String) -> Found? {
+    func constant(_ name: String, stubs: Bool = true) -> Found? {
         ensureBuilt()
-        guardLock.lock(); defer { guardLock.unlock() }
-        guard let e = constants[name], Int(e.file) < files.count else { return nil }
-        return Found(path: files[Int(e.file)], loc: Int(e.loc), declStart: Int(e.declStart))
+        guardLock.lock()
+        if let e = constants[name], Int(e.file) < files.count {
+            defer { guardLock.unlock() }
+            return Found(path: files[Int(e.file)], loc: Int(e.loc), declStart: Int(e.declStart))
+        }
+        guardLock.unlock()
+        guard stubs, let e = PHPStubs.constantEntry(name) else { return nil }
+        return Found(path: e.path, loc: e.loc, declStart: e.declStart)
     }
 
     var counts: (functions: Int, constants: Int, files: Int) { ensureBuilt(); return (functions.count, constants.count, files.count) }

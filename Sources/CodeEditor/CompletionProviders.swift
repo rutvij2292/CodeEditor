@@ -204,6 +204,34 @@ enum PHPCompletion {
             it.detail += "  Laravel"
             out.append(it)
         }
+        out += stubItems(prefix: ctx.prefix)
+        return out
+    }
+
+    private static let curatedFunctionNames: Set<String> = {
+        var set = Set<String>()
+        for l in CI.lines(CompletionData.phpFunctions) + CI.lines(CompletionData.laravelFunctions) {
+            if let p = l.firstIndex(of: "(") { set.insert(l[l.startIndex..<p].lowercased()) }
+        }
+        return set
+    }()
+
+    /// Built-in functions and constants from the bundled stubs (PHPStubs) that the curated tables above do not list. Prefix matches
+    /// only, capped; nothing is read for an empty prefix.
+    private static func stubItems(prefix: String) -> [CompletionItem] {
+        guard prefix.count >= 2 else { return [] }
+        var out: [CompletionItem] = []
+        for e in PHPStubs.search(kind: "f", prefix: prefix, limit: 60) where !curatedFunctionNames.contains(e.name.lowercased()) && !e.name.contains("\\") {
+            let args = e.signature.drop(while: { $0 != "(" })
+            let noArgs = args.hasPrefix("()")
+            out.append(CI.make(e.name, .function, detail: String(args), insert: noArgs ? e.name + "()" : e.name + "($1)$0", snippet: !noArgs,
+                               doc: "```\n\(e.signature)\n```\n\nPHP built-in function (\(e.extra))."))
+        }
+        if let f = prefix.unicodeScalars.first, CharacterSet.uppercaseLetters.contains(f) || prefix.hasPrefix("_") {
+            for e in PHPStubs.search(kind: "k", prefix: prefix, limit: 40) where !e.name.contains("\\") {
+                out.append(CI.make(e.name, .constant, detail: "PHP built-in (\(e.extra))"))
+            }
+        }
         return out
     }
 

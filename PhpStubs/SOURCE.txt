@@ -1,0 +1,11 @@
+PHP built-in stubs for Kode's native PHP engine.
+
+Derived from JetBrains phpstorm-stubs (https://github.com/JetBrains/phpstorm-stubs), commit 912ae721089fc48534d3a5795997ee8a2802b8cd,
+licensed under the Apache License 2.0 (see LICENSE in this directory). Copyright JetBrains s.r.o. and contributors.
+
+Modifications made by scripts/make-php-stubs.py (changed files are therefore NOT the upstream files):
+  * only a subset of extensions is kept; every class / interface / trait / enum is split into its own file,
+    functions and constants are grouped per upstream file;
+  * JetBrains attributes are resolved for PHP 8.3 (elements not available there are removed, LanguageLevelTypeAware
+    becomes a plain type) and removed; function bodies are emptied; PHPDoc is shortened and stripped of HTML and links;
+  * index.txt is generated.
