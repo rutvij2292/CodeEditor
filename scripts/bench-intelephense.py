@@ -101,4 +101,26 @@ c = Counter(x["kind"] for x in rows)
 print(f"INTELEPHENSE lookups={len(times)} p50ms={pc(.5):.1f} p95ms={pc(.95):.1f} max={times[-1]:.1f} rssAfterMB={rss_mb():.0f}", file=sys.stderr)
 print("AGREEMENT", dict(c), "(agree includes %d built-in stub matches)" % sum(1 for x in rows if x["builtin"]), file=sys.stderr)
 if len(sys.argv) > 2: json.dump(rows, open(sys.argv[2], "w"), indent=1)
+# find usages: ask Intelephense for references at the first resolved native hit of each symbol, compare hit sets (file + line)
+def line_of(path, off):
+    t = open(path, encoding="utf-8", errors="replace").read()
+    u = t.encode("utf-16-le"); pre = u[:off * 2].decode("utf-16-le", errors="replace")
+    return pre.count("\n"), len(pre) - (pre.rfind("\n") + 1)
+print("FINDUSAGES symbol nativeHits intelephenseHits both onlyNative onlyIntelephense coldMs warmMs", file=sys.stderr)
+for key, hits in (data.get("usages") or {}).items():
+    parsed = [h.split(":") for h in hits]
+    parsed = [(a[0], int(a[1]), a[3]) for a in parsed if a[3] in ("declaration", "usage", "read", "write")]
+    if not parsed: continue
+    f, off, _ = parsed[0]
+    if f not in opened:
+        send({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": uri(f), "languageId": "php", "version": 1, "text": open(f, encoding="utf-8", errors="replace").read()}}})
+        opened.add(f)
+    ln, col = line_of(f, off)
+    params = {"textDocument": {"uri": uri(f)}, "position": {"line": ln, "character": col}, "context": {"includeDeclaration": True}}
+    s0 = time.time(); res = request("textDocument/references", params, timeout=60); cold = (time.time() - s0) * 1000
+    s0 = time.time(); request("textDocument/references", params, timeout=60); warm = (time.time() - s0) * 1000
+    ip = {(urllib.parse.unquote(x["uri"][7:]), x["range"]["start"]["line"]) for x in (res or [])}
+    np_ = {(h[0], line_of(h[0], h[1])[0]) for h in [(a[0], int(a[1])) for a in (x.split(":") for x in hits)] if True}
+    print(f"FINDUSAGES {key} native={len(np_)} intelephense={len(ip)} both={len(ip & np_)} onlyNative={len(np_ - ip)} onlyIntelephense={len(ip - np_)} cold={cold:.0f}ms warm={warm:.0f}ms", file=sys.stderr)
+
 p.kill()
