@@ -72,6 +72,7 @@ enum SelfTestNativePHPDiag {
 
     static func run() {
         if let p = AppEnv.value("CE_DIAG_SCAN") { scanProject(p); exit(0) }
+        if let p = AppEnv.value("CE_NATIVE_BENCH") { NativePHPBench.run(p); exit(0) }
         let fm = FileManager.default
         root = fm.temporaryDirectory.appendingPathComponent("ce-nativediag-\(getpid())")
         try? fm.removeItem(at: root)
