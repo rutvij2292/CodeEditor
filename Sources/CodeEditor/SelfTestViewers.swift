@@ -453,6 +453,22 @@ extension SelfTest {
         check("prefs: markdown defaults to split, json/yaml to source", ViewerKind.markdown.mode == .split && ViewerKind.json.mode == .source && ViewerKind.yaml.mode == .source)
         check("prefs: viewer modes are restorable defaults", ["viewerMode.markdown", "viewerMode.json", "viewerMode.yaml"].allSatisfy { Prefs.allKeys.contains($0) })
 
+        let svgURL = dir.appendingPathComponent("logo.svg")
+        try? "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"20\" viewBox=\"0 0 40 20\"><rect width=\"40\" height=\"20\" fill=\"red\"/></svg>\n".write(to: svgURL, atomically: true, encoding: .utf8)
+        check("viewer: .svg is detected, previews in split by default", ViewerKind.detect(svgURL) == .svg && ViewerKind.svg.defaultMode == .split && !ViewerKind.svg.isStructured)
+        w.open(svgURL)
+        if let st = w.current, let sc = ViewerSystem.controller(for: st) {
+            check("svg: opens split with a rendered image of the right size", sc.mode == .split && sc.svg?.image?.size == NSSize(width: 40, height: 20))
+            st.textView.string = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"30\"><circle cx=\"5\" cy=\"5\" r=\"4\"/></svg>"
+            st.textView.didChangeText(); sc.refreshNow()
+            check("svg: edits re-render", sc.svg?.image?.size == NSSize(width: 10, height: 30))
+            st.textView.string = "<svg><oops"
+            st.textView.didChangeText(); sc.refreshNow()
+            check("svg: invalid markup shows a message instead of a stale image", sc.svg?.image == nil)
+            sc.setMode(.source)
+            check("svg: source mode frees the preview", sc.svg == nil)
+        } else { check("svg: tab has a viewer controller", false) }
+
         w.open(other)
         check("viewer: plain text files get no viewer", ViewerSystem.controller(for: w.current) == nil)
         w.open(md)

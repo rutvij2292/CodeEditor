@@ -128,6 +128,13 @@ final class ProjectIndex {
         let lowerTyped = typed.lowercased()
         // Stage 1: subsequence prefilter over the flat lowercase byte buffer, with a cheap file-name oriented score.
         let qn = qBytes.count
+        let hasSlash = typed.contains("/")
+        // `dir/name`: the part after the last slash is matched against the file name, the part before against the folders.
+        let slash = hasSlash ? typed.lastIndex(of: "/") : nil
+        let dirQuery = slash.map { String(typed[..<$0]) } ?? ""
+        let nameQuery = slash.map { String(typed[typed.index(after: $0)...]) } ?? ""
+        let dirQ = Array(dirQuery.utf16), nameQ = Array(nameQuery.utf16)
+        let lowerDir = dirQuery.lowercased()
         var cand: [(idx: Int32, cheap: Int32)] = []
         blob.withUnsafeBufferPointer { b in
             qBytes.withUnsafeBufferPointer { qb in
@@ -159,6 +166,12 @@ final class ProjectIndex {
                         }
                         s0 += 1
                     }
+                    // Path query (`users/web.php`): a path that ends with it, on a folder boundary, must survive the stage-2 cut.
+                    if hasSlash, end - Int(starts[i]) >= qn {
+                        var e = 0
+                        while e < qn, b[end - qn + e] == qb[e] { e += 1 }
+                        if e == qn, end - qn == Int(starts[i]) || b[end - qn - 1] == 47 { score += 200 }
+                    }
                     score -= Int32((end - nameStart) / 4)
                     cand.append((Int32(i), score))
                 }
@@ -175,7 +188,15 @@ final class ProjectIndex {
             let path = files[Int(c.idx)]
             let name = path.lastIndex(of: "/").map { String(path[path.index(after: $0)...]) } ?? path
             var score: Int
-            if let ns = Fuzzy.score(q, caseAware: true, in: name) {
+            if !nameQ.isEmpty, !dirQ.isEmpty, let ns = Fuzzy.score(nameQ, caseAware: true, in: name),
+               let ds = Fuzzy.score(dirQ, caseAware: true, in: String(path.dropLast(name.count))) {
+                // folders + file name both match: an exact path ending beats a folder ending beats a loose folder match
+                score = ns + 60 + ds / 4
+                let pl = path.lowercased(), dl = String(pl.dropLast(name.count))
+                if pl == lowerTyped || pl.hasSuffix("/" + lowerTyped) { score += 1000 }
+                else if dl.hasSuffix("/" + lowerDir + "/") || dl.hasPrefix(lowerDir + "/") { score += 400 }
+                else if dl.contains("/" + lowerDir) || dl.hasPrefix(lowerDir) { score += 150 }
+            } else if let ns = Fuzzy.score(q, caseAware: true, in: name) {
                 score = ns + 60                                             // matches inside the file name beat path-only matches
                 if name.lowercased().hasPrefix(lowerTyped) { score += 20 }
             } else if let ps = Fuzzy.score(q, caseAware: true, in: path) {

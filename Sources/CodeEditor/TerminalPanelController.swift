@@ -310,6 +310,11 @@ final class TerminalPanelController: NSObject, LocalProcessTerminalViewDelegate 
         if let a = agents.first(where: { $0.command == "claude" }) ?? TerminalAgents.primary(in: agents) { startAgent(a) }
     }
 
+    /// Cmd-3: selects the first live Claude Code tab if one is running; never starts an agent (the terminal's own startIfNeeded opens a plain shell).
+    func selectClaudeIfRunning() {
+        if let i = tabs.firstIndex(where: { $0.lockedTitle && !$0.exited && $0.title.hasPrefix("Claude") }) { select(i) }
+    }
+
     /// The Agent button: last used (or first available) agent; the menu when none is installed.
     func startPrimaryAgent() {
         if let a = TerminalAgents.primary(in: TerminalAgents.all()) { startAgent(a); focusTerminal() }

@@ -58,7 +58,7 @@ final class ViewerSystem: NSObject, NSMenuItemValidation {
         case #selector(showSplit(_:)): item.state = c?.mode == .split ? .on : .off; return c != nil
         case #selector(showPreview(_:)):
             item.state = c?.mode == .preview ? .on : .off
-            item.title = c.map { $0.kind == .markdown ? "Preview Only" : "Tree Only" } ?? "Preview Only"
+            item.title = c.map { $0.kind.isStructured ? "Tree Only" : "Preview Only" } ?? "Preview Only"
             return c != nil
         default: return c != nil
         }
@@ -283,6 +283,7 @@ final class ViewerController: NSObject {
     let kind: ViewerKind
     private(set) var mode: ViewerMode = .source
     private(set) var markdown: MarkdownPreviewView?
+    private(set) var svg: SVGPreviewView?
     private(set) var tree: StructureTreeView?
     private(set) var overlay: NativeSquiggleOverlay?
     private var observers: [NSObjectProtocol] = []
@@ -321,7 +322,7 @@ final class ViewerController: NSObject {
             self?.lineStarts = nil
             self?.textEdited()
         })
-        if kind != .markdown, let storage = tab.textView.textStorage {
+        if kind.isStructured, let storage = tab.textView.textStorage {
             observers.append(nc.addObserver(forName: NSTextStorage.didProcessEditingNotification, object: storage, queue: .main) { [weak self] n in
                 guard let s = n.object as? NSTextStorage, s.editedMask.contains(.editedCharacters) else { return }
                 self?.shiftDiagnostics(edited: s.editedRange, delta: s.changeInLength)
@@ -329,11 +330,11 @@ final class ViewerController: NSObject {
         }
         observers.append(nc.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
             guard let self, self.mode != .source else { return }
-            self.markdown?.restyle()
+            self.markdown?.restyle(); self.svg?.restyle()
             self.refreshNow()
         })
         setMode(kind.mode, persist: false)
-        if kind != .markdown { scheduleDiagnostics(initial: true) }
+        if kind.isStructured { scheduleDiagnostics(initial: true) }
     }
 
     func detach() {
@@ -395,7 +396,7 @@ final class ViewerController: NSObject {
         if new == .split, kind == .markdown { syncScroll() }
     }
 
-    private var sideFocusView: NSView? { markdown?.textView ?? tree?.outline }
+    private var sideFocusView: NSView? { markdown?.textView ?? svg?.textViewForFocus ?? tree?.outline }
 
     private func ensureSide(in pane: EditorPane) {
         guard pane.viewerState.side == nil else { return }
@@ -406,6 +407,9 @@ final class ViewerController: NSObject {
             m.onOpenFile = { url in (NSApp.delegate as? AppDelegate)?.active?.open(url) }
             if let tab { PlanSupport.attach(m, tab: tab) }
             markdown = m; side = m
+        } else if kind == .svg {
+            let v = SVGPreviewView()
+            svg = v; side = v
         } else {
             let t = StructureTreeView()
             t.onJump = { [weak self] range in self?.jump(to: range) }
@@ -439,7 +443,7 @@ final class ViewerController: NSObject {
         st.side?.removeFromSuperview(); st.divider?.removeFromSuperview()
         pane.viewerState.side = nil; pane.viewerState.divider = nil
         pane.viewerState.halfWidth = nil; pane.viewerState.fullWidth = nil; pane.viewerState.contentToSide = nil
-        markdown = nil; tree = nil; lastTape = nil
+        markdown = nil; svg = nil; tree = nil; lastTape = nil
     }
 
     private func addVisibleObservers() {
@@ -456,7 +460,7 @@ final class ViewerController: NSObject {
                 self.scheduleSync()
             })
             markdown?.onUserScroll = { [weak self] in self?.driver = .preview; self?.scheduleSyncFromPreview() }
-        } else {
+        } else if kind.isStructured {
             visibleObservers.append(nc.addObserver(forName: NSTextView.didChangeSelectionNotification, object: tab.textView, queue: .main) { [weak self] _ in
                 self?.scheduleReveal()
             })
@@ -472,15 +476,15 @@ final class ViewerController: NSObject {
     // MARK: Refresh (debounced, only while visible)
 
     private func textEdited() {
-        if mode == .source { if kind != .markdown { scheduleDiagnostics(initial: false) }; return }
+        if mode == .source { if kind.isStructured { scheduleDiagnostics(initial: false) }; return }
         work?.cancel()
-        let delay = PowerState.shared.scaled(kind == .markdown ? 0.2 : 0.3)
+        let delay = PowerState.shared.scaled(kind == .markdown || kind == .svg ? 0.2 : 0.3)
         let w = DispatchWorkItem { [weak self] in self?.refreshNow() }
         work = w
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: w)
     }
 
-    func flushPending() { if pending { pending = false; if mode == .source { scheduleDiagnostics(initial: false) } else { refreshNow() } } }
+    func flushPending() { if pending { pending = false; if mode == .source { if kind.isStructured { scheduleDiagnostics(initial: false) } } else { refreshNow() } } }
 
     /// Parses / renders now (also the test entry point). Hidden windows defer until they are visible again (no polling).
     func refreshNow() {
@@ -504,6 +508,8 @@ final class ViewerController: NSObject {
             }
             if syncParse { finish(MarkdownParser.parse(text)) }
             else { DispatchQueue.global(qos: .userInitiated).async { let b = MarkdownParser.parse(text); DispatchQueue.main.async { finish(b) } } }
+        case .svg:
+            svg?.show(svg: text)
         case .json:
             let lenient = JSONFlavor.isLenient(tab.url)
             let t0 = CFAbsoluteTimeGetCurrent()
@@ -652,7 +658,7 @@ final class ViewerController: NSObject {
     // MARK: Diagnostics (JSON / YAML)
 
     private func scheduleDiagnostics(initial: Bool) {
-        guard let tab, kind != .markdown else { return }
+        guard let tab, kind.isStructured else { return }
         work?.cancel()
         let delay = initial ? 0.3 : PowerState.shared.scaled(0.8)
         let w = DispatchWorkItem { [weak self] in self?.runDiagnostics() }

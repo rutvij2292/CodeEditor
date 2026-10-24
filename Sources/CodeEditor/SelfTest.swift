@@ -136,7 +136,8 @@ enum SelfTest {
         let files = ["app/Http/Controllers/TaTrackController.php", "app/Http/Controllers/Auth/LoginController.php",
                      "app/Http/Controllers/UserController.php", "tests/Feature/TaTrackControllerTest.php", "tests/Feature/UserControllerTest.php",
                      "docs/Controllers/TaTrackController.md", "app/Services/TaTrackService.php", "app/Models/TaTrack.php",
-                     "app/Http/Controllers/TemporaryWorkplanEvaluationExportController.php", "resources/js/Pages/TaTrack/Index.vue"]
+                     "app/Http/Controllers/TemporaryWorkplanEvaluationExportController.php", "resources/js/Pages/TaTrack/Index.vue",
+                     "routes/web.php", "routes/users/web.php", "modules/users/routes/web.php", "app/Http/Controllers/UsersWebPageController.php", "routes/api.php"]
         for rel in files {
             let url = root.appendingPathComponent(rel)
             try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -152,6 +153,11 @@ enum SelfTest {
             check("TaController finds the tests too, after the app file",
                   index.search("TaController", limit: 5).map(\.path).contains("tests/Feature/TaTrackControllerTest.php"))
             check("no match returns nothing", index.search("zzqx", limit: 5).isEmpty)
+            check("path query: users/web.php -> the file whose path ends with it", top("users/web.php") == "routes/users/web.php")
+            check("path query: the loose folder match is still listed", index.search("users/web.php", limit: 5).map(\.path).contains("modules/users/routes/web.php"))
+            check("path query: routes/web.php beats users/web.php for routes/web.php", top("routes/web.php") == "routes/web.php")
+            check("path query is case-insensitive", top("Users/Web.php") == "routes/users/web.php")
+            check("path query without extension: routes/users/web", top("routes/users/web") == "routes/users/web.php")
             try? fm.removeItem(at: root)
             next()
         }

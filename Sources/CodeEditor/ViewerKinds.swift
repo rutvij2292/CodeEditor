@@ -2,7 +2,7 @@ import Foundation
 
 /// File types that get a viewer pane next to (or instead of) the source: Markdown preview, JSON / YAML structure tree.
 enum ViewerKind: String {
-    case markdown, json, yaml
+    case markdown, json, yaml, svg
 
     static func detect(_ url: URL) -> ViewerKind? {
         let name = url.lastPathComponent.lowercased()
@@ -10,6 +10,7 @@ enum ViewerKind: String {
         case "md", "markdown", "mkd", "mdx": return .markdown
         case "json", "jsonc", "json5", "webmanifest", "geojson": return .json
         case "yml", "yaml": return .yaml
+        case "svg": return .svg
         default: break
         }
         if [".eslintrc", ".babelrc", ".prettierrc", ".swcrc", "composer.lock"].contains(name) { return .json }
@@ -17,9 +18,11 @@ enum ViewerKind: String {
     }
 
     /// Third segment of the Source | Split | X control.
-    var previewTitle: String { self == .markdown ? "Preview" : "Tree" }
-    var defaultMode: ViewerMode { self == .markdown ? .split : .source }
-    var title: String { self == .markdown ? "Markdown" : (self == .json ? "JSON" : "YAML") }
+    var previewTitle: String { self == .markdown || self == .svg ? "Preview" : "Tree" }
+    var defaultMode: ViewerMode { self == .markdown || self == .svg ? .split : .source }
+    var title: String { switch self { case .markdown: return "Markdown"; case .json: return "JSON"; case .yaml: return "YAML"; case .svg: return "SVG" } }
+    /// JSON / YAML: a structure tree plus native syntax diagnostics (Markdown and SVG are pure previews).
+    var isStructured: Bool { self == .json || self == .yaml }
 
     /// Remembered mode for this file type (Prefs `viewerMode.<kind>`).
     var mode: ViewerMode {

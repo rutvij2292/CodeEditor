@@ -28,6 +28,15 @@ extension ProjectWindow {
         showTerminalPanel(focus: true)
     }
 
+    /// Cmd-3: shows and focuses the terminal (its Claude tab when one is already running, otherwise whatever tab is selected; a plain shell
+    /// when there is none) without launching an agent. Pressed again inside the terminal, hide it and go back to the editor.
+    func focusTerminalTool() {
+        guard root != nil, let term = terminalPanel else { return }
+        if isTerminalVisible, isTerminalFocused { hideTerminal(); focusEditor(); return }
+        term.selectClaudeIfRunning()
+        showTerminalPanel(focus: true)
+    }
+
     /// Moves focus to the tool's primary control: the commit message for Git, the query for Find, the terminal, else its first list.
     func focusTool(_ id: String) {
         switch id {
