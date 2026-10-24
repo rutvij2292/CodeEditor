@@ -25,13 +25,19 @@ enum FastTier {
         var dir = file.deletingLastPathComponent().standardizedFileURL.path
         let start = dir
         if let c = rootCache[start] { return c.isEmpty ? nil : c }
-        var result = ""
+        // The project root is the nearest ancestor that is really a Laravel / Composer application (artisan or an installed vendor/).
+        // A bare composer.json does not count by itself: nwidart modules (Modules/Users/composer.json) carry one each, and treating the
+        // module as the project made every `App\...` import of its files "undefined". Without such an ancestor, the nearest composer.json wins.
+        var result = "", firstComposer = ""
         for _ in 0..<14 {
-            if LaravelFS.isFile(dir + "/composer.json") || LaravelFS.isFile(dir + "/artisan") { result = dir; break }
+            let hasComposer = LaravelFS.isFile(dir + "/composer.json")
+            if LaravelFS.isFile(dir + "/artisan") || (hasComposer && LaravelFS.isFile(dir + "/vendor/composer/autoload_psr4.php")) { result = dir; break }
+            if hasComposer, firstComposer.isEmpty { firstComposer = dir }
             let parent = (dir as NSString).deletingLastPathComponent
             if parent == dir || parent.isEmpty { break }
             dir = parent
         }
+        if result.isEmpty { result = firstComposer }
         if rootCache.count > 300 { rootCache.removeAll() }
         rootCache[start] = result
         return result.isEmpty ? nil : result

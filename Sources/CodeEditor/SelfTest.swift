@@ -87,6 +87,7 @@ enum SelfTest {
                     SelfTestNativePHP.run()
                     SelfTestNativePHPSig.run()
                     SelfTestNativePHPMisses.run()
+                    SelfTestModuleRoot.run()
                     SelfTestNativePHPStubs.run()
                     SelfTestNativePHPRefs.run(w: w)
                     SelfTestNativePHPDiag.run()
