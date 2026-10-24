@@ -39,7 +39,7 @@ enum NativePHP {
     static func resolver(fp: FastProject, url: URL, text: NSString) -> NPResolver {
         let key = url.path + "|\(text.length)|\(text.hash)"
         parseLock.lock()
-        if let p = lastParse, p.key == key { parseLock.unlock(); return NPResolver(fp: fp, url: url, text: text, lex: p.lex, cur: p.cur) }
+        if let p = lastParse, p.key == key, p.lex.ns === text || p.lex.ns.isEqual(text) { parseLock.unlock(); return NPResolver(fp: fp, url: url, text: text, lex: p.lex, cur: p.cur) }
         parseLock.unlock()
         let lex = PHPLex(text)
         let cur = FTParser.parse(text, lex: lex)

@@ -92,6 +92,7 @@ final class FTEval {
     var docCache: [String: NPDoc] = [:]
     var authGuard: String?
     var authModelCache: [String: String] = [:]
+    var ctorPropCache: [String: String] = [:]
     var facadeRootCache: [String: String] = [:]
 
     init(fp: FastProject, text: NSString, lex: PHPLex, cur: FTClass?) {
@@ -220,8 +221,57 @@ final class FTEval {
 
     // MARK: Evaluation
 
+    /// Top-level `a ? b : c`, `a ?: c` (branches b / c) or `a ?? c` as token ranges to evaluate; nil for any other expression.
+    private func branches(_ lo: Int, _ hi: Int) -> [(Int, Int)]? {
+        var i = lo
+        var coalesce: Int?
+        while i < hi {
+            let t = lex.toks[i]
+            if t.kind == .punct {
+                if [40, 91, 123].contains(t.ch), lex.match[i] > i { i = lex.match[i] + 1; continue }
+                if t.ch == 63 {
+                    if lex.isPunct(i + 1, "?") { if coalesce == nil { coalesce = i }; i += 2; continue }
+                    var nest = 0, j = i + 1
+                    while j < hi {
+                        let k = lex.toks[j]
+                        if k.kind == .punct {
+                            if [40, 91, 123].contains(k.ch), lex.match[j] > j { j = lex.match[j] + 1; continue }
+                            if k.ch == 63 { if lex.isPunct(j + 1, "?") { j += 2; continue }; nest += 1 }
+                            else if k.ch == 58 { if nest == 0 { return [i + 1 == j ? (lo, i) : (i + 1, j), (j + 1, hi)] }; nest -= 1 }
+                        }
+                        j += 1
+                    }
+                    return nil
+                }
+            }
+            i += 1
+        }
+        if let c = coalesce { return [(lo, c), (c + 2, hi)] }
+        return nil
+    }
+
+    private func typeKey(_ t: FTType) -> String {
+        switch t {
+        case .instance(let f): return "i" + f
+        case .staticRef(let f): return "s" + f
+        case .builder(let f): return "b" + f
+        case .table(let f): return "t" + f
+        case .collection(let f): return "c" + (f ?? "")
+        }
+    }
+
     func eval(_ lo: Int, _ hi: Int, depth: Int = 0) -> FTType? {
-        guard lo < hi, lo < lex.count, depth < 6 else { return nil }
+        guard lo < hi, lo < lex.count, depth < 9 else { return nil }
+        if let parts = branches(lo, hi) {
+            // both branches agree, or only one is known (the other is unknown, not different)
+            var found: FTType?
+            for p in parts where p.0 < p.1 {
+                guard let t = eval(p.0, p.1, depth: depth + 1) else { continue }
+                if let f = found, typeKey(f) != typeKey(t) { return nil }
+                found = t
+            }
+            return found
+        }
         authGuard = nil
         var i = lo
         var t: FTType?
@@ -445,8 +495,72 @@ final class FTEval {
         return ("", false)
     }
 
+    /// `[$a, $b] = RHS;` / `list($a, $b) = RHS;` with the variable at token `i`: the position in the list and the RHS token range.
+    private func listDestructure(_ i: Int, lo: Int) -> (rhs: Int, end: Int, index: Int)? {
+        guard i > lo, lex.toks[i - 1].kind == .punct, [91, 44, 40].contains(lex.toks[i - 1].ch),
+              i + 1 < lex.count, lex.toks[i + 1].kind == .punct, [93, 44, 41].contains(lex.toks[i + 1].ch) else { return nil }
+        var s = i - 1, idx = 0
+        while s >= lo {
+            let k = lex.toks[s]
+            if k.kind == .punct {
+                if k.ch == 41 || k.ch == 93 || k.ch == 125 { if lex.match[s] >= lo, lex.match[s] < s { s = lex.match[s] - 1; continue }; return nil }
+                if k.ch == 91 || k.ch == 123 || k.ch == 40 { break }
+                if k.ch == 44 { idx += 1 } else if k.ch == 59 || k.ch == PHPTok.fat { return nil }
+            }
+            s -= 1
+        }
+        guard s >= lo, s > 0 else { return nil }
+        let open = lex.toks[s]
+        let prev = lex.toks[s - 1]
+        if open.ch == 91 {
+            if prev.kind == .variable || prev.kind == .ident || prev.kind == .string { return nil }
+            if prev.kind == .punct, prev.ch == 93 || prev.ch == 41 || prev.ch == PHPTok.arrow || prev.ch == PHPTok.dcolon { return nil }
+        } else if !(open.ch == 40 && prev.kind == .ident && lex.text(s - 1).lowercased() == "list") { return nil }
+        let close = lex.match[s]
+        guard close > s, lex.isPunct(close + 1, "="), !lex.isPunct(close + 2, "="), !lex.isPunct(close + 2, code: PHPTok.fat) else { return nil }
+        var e = close + 2
+        while e < lex.count {
+            let k = lex.toks[e]
+            if k.kind == .punct {
+                if [40, 91, 123].contains(k.ch), lex.match[e] > e { e = lex.match[e] + 1; continue }
+                if k.ch == 59 || k.ch == 41 || k.ch == 93 || k.ch == 125 { break }
+            }
+            e += 1
+        }
+        return (close + 2, e, idx)
+    }
+
+    /// Type of element `index` of the array a call returns, for `$this->name(..)` / `self::name(..)` calls whose method sits in this file and
+    /// ends in `return [ a, b, c ];` (positional elements only).
+    private func listElementType(_ lo: Int, _ hi: Int, index: Int, depth: Int) -> FTType? {
+        guard depth < 9, hi - lo >= 5, lex.isPunct(hi - 1, ")"), lex.match[hi - 1] > lo else { return nil }
+        let open = lex.match[hi - 1]
+        guard open >= lo + 3, lex.toks[open - 1].kind == .ident, lex.isPunct(open - 2, code: PHPTok.arrow) || lex.isPunct(open - 2, code: PHPTok.dcolon), open - 3 == lo else { return nil }
+        let recv = lex.text(lo).lowercased()
+        guard recv == "$this" || recv == "self" || recv == "static" else { return nil }
+        let name = lex.text(open - 1)
+        var fn = -1
+        for j in 0..<(lex.count - 2) where lex.toks[j].kind == .ident && lex.text(j) == "function" && lex.toks[j + 1].kind == .ident && lex.text(j + 1) == name && lex.isPunct(j + 2, "(") { fn = j; break }
+        guard fn >= 0 else { return nil }
+        var b = lex.match[fn + 2] + 1
+        while b < lex.count, !lex.isPunct(b, "{"), !lex.isPunct(b, ";") { b += 1 }
+        guard b < lex.count, lex.isPunct(b, "{"), lex.match[b] > b else { return nil }
+        var arr = -1, j = b + 1
+        while j < lex.match[b] {
+            let k = lex.toks[j]
+            if k.kind == .punct, [40, 91, 123].contains(k.ch), lex.match[j] > j { j = lex.match[j] + 1; continue }
+            if k.kind == .ident, lex.text(j) == "return" { arr = lex.isPunct(j + 1, "[") ? j + 1 : -1 }
+            j += 1
+        }
+        guard arr >= 0, lex.match[arr] > arr else { return nil }
+        let items = splitArgs((arr + 1, lex.match[arr]))
+        guard index < items.count else { return nil }
+        for it in items where it.0 < it.1 && (lex.isPunct(it.0, ".") || (it.0..<it.1).contains(where: { lex.isPunct($0, code: PHPTok.fat) })) { return nil }
+        return eval(items[index].0, items[index].1, depth: depth + 1)
+    }
+
     func varType(_ name: String, at tok: Int, depth: Int) -> FTType? {
-        guard depth < 6 else { return nil }
+        guard depth < 9 else { return nil }
         let scopes = enclosingFunctions(tok)
         let atLoc = lex.toks[min(tok, lex.count - 1)].loc
         var candidates: [(loc: Int, type: FTType?)] = []
@@ -457,7 +571,11 @@ final class FTEval {
                 let t = lex.toks[i]
                 if t.kind != .variable || (asciiLen >= 0 && t.len != asciiLen) { i -= 1; continue }
                 if t.kind == .variable, lex.text(i) == name, !(i > 0 && isOp(i - 1)) {
-                    if lex.isPunct(i + 1, "="), !lex.isPunct(i + 2, "="), !lex.isPunct(i + 2, code: PHPTok.fat), !lex.isPunct(i - 1, "=") {
+                    if let ld = listDestructure(i, lo: lo) {
+                        candidates.append((lex.toks[i].loc, listElementType(ld.rhs, ld.end, index: ld.index, depth: depth + 1)))
+                        return
+                    }
+                    if lex.isPunct(i + 1, "="),!lex.isPunct(i + 2, "="), !lex.isPunct(i + 2, code: PHPTok.fat), !lex.isPunct(i - 1, "=") {
                         var e = i + 2
                         var d = 0
                         while e < lex.count {

@@ -307,15 +307,43 @@ final class FastProject {
     // MARK: Schema (migrations)
 
     private let schemaSec = FTSection<[String: [FTColumn]]>([:])
+    /// Migration directories: the app's `database/migrations` plus a module's `database/migrations` (nwidart-style
+    /// `Modules/X/app/` PSR-4 roots keep migrations next to the `app` directory).
+    func migrationDirs() -> [String] {
+        var dirs = [abs("database/migrations")]
+        var seen = Set(dirs)
+        for entry in lp.psr4 {
+            for d in entry.dirs where !d.contains("/vendor/") {
+                let trimmed = d.hasSuffix("/") ? String(d.dropLast()) : d
+                var cands = [(trimmed as NSString).deletingLastPathComponent + "/database/migrations", trimmed + "/database/migrations"]
+                // `"Modules\\": "Modules/"`: every module directory next to its own database/migrations
+                let kids = LaravelFS.list(trimmed)
+                if kids.count <= 200 { cands += kids.map { trimmed + "/" + $0 + "/database/migrations" } }
+                for cand in cands where seen.insert(cand).inserted && LaravelFS.isDir(cand) { dirs.append(cand) }
+            }
+        }
+        return dirs
+    }
+
+    /// Every migration file of every migration directory, in migration order (timestamped file names sort chronologically across modules).
+    func migrationFiles() -> [String] {
+        var out: [String] = []
+        for dir in migrationDirs() { for f in LaravelFS.list(dir) where f.hasSuffix(".php") { out.append(dir + "/" + f) } }
+        return out.sorted { ($0 as NSString).lastPathComponent < ($1 as NSString).lastPathComponent }
+    }
+
     func schema() -> [String: [FTColumn]] {
         guard isLaravel else { return [:] }
-        let dir = abs("database/migrations")
-        return section(schemaSec, stamp: { self.lp.stamp(LaravelFS.list(dir).sorted().map { dir + "/" + $0 }) &+ LaravelFS.mtime(dir) }) {
+        return section(schemaSec, stamp: {
+            let dirs = self.migrationDirs()
+            var files: [String] = []
+            for dir in dirs { files += LaravelFS.list(dir).sorted().map { dir + "/" + $0 } }
+            return dirs.reduce(self.lp.stamp(files)) { $0 &+ LaravelFS.mtime($1) }
+        }) {
             var tables: [String: [FTColumn]] = [:]
-            for f in LaravelFS.list(dir).sorted() where f.hasSuffix(".php") {
-                guard let t = Self.read(dir + "/" + f) else { continue }
-                FTSchema.apply(t, to: &tables)
-            }
+            // read + lex on several threads (a modular app has ~100 migrations); the column bookkeeping stays sequential (alters follow creates)
+            let lexes = Self.parallelMap(self.migrationFiles()) { f in Self.read(f).map { PHPLex($0) } }
+            for lex in lexes { if let lex { FTSchema.apply(lex: lex, to: &tables) } }
             return tables
         }
     }
@@ -611,8 +639,9 @@ enum FTSchema {
     }
 
     /// Applies the `up()` bodies of one migration file to `tables` (in migration order).
-    static func apply(_ text: NSString, to tables: inout [String: [FTColumn]]) {
-        let lex = PHPLex(text)
+    static func apply(_ text: NSString, to tables: inout [String: [FTColumn]]) { apply(lex: PHPLex(text), to: &tables) }
+
+    static func apply(lex: PHPLex, to tables: inout [String: [FTColumn]]) {
         let n = lex.count
         // up() body ranges
         var ranges: [(Int, Int)] = []

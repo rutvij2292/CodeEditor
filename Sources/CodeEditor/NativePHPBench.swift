@@ -33,13 +33,39 @@ enum NativePHPBench {
         return files
     }
 
+    /// `CE_NATIVE_PROBE=relpath:line:word,...` (with CE_NATIVE_BENCH=<root>): print what native resolves for each word on a 1-based line.
+    static func probe(_ path: String, _ spec: String) {
+        let rootURL = URL(fileURLWithPath: path)
+        let fp = FastProject.shared(root: rootURL)
+        VendorIndex.shared(for: rootURL).refreshIfNeeded(force: true)
+        VendorIndex.shared(for: rootURL).waitUntilIdle()
+        for item in spec.split(separator: ",") {
+            let p = item.split(separator: ":").map(String.init)
+            guard p.count == 3, let t = FastProject.read(path + "/" + p[0]), let ln = Int(p[1]) else { continue }
+            let starts = NPLineStarts(t)
+            var found = false
+            for line in [ln - 1, ln] where !found {
+                let r = t.lineRange(for: NSRange(location: starts.starts[min(line, starts.starts.count - 1)], length: 0))
+                let w = t.range(of: p[2], options: [], range: r)
+                if w.location == NSNotFound { continue }
+                found = true
+                let url = URL(fileURLWithPath: path + "/" + p[0])
+                let hit = fp.queue.sync { NativePHP.resolver(fp: fp, url: url, text: t).lookup(at: w.location + w.length / 2) }
+                fputs("PROBE \(p[0]):\(p[1]) \(p[2]) -> \(hit?.kind ?? "nil") \((hit?.targets ?? []).prefix(2).map { "\($0.path):\($0.line)" })\n", stderr)
+            }
+            if !found { fputs("PROBE \(p[0]):\(p[1]) \(p[2]) word not on line\n", stderr) }
+        }
+    }
+
     static func run(_ path: String) {
+        if let spec = AppEnv.value("CE_NATIVE_PROBE") { probe(path, spec); return }
         let rootURL = URL(fileURLWithPath: path)
         let base = footprintMB()
         let t0 = Date()
         let fp = FastProject.shared(root: rootURL)
         VendorIndex.shared(for: rootURL).refreshIfNeeded(force: true)
         VendorIndex.shared(for: rootURL).waitUntilIdle()
+        fp.queue.sync { fp.beginRequest(); _ = fp.schema() }      // FastTierProvider.warm builds the schema at project open; keep it off the first lookup
         let warm = Date().timeIntervalSince(t0)
         let files = listFiles(path, dirs: ["app"])
         let maxFiles = Int(AppEnv.value("CE_NATIVE_BENCH_FILES") ?? "40") ?? 40
@@ -163,7 +189,8 @@ enum NativePHPBench {
         let already = Set(chosen.map { $0.0 })
         for name in (AppEnv.value("CE_NATIVE_BENCH_USAGE_NAMES") ?? "first,save,find,create,count").split(separator: ",").map(String.init) where !already.contains("method:" + name) {
             var found = false
-            for f in files where !found {
+            let skip = (AppEnv.value("CE_NATIVE_BENCH_USAGE_SKIP") ?? "").split(separator: ",").map(String.init)      // keep the picked symbols comparable across runs
+            for f in files where !found && !skip.contains(where: { f.contains($0) }) {
                 guard let t = FastProject.read(f) else { continue }
                 var from = 0
                 while from < t.length {

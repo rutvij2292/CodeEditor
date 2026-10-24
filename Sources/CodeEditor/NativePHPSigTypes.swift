@@ -207,7 +207,10 @@ extension FTEval {
         // conditional: ($abstract is class-string<T> ? T : mixed)
         if ret.hasPrefix("(") {
             guard let re = NPRe.make(pattern: #"^\(\s*(\$\w+)\s+is\s+class-string<"#), let mm = re.firstMatch(in: ret, range: NSRange(location: 0, length: (ret as NSString).length)),
-                  let args else { return nil }
+                  let args else {
+                guard let picked = pickConditional(ret, params: m.params, args: args), !picked.hasPrefix("(") else { return nil }
+                return typeFromDoc(picked, owner: owner, selfType: selfType, templates: templates(doc, owner: owner))
+            }
             let pname = (ret as NSString).substring(with: mm.range(at: 1))
             if let idx = splitParamNames(m.params).firstIndex(of: pname) {
                 let parts = splitArgs(args)
@@ -241,7 +244,24 @@ extension FTEval {
             if declared == nil { return t }
             if case .collection = t { return t }
         }
+        if declared == nil, p.type.isEmpty, !p.isStatic, let f = assignedClass(owner, p.name) { return .instance(f) }
         return declared
+    }
+
+    /// Class of an untyped, undocumented property from `$this->name = new Foo(...)` in its own file (generated API clients such as
+    /// `Google\Service\Gmail::$users_messages`). The first assignment wins; names resolve against the owner's namespace and imports.
+    private func assignedClass(_ owner: FTClass, _ prop: String) -> String? {
+        let key = owner.fqn + "::$" + prop
+        if let c = ctorPropCache[key] { return c.isEmpty ? nil : c }
+        var result = ""
+        defer { ctorPropCache[key] = result }
+        guard let t = fileText(of: owner), t.length < 400_000 else { return nil }
+        let pat = "\\$this->" + NSRegularExpression.escapedPattern(for: prop) + "\\s*=\\s*new\\s+([\\\\\\w]+)"
+        guard let re = NPRe.make(pattern: pat), let m = re.firstMatch(in: t as String, range: NSRange(location: 0, length: t.length)) else { return nil }
+        let written = t.substring(with: m.range(at: 1))
+        if written.lowercased() == "static" || written.lowercased() == "self" { result = owner.fqn; return owner.fqn }
+        if let f = fp.resolveClass(written, in: owner) { result = f }
+        return result.isEmpty ? nil : result
     }
 
     /// `@property` / `@method` tags on the class chain (IDE-helper annotations, facade `@method static`).
@@ -296,8 +316,84 @@ extension FTEval {
            let ty = typeFromDoc(sig.ret, owner: owner, selfType: ""), !(isBareCollection(ty)) { return ty }
         guard let d = NPDoc.leading(t, before: found.declStart) else { return nil }
         let doc = NPDoc.parse(d.text, start: d.start)
-        guard let ret = doc.ret?.type, !ret.isEmpty, !ret.hasPrefix("(") else { return nil }
+        guard var ret = doc.ret?.type, !ret.isEmpty else { return nil }
+        if ret.hasPrefix("(") {      // `($content is null ? Factory : Response)`
+            let params = NPFuncIndex.signature(t, nameLoc: found.loc)?.params ?? ""
+            guard let picked = pickConditional(ret, params: params, args: args) else { return nil }
+            ret = picked
+        }
         return typeFromDoc(ret, owner: owner, selfType: "", templates: templates(doc, owner: owner))
+    }
+
+    private enum ArgKind { case null, bool, string, int, float, array, classString, unknown }
+
+    private func argKind(_ r: (Int, Int)) -> ArgKind {
+        let n = r.1 - r.0
+        guard n > 0 else { return .unknown }
+        let t = lex.toks[r.0]
+        if n == 1 {
+            switch t.kind {
+            case .string: return .string
+            case .number: return lex.text(r.0).contains(".") ? .float : .int
+            case .ident:
+                switch lex.text(r.0).lowercased() { case "null": return .null; case "true", "false": return .bool; default: return .unknown }
+            default: return .unknown
+            }
+        }
+        if t.kind == .punct, t.ch == 91, lex.match[r.0] == r.1 - 1 { return .array }
+        if t.kind == .ident, lex.text(r.0).lowercased() == "array", lex.isPunct(r.0 + 1, "("), lex.match[r.0 + 1] == r.1 - 1 { return .array }
+        if n == 3, t.kind == .ident, lex.isPunct(r.0 + 1, code: PHPTok.dcolon), lex.isIdent(r.0 + 2, "class") { return .classString }
+        return .unknown
+    }
+
+    /// Picks the branch of a docblock conditional return type, `($p is null ? A : B)`, from the call's arguments (an omitted argument
+    /// takes its declared default). Nested conditionals are followed. nil when the argument kind is not statically known.
+    func pickConditional(_ ret: String, params: String, args: (Int, Int)?, depth: Int = 0) -> String? {
+        var s = ret.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard depth < 6, s.hasPrefix("("), s.hasSuffix(")") else { return s.isEmpty ? nil : s }
+        s = String(s.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        guard let re = NPRe.make(pattern: #"^(\$\w+)\s+is\s+(not\s+)?"#), let m = re.firstMatch(in: s, range: NSRange(location: 0, length: (s as NSString).length)) else { return nil }
+        let ns = s as NSString
+        let pname = ns.substring(with: m.range(at: 1))
+        let negated = m.range(at: 2).location != NSNotFound
+        let rest = Array(ns.substring(from: m.range.location + m.range.length))
+        // split `TYPE ? A : B` at the first top-level `?`, then the `:` matching it (nested conditionals in A)
+        var d = 0, q = -1, nest = 0, colon = -1
+        for (i, c) in rest.enumerated() {
+            if "<({[".contains(c) { d += 1 } else if ">)}]".contains(c) { d -= 1 }
+            if d != 0 { continue }
+            if q < 0 { if c == "?", i > 0, rest[i - 1] == " " { q = i } }
+            else if c == "?" { nest += 1 } else if c == ":" { if nest == 0 { colon = i; break } else { nest -= 1 } }
+        }
+        guard q > 0, colon > q else { return nil }
+        let type = String(rest[..<q]).trimmingCharacters(in: .whitespaces).lowercased()
+        let a = String(rest[(q + 1)..<colon]).trimmingCharacters(in: .whitespaces), b = String(rest[(colon + 1)...]).trimmingCharacters(in: .whitespaces)
+        // the argument (or its declared default) for the named parameter
+        let plist = Self.splitTop(params, ",")
+        guard let idx = plist.firstIndex(where: { $0.range(of: "\\" + pname + "\\b", options: .regularExpression) != nil }) else { return nil }
+        var kind = ArgKind.unknown
+        let parts = args.map { splitArgs($0) } ?? []
+        if idx < parts.count { kind = argKind(parts[idx]) }
+        else if args != nil, let eq = plist[idx].firstIndex(of: "=") {
+            let def = plist[idx][plist[idx].index(after: eq)...].trimmingCharacters(in: .whitespaces).lowercased()
+            if def == "null" { kind = .null } else if def == "true" || def == "false" { kind = .bool } else if def.hasPrefix("[") || def.hasPrefix("array") { kind = .array }
+            else if def.hasPrefix("'") || def.hasPrefix("\"") { kind = .string } else if Double(def) != nil { kind = def.contains(".") ? .float : .int }
+        }
+        guard kind != .unknown else { return nil }
+        var matches = false
+        for n in type.split(separator: "|").map({ $0.trimmingCharacters(in: .whitespaces) }) {
+            switch kind {
+            case .null: matches = matches || n == "null" || n == "mixed"
+            case .bool: matches = matches || ["bool", "boolean", "true", "false", "scalar", "mixed"].contains(n)
+            case .string: matches = matches || ["string", "scalar", "mixed", "callable", "array-key", "non-empty-string"].contains(n)
+            case .int: matches = matches || ["int", "integer", "scalar", "mixed", "numeric", "array-key"].contains(n)
+            case .float: matches = matches || ["float", "double", "scalar", "mixed", "numeric"].contains(n)
+            case .array: matches = matches || n.hasPrefix("array") || n.hasPrefix("list") || n == "iterable" || n == "mixed" || n == "callable"
+            case .classString: matches = matches || n.hasPrefix("class-string") || n == "string" || n == "scalar" || n == "mixed"
+            case .unknown: break
+            }
+        }
+        return pickConditional(matches != negated ? a : b, params: params, args: args, depth: depth + 1)
     }
 
     private func isBareCollection(_ t: FTType) -> Bool { if case .instance(let f) = t { return Self.isCollectionFQN(f) }; return false }

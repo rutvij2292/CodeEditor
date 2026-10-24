@@ -574,7 +574,39 @@ final class NPResolver {
 
     // MARK: Strings (class names, relation names, column names)
 
+    /// `"... $this->field ..."` / `"{$a->b->c}"`: a property inside a double-quoted string (simple syntax takes one member, braces a chain).
+    private func interpolationLookup(_ i: Int, _ range: NSRange, offset: Int) -> NPHit? {
+        guard range.length > 4, ns.character(at: range.location) == 34, let re = NPRe.make(pattern: #"\$(\w+)((?:->\w+)+)"#) else { return nil }
+        let raw = ns.substring(with: range) as NSString
+        guard raw.range(of: "->").location != NSNotFound else { return nil }
+        for m in re.matches(in: raw as String, range: NSRange(location: 0, length: raw.length)) {
+            let base = m.range.location
+            let membersStart = m.range(at: 2).location
+            guard offset >= range.location + membersStart, offset <= range.location + m.range.location + m.range.length else { continue }
+            let braced = base > 0 && raw.character(at: base - 1) == 123
+            var segs: [(String, NSRange)] = []
+            var pos = membersStart
+            for part in raw.substring(with: m.range(at: 2)).components(separatedBy: "->").dropFirst() {
+                pos += 2
+                segs.append((part, NSRange(location: range.location + pos, length: part.utf16.count)))
+                pos += part.utf16.count
+            }
+            if !braced { segs = Array(segs.prefix(1)) }
+            guard let target = segs.firstIndex(where: { offset >= $0.1.location && offset <= $0.1.location + $0.1.length }) else { return nil }
+            let vname = "$" + raw.substring(with: m.range(at: 1))
+            var t: FTType? = vname == "$this" ? cur.flatMap { $0.fqn.isEmpty ? nil : FTType.instance($0.fqn) } : ev.varType(vname, at: i, depth: 0)
+            for s in segs.prefix(target) { guard let cur0 = t else { return nil }; t = ev.step(cur0, s.0, isCall: false, isStatic: false, args: nil) }
+            guard let recv = t else { return nil }
+            var owner: String?
+            if case .instance(let f) = recv { owner = f }
+            guard let o = owner, let mem = findMember(owners: [o], model: ev.isModel(o) ? o : nil, name: segs[target].0, isCall: false, isStatic: false, kindVariable: false) else { return nil }
+            return memberHit(mem, segs[target].1)
+        }
+        return nil
+    }
+
     private func stringLookup(_ i: Int, _ range: NSRange, offset: Int) -> NPHit? {
+        if let h = interpolationLookup(i, range, offset: offset) { return h }
         let v = lex.strValue(i)
         guard !v.isEmpty, v.count < 160 else { return nil }
         if v.contains("\\"), v.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "\\" }),
@@ -794,8 +826,7 @@ final class NPResolver {
     // MARK: Migration columns
 
     private func migrationColumn(table: String, column: String) -> (String, Int)? {
-        let dir = fp.path + "/database/migrations"
-        let all = LaravelFS.list(dir).filter { $0.hasSuffix(".php") }.sorted()
+        let all = fp.migrationFiles()
         guard !all.isEmpty else { return nil }
         let esc = NSRegularExpression.escapedPattern(for: column)
         var patterns = ["->\\w+\\(\\s*['\"]\(esc)['\"]"]
@@ -812,17 +843,17 @@ final class NPResolver {
         }
         let regexes = patterns.compactMap { NPRe.make(pattern: $0) }
         let tableQuoted = ["'" + table + "'", "\"" + table + "\""]
-        let preferred = all.filter { $0.contains(table) }
-        for list in [preferred, all.filter { !$0.contains(table) }] {
+        let preferred = all.filter { ($0 as NSString).lastPathComponent.contains(table) }
+        for list in [preferred, all.filter { !($0 as NSString).lastPathComponent.contains(table) }] {
             for f in list {
-                guard let t = NPFiles.text(dir + "/" + f), tableQuoted.contains(where: { t.range(of: $0).location != NSNotFound }) else { continue }
+                guard let t = NPFiles.text(f), tableQuoted.contains(where: { t.range(of: $0).location != NSNotFound }) else { continue }
                 for re in regexes {
                     if let m = re.firstMatch(in: t as String, range: NSRange(location: 0, length: t.length)) {
                         // point at the quoted column name when present, else the method name
                         var off = m.range.location + 2
                         let sub = t.substring(with: m.range)
                         if let q = sub.range(of: "'" + column) ?? sub.range(of: "\"" + column) { off = m.range.location + sub.utf16.distance(from: sub.startIndex, to: q.lowerBound) + 1 }
-                        return (dir + "/" + f, off)
+                        return (f, off)
                     }
                 }
             }

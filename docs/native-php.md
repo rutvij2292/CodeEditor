@@ -99,6 +99,15 @@ Cost: nothing resident. A search maps each candidate file once, lexes it once, k
 * Only the first type in a file is parsed (one class per file, PSR-4 style).
 * Types come from FTEval: declared types, docblock `@return`/`@var`/`@param`, `new`, assignments, params, foreach, Eloquent chains,
   auth/container/facade helpers (see phase 2a). A docblock directly above `$x = ...` overrides the inferred type.
+* Conditional `@return ($p is T ? A : B)` (also nested; `response()`, `redirect()`, `pick()`-style helpers and methods) is decided from the
+  call's argument: an omitted argument takes its declared default, literal `null` / string / number / bool / array / `Foo::class` arguments are
+  matched against `T`; any other argument expression gives no answer (never a guess).
+* Receivers: `a ? b : c`, `a ?: c` and `a ?? c` evaluate both branches (agree or one unknown: that type; disagree: none). `[$a, $b] = $this->m()` /
+  `list(...)` take element N of the `return [ ... ];` of a method in the same file (positional elements only). `"... $this->prop ..."` and
+  `"{$a->b->c}"` resolve the property under the pointer. An untyped, undocumented property takes the class of its first `$this->p = new Foo(...)`
+  in its own file (generated API clients). Migrations are read from `database/migrations` plus each module's `database/migrations` (next to a
+  PSR-4 root, or one level below it for `"Modules\\": "Modules/"`).
+* The live-buffer parse memo compares the full text, not just length + `NSString.hash` (which samples long strings), so a same-length edit never reuses a stale parse.
 * Generics are element hints only: `Collection<int, Foo>`, `array<int, Foo>`, `Foo[]` all become one collection-of-Foo type (a plain
   array of Foo therefore lists Collection members in completion). Templates: only `of Bound` bounds and `class-string<T>` params.
   No flow analysis, no union/intersection narrowing beyond the first resolvable class name.
