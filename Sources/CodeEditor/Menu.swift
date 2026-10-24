@@ -3,7 +3,8 @@ import AppKit
 /// Menu bar with PhpStorm's macOS key equivalents (derived from its bundled keymap).
 enum MainMenu {
     private static func fn(_ code: Int) -> String { String(UnicodeScalar(UInt32(code))!) }
-    private static let up = fn(NSUpArrowFunctionKey), down = fn(NSDownArrowFunctionKey)
+    private static let up = fn(NSUpArrowFunctionKey), down = fn(NSDownArrowFunctionKey),
+        left = fn(NSLeftArrowFunctionKey), right = fn(NSRightArrowFunctionKey)
     private static let f12 = fn(NSF12FunctionKey), f1 = fn(NSF1FunctionKey), f2 = fn(NSF2FunctionKey), f3 = fn(NSF3FunctionKey)
     private static let f6 = fn(NSF6FunctionKey), f7 = fn(NSF7FunctionKey)
     private static let backspace = "\u{7f}"
@@ -167,6 +168,8 @@ enum MainMenu {
             sep,
             item("Back", #selector(AppDelegate.goBack(_:)), "[", target: a),
             item("Forward", #selector(AppDelegate.goForward(_:)), "]", target: a),
+            item("Back (Alt)", #selector(AppDelegate.goBack(_:)), left, [.command, .option], target: a),
+            item("Forward (Alt)", #selector(AppDelegate.goForward(_:)), right, [.command, .option], target: a),
             item("Previous Tab", #selector(AppDelegate.previousTab(_:)), "{", [.command, .shift], target: a),
             item("Next Tab", #selector(AppDelegate.nextTab(_:)), "}", [.command, .shift], target: a),
             sep,
