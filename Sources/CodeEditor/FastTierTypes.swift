@@ -13,12 +13,81 @@ indirect enum FTType {
     case collection(String?)    // collection of model FQN
 }
 
+/// Memo shared by the resolvers of one multi-file request (find usages / rename): docblock queries and class hierarchies of library
+/// classes do not depend on the file being resolved, so thousands of lookups in hundreds of files parse / walk each of them once.
+/// Entries never involve the file's own (possibly unsaved) class: those stay in the per-resolver caches. Lives for one request,
+/// only touched on the project's queue.
+final class NPSharedMemo {
+    static let cap = 3000
+    var docs: [String: NPDoc] = [:]
+    var classDocs: [String: NPDoc] = [:]
+    var hier: [String: [FTClass]] = [:]
+    func trimIfNeeded() {
+        if docs.count > Self.cap { docs.removeAll() }
+        if classDocs.count > Self.cap { classDocs.removeAll() }
+        if hier.count > Self.cap { hier.removeAll() }
+    }
+}
+
+/// See `FTEval.hierarchy`. A Sequence; `all` / `count` force the complete list.
+final class FTHier: Sequence {
+    private unowned let ev: FTEval?
+    private let rootName: String
+    private(set) var out: [FTClass] = []
+    private var stack: [(name: String, depth: Int)]
+    private var seen = Set<String>()
+    private(set) var done = false
+
+    init(ev: FTEval, fqn: String) { self.ev = ev; rootName = fqn; stack = [(fqn, 0)] }
+    init(done list: [FTClass]) { ev = nil; rootName = ""; stack = []; out = list; done = true }
+
+    /// Loads the next class of the walk; false when the walk is complete.
+    @discardableResult
+    private func advance() -> Bool {
+        guard !done, let ev else { return false }
+        while let (name, depth) = stack.popLast() {
+            guard depth < 14, out.count < 60, seen.insert(name).inserted else { continue }
+            let c: FTClass? = (name == ev.cur?.fqn && ev.cur != nil) ? ev.cur : ev.fp.classInfo(name)
+            guard let c else { continue }
+            out.append(c)
+            var kids = c.traits
+            if let e = c.extends { kids.append(e) }
+            if c.kind == "interface" || c.kind == "enum" { kids += c.implements }
+            for k in kids.reversed() { stack.append((k, depth + 1)) }      // popped in the order the recursive walk visited them
+            if !kids.isEmpty { ev.fp.prefetch(kids) }                      // read + parse the next classes in parallel
+            return true
+        }
+        done = true
+        ev.hierarchyComplete(rootName, out)
+        return false
+    }
+
+    func element(_ i: Int) -> FTClass? {
+        while out.count <= i, advance() {}
+        return i < out.count ? out[i] : nil
+    }
+    var first: FTClass? { element(0) }
+    var all: [FTClass] { while advance() {}; return out }
+    var count: Int { all.count }
+    var isEmpty: Bool { first == nil }
+
+    func makeIterator() -> AnyIterator<FTClass> {
+        var i = 0
+        return AnyIterator { [self] in
+            guard let k = element(i) else { return nil }
+            i += 1
+            return k
+        }
+    }
+}
+
 final class FTEval {
     let fp: FastProject
+    var shared: NPSharedMemo?
     let ns: NSString
     let lex: PHPLex
     let cur: FTClass?
-    private var hier: [String: [FTClass]] = [:]
+    private var hier: [String: FTHier] = [:]
     // Per-request caches / state for the docblock-aware inference (NativePHPSigTypes.swift).
     var docCache: [String: NPDoc] = [:]
     var authGuard: String?
@@ -62,22 +131,20 @@ final class FTEval {
 
     // MARK: Hierarchy
 
-    func hierarchy(_ fqn: String) -> [FTClass] {
+    /// Lazily materialised class hierarchy (traits, parent, interfaces' parents, depth first, same order and caps as the former eager walk).
+    /// Callers that only need the first class that declares a member stop early, so a cold lookup into a big vendor hierarchy
+    /// (Carbon: 31 files) reads and parses only the classes up to the match.
+    func hierarchy(_ fqn: String) -> FTHier {
         if let h = hier[fqn] { return h }
-        var out: [FTClass] = []
-        var seen = Set<String>()
-        func visit(_ name: String, depth: Int) {
-            guard depth < 14, out.count < 60, seen.insert(name).inserted else { return }
-            let c: FTClass? = (name == cur?.fqn && cur != nil) ? cur : fp.classInfo(name)
-            guard let c else { return }
-            out.append(c)
-            for t in c.traits { visit(t, depth: depth + 1) }
-            if let e = c.extends { visit(e, depth: depth + 1) }
-            if c.kind == "interface" || c.kind == "enum" { for i in c.implements { visit(i, depth: depth + 1) } }
-        }
-        visit(fqn, depth: 0)
-        hier[fqn] = out
-        return out
+        let h: FTHier
+        if let sh = shared?.hier[fqn], cur == nil || !sh.contains(where: { $0.fqn == cur!.fqn }) { h = FTHier(done: sh) }
+        else { h = FTHier(ev: self, fqn: fqn) }
+        hier[fqn] = h
+        return h
+    }
+
+    fileprivate func hierarchyComplete(_ fqn: String, _ out: [FTClass]) {
+        if let shared, cur == nil || !out.contains(where: { $0.fqn == cur!.fqn }) { shared.hier[fqn] = out; shared.trimIfNeeded() }
     }
 
     func findMethod(_ fqn: String, _ name: String) -> (FTClass, FTMethod)? {
@@ -383,10 +450,12 @@ final class FTEval {
         let scopes = enclosingFunctions(tok)
         let atLoc = lex.toks[min(tok, lex.count - 1)].loc
         var candidates: [(loc: Int, type: FTType?)] = []
+        let asciiLen: Int32 = name.utf8.allSatisfy({ $0 < 128 }) ? Int32(name.utf8.count) : -1     // ASCII names: the token length must match before any String is built
         func scan(from lo: Int, to hi: Int) {
             var i = hi - 1
             while i >= lo {
                 let t = lex.toks[i]
+                if t.kind != .variable || (asciiLen >= 0 && t.len != asciiLen) { i -= 1; continue }
                 if t.kind == .variable, lex.text(i) == name, !(i > 0 && isOp(i - 1)) {
                     if lex.isPunct(i + 1, "="), !lex.isPunct(i + 2, "="), !lex.isPunct(i + 2, code: PHPTok.fat), !lex.isPunct(i - 1, "=") {
                         var e = i + 2
@@ -458,8 +527,9 @@ final class FTEval {
         // @var Type $name docblocks between the function start and here
         if atLoc > startLoc {
             let rng = NSRange(location: startLoc, length: atLoc - startLoc)
+            let hasVarTag = ns.range(of: "@var", options: .literal, range: rng).location != NSNotFound      // the regex needs a literal `@var`
             let pat = "@var\\s+((?:[^\\s$<]|<[^>]*>)+)\\s+\\$" + NSRegularExpression.escapedPattern(for: String(name.dropFirst())) + "\\b"
-            if let re = NPRe.make(pattern: pat), let m = re.matches(in: ns as String, range: rng).last {
+            if hasVarTag, let re = NPRe.make(pattern: pat), let m = re.matches(in: ns as String, range: rng).last {
                 let raw = ns.substring(with: m.range(at: 1))
                 if let t = typeFromDoc(raw, owner: cur, selfType: cur?.fqn ?? "") {
                     // a docblock directly above `$name = ...` overrides that assignment's inferred type

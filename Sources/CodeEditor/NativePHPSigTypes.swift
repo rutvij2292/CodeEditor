@@ -39,9 +39,16 @@ extension FTEval {
     /// Parsed docblock above `declStart` in `k`'s file (nil when none). Cached per request.
     func docOf(_ k: FTClass, declStart: Int, key: String, query: NPDoc.Query? = nil) -> NPDoc? {
         if let d = docCache[key] { return d.raw.isEmpty ? nil : d }
-        guard let t = fileText(of: k), let d = NPDoc.leading(t, before: declStart) else { docCache[key] = NPDoc(); return nil }
+        let share = shared != nil && k !== cur           // the file's own class may be an unsaved buffer: never shared
+        if share, let d = shared!.docs[key] { docCache[key] = d; return d.raw.isEmpty ? nil : d }
+        guard let t = fileText(of: k), let d = NPDoc.leading(t, before: declStart) else {
+            docCache[key] = NPDoc()
+            if share { shared!.docs[key] = NPDoc() }
+            return nil
+        }
         let doc = (query ?? (key.hasSuffix("::class") ? .classInfo : nil)).map { NPDoc.parse(d.text, start: d.start, query: $0) } ?? NPDoc.parse(d.text, start: d.start)
         docCache[key] = doc
+        if share { shared!.docs[key] = doc; shared!.trimIfNeeded() }
         return doc
     }
 

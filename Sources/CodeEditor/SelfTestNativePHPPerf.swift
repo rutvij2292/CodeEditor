@@ -182,6 +182,65 @@ enum SelfTestNativePHPPerf {
         check("real method next to a huge docblock resolves", real?.kind == "method")
     }
 
+    // MARK: Cold-path / find-usages speedups
+
+    private static func speedups(_ root: URL, _ fp: FastProject) {
+        // fast directory walk == generic FindEngine walk (same set, same spelling)
+        let fast = Set(NPRefs.phpFiles(root: root.path, includeVendor: true)), ref = Set(NPRefs.phpFilesViaEngine(root: root.path, includeVendor: true))
+        check("fast php file walk equals the FindEngine walk (\(fast.count) files)", fast == ref && fast.count > 5)
+        let filtered = NPRefs.phpFiles(root: root.path, includeVendor: false, filter: { $0.hasSuffix("G1.php") })
+        check("walk filter keeps only matching files", filtered.count == 1)
+        // byte prefilter equals the old substring semantics on a few tokens
+        let ns = "<?php $x = [Foo::class, 'Get_User'];\n$y = 'unrelated';\n$z = \"caf\u{00e9} get\";" as NSString
+        let lex = PHPLex(ns)
+        var buf = [unichar](repeating: 0, count: 1024)
+        let needles = NPRefs.asciiNeedles(["get_user"])!.needles
+        var verdicts: [Bool] = []
+        for i in 0..<lex.count where lex.toks[i].kind == .string { verdicts.append(NPRefs.stringMayContain(ns, lex.toks[i], needles, &buf)) }
+        check("string prefilter: match, no match, non-ASCII never rejected", verdicts == [true, false, true])
+        // lazy hierarchy: same order as the eager depth-first walk, and stops early
+        SelfTestNativePHP.put(root, "app/Gen2/T1.php", "<?php\nnamespace App\\Gen2;\ntrait T1 { public function fromT1() {} }\n")
+        SelfTestNativePHP.put(root, "app/Gen2/T2.php", "<?php\nnamespace App\\Gen2;\ntrait T2 { use T3; public function fromT2() {} }\n")
+        SelfTestNativePHP.put(root, "app/Gen2/T3.php", "<?php\nnamespace App\\Gen2;\ntrait T3 { public function fromT3() {} }\n")
+        SelfTestNativePHP.put(root, "app/Gen2/Base.php", "<?php\nnamespace App\\Gen2;\nclass Base { public function fromBase() {} }\n")
+        SelfTestNativePHP.put(root, "app/Gen2/Child.php", "<?php\nnamespace App\\Gen2;\nclass Child extends Base { use T1, T2; public function own() {} }\n")
+        let evText = "<?php\n" as NSString
+        let ev = FTEval(fp: fp, text: evText, lex: PHPLex(evText), cur: nil)
+        let order = fp.queue.sync { () -> [String] in
+            let h = ev.hierarchy("App\\Gen2\\Child")
+            let firstOnly = h.first?.fqn
+            return [firstOnly ?? "", h.done ? "done" : "partial"] + h.all.map(\.fqn)
+        }
+        check("lazy hierarchy: first class alone leaves the walk partial", order.prefix(2) == ["App\\Gen2\\Child", "partial"])
+        check("lazy hierarchy order == depth first: class, traits (with their traits), parent (\(order.dropFirst(2)))",
+              Array(order.dropFirst(2)) == ["App\\Gen2\\Child", "App\\Gen2\\T1", "App\\Gen2\\T2", "App\\Gen2\\T3", "App\\Gen2\\Base"])
+        let found = fp.queue.sync { ev.findMethod("App\\Gen2\\Child", "fromT3")?.0.fqn }
+        check("findMethod walks through nested traits", found == "App\\Gen2\\T3")
+        // class cache: a changed file is picked up after the next validation (epoch), even though per-call stats are gone
+        let invPath = root.path + "/app/Gen2/Inv.php"
+        SelfTestNativePHP.put(root, "app/Gen2/Inv.php", "<?php\nnamespace App\\Gen2;\nclass Inv { public function m1() {} }\n")
+        fp.queue.sync { fp.markDirty(); fp.beginRequest() }
+        let a = fp.queue.sync { fp.classInfo(path: invPath)?.methods.map(\.name) }
+        SelfTestNativePHP.put(root, "app/Gen2/Inv.php", "<?php\nnamespace App\\Gen2;\nclass Inv { public function m1() {} public function m2Longer() {} }\n")
+        fp.queue.sync { fp.markDirty(); fp.beginRequest() }
+        let b = fp.queue.sync { fp.classInfo(path: invPath)?.methods.map(\.name) }
+        check("class cache sees a changed file after revalidation", a == ["m1"] && b == ["m1", "m2Longer"])
+        // find usages: shared memo + parallel prepare give the same hits as a plain per-file scan
+        SelfTestNativePHP.put(root, "app/Gen2/Use.php", "<?php\nnamespace App\\Gen2;\nclass Use1 { public function go(Child $c, Base $b) { $c->fromBase(); $b->fromBase(); $c->own(); return [Child::class, 'own']; } }\n")
+        let off = (try? String(contentsOfFile: root.path + "/app/Gen2/Base.php", encoding: .utf8)).map { ($0 as NSString).range(of: "fromBase").location + 1 } ?? 0
+        let baseText = FastProject.read(root.path + "/app/Gen2/Base.php")!
+        if case .symbol(let sym) = NPRefs.identify(url: URL(fileURLWithPath: root.path + "/app/Gen2/Base.php"), text: baseText, offset: off, root: root.path) {
+            let res = NPRefs.collect(sym)
+            let rel = NPRelations(fp: fp)
+            let plain = NPRefs.candidates(root: root.path, needles: [sym.name], includeVendor: false, extra: [], cancel: nil).flatMap { p in
+                fp.queue.sync { fp.beginRequest(); return NPRefs.scanFile(sym, path: p, fp: fp, rel: rel).hits }
+            }
+            let key: (NPRefHit) -> String = { "\($0.path):\($0.range.location):\($0.role.rawValue)" }
+            check("collect (parallel prepare, shared memo) == plain per-file scan (\(res.hits.count) hits)",
+                  res.hits.map(key).sorted() == plain.map(key).sorted() && res.hits.count >= 3)
+        } else { check("identify fromBase", false) }
+    }
+
     static func run() {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent("ce-nativeperf-\(getpid())")
@@ -195,6 +254,7 @@ enum SelfTestNativePHPPerf {
         funcScan()
         bigClass(root, fp)
         caches(root, fp)
+        speedups(root, fp)
         NPFiles.clear()
     }
 }

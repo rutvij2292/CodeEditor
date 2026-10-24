@@ -58,8 +58,9 @@ final class FastProject {
         let revalidate = dirty || now.timeIntervalSince(lastCheck) > 1.5
         if revalidate { lastCheck = now; dirty = false; epoch += 1 }
         flagLock.unlock()
+        drainPrefetched()
         if revalidate {
-            classCache = classCache.filter { LaravelFS.mtime($0.key) == $0.value.stamp }
+            classCache = classCache.filter { LaravelFS.mtime($0.key) == $0.value.stamp }.mapValues { var e = $0; e.epoch = epoch; return e }
             classBytes = classCache.values.reduce(0) { $0 + $1.bytes }
             pathCache.removeAll()
         }
@@ -77,26 +78,76 @@ final class FastProject {
 
     // MARK: Filesystem helpers
 
-    private static func dirStamp(_ dir: String, depth: Int = 0, files: Bool = false) -> Int64 {
-        var h = Hasher()
-        h.combine(LaravelFS.mtime(dir))
-        guard depth < 8 else { return Int64(h.finalize()) }
-        for e in LaravelFS.list(dir).sorted() where !e.hasPrefix(".") {
-            let p = dir + "/" + e
-            if LaravelFS.isDir(p) { h.combine(dirStamp(p, depth: depth + 1, files: files)) } else if files { h.combine(LaravelFS.mtime(p)) }
+    /// Entries of `dir` that do not start with a dot, with their directory flag (symlinks are resolved like `stat`). One `readdir` pass using
+    /// the entry type: no per-entry `stat` and no URL enumerator (`FileManager.contentsOfDirectory` + `isDir` cost ~50 ms for an app + Modules tree).
+    /// `fileSuffix`: nil returns directories only (no String is built for files), otherwise the files whose name ends with it ("" = all files).
+    static func readEntries(_ dir: String, fileSuffix: [UInt8]? = []) -> [(name: String, isDir: Bool)] {
+        guard let d = opendir(dir) else { return [] }
+        defer { closedir(d) }
+        var out: [(name: String, isDir: Bool)] = []
+        while let e = readdir(d) {
+            let len = Int(e.pointee.d_namlen)
+            let type = e.pointee.d_type
+            // quick checks on the raw name bytes: hidden entries, and for plain files the suffix
+            let (hidden, suffixOK) = withUnsafePointer(to: &e.pointee.d_name) { $0.withMemoryRebound(to: UInt8.self, capacity: len + 1) { b -> (Bool, Bool) in
+                if b[0] == 46 { return (true, false) }                   // ".", ".." and hidden entries
+                guard let suf = fileSuffix else { return (false, false) }
+                if suf.count > len { return (false, false) }
+                for i in 0..<suf.count where b[len - suf.count + i] != suf[i] { return (false, false) }
+                return (false, true)
+            } }
+            if hidden { continue }
+            if type == UInt8(DT_REG), !suffixOK { continue }              // a file we do not want: no allocation
+            let name = withUnsafePointer(to: &e.pointee.d_name) { $0.withMemoryRebound(to: CChar.self, capacity: len + 1) { String(cString: $0) } }
+            var isDir = type == UInt8(DT_DIR)
+            if type == UInt8(DT_LNK) || type == UInt8(DT_UNKNOWN) { isDir = LaravelFS.isDir(dir + "/" + name) }
+            if !isDir, !suffixOK { continue }
+            out.append((name, isDir))
         }
-        return Int64(h.finalize())
+        return out
+    }
+
+    /// Order independent: depends on the mtime of every directory below `dir` (adding / removing / renaming an entry changes it), not on listing order.
+    private static func dirStamp(_ dir: String, depth: Int = 0, files: Bool = false) -> Int64 {
+        var acc = UInt64(bitPattern: LaravelFS.mtime(dir)) &* 0x9E37_79B9_7F4A_7C15
+        guard depth < 8 else { return Int64(bitPattern: acc) }
+        for e in readEntries(dir, fileSuffix: files ? [] : nil) {
+            let p = dir + "/" + e.name
+            if e.isDir { acc = acc &+ UInt64(bitPattern: dirStamp(p, depth: depth + 1, files: files)) &* 31 }
+            else if files { acc = acc &+ UInt64(bitPattern: LaravelFS.mtime(p)) }
+        }
+        return Int64(bitPattern: acc)
     }
 
     private static func files(in dir: String, ext: String, depth: Int = 0, rel: String = "") -> [String] {
         var out: [String] = []
         guard depth < 8 else { return out }
-        for e in LaravelFS.list(dir).sorted() where !e.hasPrefix(".") {
-            let p = dir + "/" + e
-            if LaravelFS.isDir(p) { out += files(in: p, ext: ext, depth: depth + 1, rel: rel + e + "/") }
-            else if e.hasSuffix(ext) { out.append(rel + e) }
+        for e in readEntries(dir, fileSuffix: Array(ext.utf8)).sorted(by: { $0.name < $1.name }) {
+            if e.isDir { out += files(in: dir + "/" + e.name, ext: ext, depth: depth + 1, rel: rel + e.name + "/") }
+            else if e.name.hasSuffix(ext) { out.append(rel + e.name) }
         }
         return out
+    }
+
+    /// `transform` over `items` on up to 4 threads, results in input order (sequential for tiny inputs / power saver).
+    static func parallelMap<A, B>(_ items: [A], _ transform: (A) -> B) -> [B] {
+        let workers = min(PowerState.shared.maxWorkers, 4, items.count)
+        guard workers > 1 else { return items.map(transform) }
+        var out = [B?](repeating: nil, count: items.count)
+        let counter = NPCounter()
+        withoutActuallyEscaping(transform) { tf in
+            out.withUnsafeMutableBufferPointer { buf in
+                let base = buf.baseAddress!
+                DispatchQueue.concurrentPerform(iterations: workers) { _ in
+                    while true {
+                        let i = counter.next()
+                        if i >= items.count { break }
+                        base[i] = tf(items[i])
+                    }
+                }
+            }
+        }
+        return out.map { $0! }
     }
 
     private func abs(_ rel: String) -> String { path + "/" + rel }
@@ -191,6 +242,11 @@ final class FastProject {
     static func read(_ path: String) -> NSString? {
         let t0 = NPStats.now()
         defer { NPStats.readNs &+= NPStats.now() &- t0; NPStats.reads += 1 }
+        return readRaw(path)
+    }
+
+    /// Same as `read` without the (unsynchronised) diagnostics counters: safe on worker threads.
+    static func readRaw(_ path: String) -> NSString? {
         guard let d = FileManager.default.contents(atPath: path), d.count < 2_000_000 else { return nil }
         // A real (CF backed) NSString: O(1) character access, unlike a bridged Swift String whose UTF-16 view needs breadcrumbs.
         return NSString(data: d, encoding: String.Encoding.utf8.rawValue) ?? NSString(data: d, encoding: String.Encoding.isoLatin1.rawValue)
@@ -272,14 +328,22 @@ final class FastProject {
         return section(classesSec, stamp: {
             var h = Hasher()
             h.combine(LaravelFS.mtime(composer))
-            for (_, dirs) in self.lp.psr4 { for d in dirs where !d.contains("/vendor/") { h.combine(Self.dirStamp(d)) } }
+            let dirs = self.lp.psr4.flatMap { $0.dirs.filter { !$0.contains("/vendor/") } }
+            // one task per PSR-4 root (an app plus a dozen modules): the stamps are summed, so the order does not matter
+            for st in Self.parallelMap(dirs, { Self.dirStamp($0) }) { h.combine(st) }
             return Int64(h.finalize())
         }) {
             var out: [FTClassRef] = []
             var seen = Set<String>()
-            for (prefix, dirs) in lp.psr4 {
+            let psr4 = lp.psr4
+            var roots: [String] = []
+            for (_, dirs) in psr4 { for d in dirs where !d.contains("/vendor/") && LaravelFS.isDir(d) { roots.append(d) } }
+            let listed = Self.parallelMap(roots, { Self.files(in: $0, ext: ".php") })
+            var k = 0
+            for (prefix, dirs) in psr4 {
                 for d in dirs where !d.contains("/vendor/") && LaravelFS.isDir(d) {
-                    for f in Self.files(in: d, ext: ".php") {
+                    let fs = listed[k]; k += 1
+                    for f in fs {
                         let rel = String(f.dropLast(4))
                         let short = (rel as NSString).lastPathComponent
                         guard let c = short.first, c.isUppercase else { continue }
@@ -296,7 +360,7 @@ final class FastProject {
 
     /// Parsed class declarations, least recently used evicted once the cache holds more than `maxClasses` entries or `maxClassBytes`
     /// (estimated retained bytes) -- vendor classes like Carbon / Eloquent Builder are large, so the byte cap is what matters.
-    private struct ClassEntry { var stamp: Int64; var cls: FTClass?; var bytes: Int; var tick: Int }
+    private struct ClassEntry { var stamp: Int64; var cls: FTClass?; var bytes: Int; var tick: Int; var epoch: Int }
     private var classCache: [String: ClassEntry] = [:]
     private var classBytes = 0
     private var classTick = 0
@@ -310,6 +374,8 @@ final class FastProject {
     func classPath(_ fqn: String) -> String? {
         let name = fqn.hasPrefix("\\") ? String(fqn.dropFirst()) : fqn
         if let p = pathCache[name] { return p.isEmpty ? nil : p }
+        let t0 = NPStats.now()
+        defer { NPStats.pathNs &+= NPStats.now() &- t0 }
         var found = lp.classFile(name)
         if found == nil { found = PHPStubs.classPath(name) }     // PHP built-ins (bundled stubs) win over vendor polyfills
         if found == nil, VendorIndex.enabled {
@@ -329,17 +395,92 @@ final class FastProject {
         if PHPStubs.isStubFile(file) {      // immutable bundled files: own bounded cache, no per-project copy
             return PHPStubs.classInfo(path: file) { Self.read(file).flatMap { Self.timedParse($0) } }
         }
-        let st = LaravelFS.mtime(file)
         classTick += 1
-        if var c = classCache[file], c.stamp == st { c.tick = classTick; classCache[file] = c; return c.cls }
+        // The file's mtime is re-checked once per validation epoch (`beginRequest`: at most every 1.5 s, or right after a file-change
+        // notification), not on every call: a find usages / hierarchy walk used to `stat` the same few vendor files thousands of times.
+        if var c = classCache[file] {
+            if c.epoch == epoch { c.tick = classTick; classCache[file] = c; return c.cls }
+            if c.stamp == LaravelFS.mtime(file) { c.tick = classTick; c.epoch = epoch; classCache[file] = c; return c.cls }
+        }
+        let st = LaravelFS.mtime(file)
+        if let slot = takePrefetched(file) {          // read + parsed on a worker thread: wait for it instead of doing the work again
+            slot.group.wait()
+            if slot.ok, slot.stamp == st {
+                store(file, slot.cls, stamp: st)
+                return slot.cls
+            }
+        }
         guard let t = Self.read(file) else { return nil }
         let cls = Self.timedParse(t)
+        store(file, cls, stamp: st)
+        return cls
+    }
+
+    private func store(_ file: String, _ cls: FTClass?, stamp st: Int64) {
         if let old = classCache[file] { classBytes -= old.bytes }
         let bytes = cls?.approxBytes ?? 64
-        classCache[file] = ClassEntry(stamp: st, cls: cls, bytes: bytes, tick: classTick)
+        classCache[file] = ClassEntry(stamp: st, cls: cls, bytes: bytes, tick: classTick, epoch: epoch)
         classBytes += bytes
         if classCache.count > Self.maxClasses || classBytes > Self.maxClassBytes { evictClasses(keeping: file) }
-        return cls
+    }
+
+    // MARK: Parallel prefetch of the classes a hierarchy walk is about to need
+
+    /// A class file being read and parsed on a worker thread (see `prefetch`).
+    final class PrefetchSlot {
+        let group = DispatchGroup()
+        var cls: FTClass?
+        var ok = false
+        var stamp: Int64 = 0
+    }
+    private let prefetchLock = NSLock()
+    private var prefetched: [String: PrefetchSlot] = [:]
+    static let maxPrefetchPending = 48
+
+    private func takePrefetched(_ file: String) -> PrefetchSlot? {
+        prefetchLock.lock(); defer { prefetchLock.unlock() }
+        return prefetched.removeValue(forKey: file)
+    }
+
+    /// Starts reading + parsing the (library) classes `names` on background threads when they are not cached yet. The cold walk over a big
+    /// vendor hierarchy (Carbon: 31 files, an Eloquent model: 35) then overlaps the file reads and parses of the classes it will visit next;
+    /// `classInfo(path:)` picks the result up (or waits for it). Nothing here is polled and nothing stays resident beyond the normal class
+    /// cache: results nobody asked for are moved into it (LRU, byte capped) by the next `beginRequest`. Must run on `queue`.
+    func prefetch(_ names: [String]) {
+        guard names.count > 0, PowerState.shared.maxWorkers >= 2 else { return }
+        var jobs: [(String, PrefetchSlot)] = []
+        for n in names {
+            guard let p = classPath(n), classCache[p] == nil, !PHPStubs.isStubFile(p) else { continue }
+            prefetchLock.lock()
+            if prefetched[p] == nil, prefetched.count < Self.maxPrefetchPending {
+                let s = PrefetchSlot()
+                s.group.enter()
+                prefetched[p] = s
+                jobs.append((p, s))
+            }
+            prefetchLock.unlock()
+        }
+        for (p, slot) in jobs {
+            DispatchQueue.global(qos: .userInitiated).async {
+                let st = LaravelFS.mtime(p)
+                if let t = Self.readRaw(p) { slot.cls = FTParser.parse(t); slot.ok = true }
+                slot.stamp = st
+                slot.group.leave()
+            }
+        }
+    }
+
+    /// Moves finished, unclaimed prefetch results into the class cache (queue only).
+    private func drainPrefetched() {
+        prefetchLock.lock()
+        let all = prefetched
+        prefetchLock.unlock()
+        for (file, slot) in all where slot.group.wait(timeout: .now()) == .success {
+            prefetchLock.lock(); let removed = prefetched.removeValue(forKey: file); prefetchLock.unlock()
+            guard removed === slot, slot.ok, classCache[file] == nil else { continue }
+            classTick += 1
+            store(file, slot.cls, stamp: slot.stamp)
+        }
     }
 
     /// Drops the least recently used quarter (at least) until both caps hold again; the entry just stored stays.
@@ -355,6 +496,7 @@ final class FastProject {
     /// Frees parsed classes and the name caches (memory trim). Runs on the project's queue.
     func dropCaches() {
         classCache.removeAll(); classBytes = 0
+        prefetchLock.lock(); prefetched.removeAll(); prefetchLock.unlock()
         pathCache.removeAll(); shortCache.removeAll()
     }
 

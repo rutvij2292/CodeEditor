@@ -69,6 +69,9 @@ enum NPStats {
     static var parseNs: UInt64 = 0
     static var funcIndexNs: UInt64 = 0
     static var docNs: UInt64 = 0
+    static var scanReadNs: UInt64 = 0, scanLexNs: UInt64 = 0, scanParseNs: UInt64 = 0, scanResolveNs: UInt64 = 0
+    static var candListNs: UInt64 = 0, candTotalNs: UInt64 = 0, candFiles = 0
+    static var pathNs: UInt64 = 0
     static var reads = 0
     static var parses = 0
 

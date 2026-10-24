@@ -32,6 +32,70 @@ struct NPMember {
     var viaDoc = false
 }
 
+/// The classes searched for a member, in order: the owner's hierarchy, then the hierarchies of the interfaces it lists. Lazy: the first
+/// part is only walked as far as the caller iterates (the member is usually declared in one of the first classes); `all` forces the rest.
+final class NPSearchClasses: Sequence {
+    private let ev: FTEval
+    private let hier: FTHier
+    private var out: [FTClass] = []
+    private var seen = Set<String>()
+    private var phase = 0                  // 0: owner hierarchy, 1: interfaces, 2: done
+    private var hi = 0                     // phase 0: next hierarchy index
+    private var ifaceQueue: [FTClass] = [] // phase 1 work list
+    private var ii = 0
+    private var inner: AnyIterator<FTClass>?
+
+    init(ev: FTEval, owner: String) { self.ev = ev; hier = ev.hierarchy(owner) }
+
+    private func advance() -> Bool {
+        while true {
+            switch phase {
+            case 0:
+                guard let k = hier.element(hi) else { phase = 1; ifaceQueue = hier.out; continue }
+                hi += 1
+                if seen.insert(k.fqn).inserted { out.append(k); return true }
+            case 1:
+                if let it = inner {
+                    if let ik = it.next() { if seen.insert(ik.fqn).inserted { out.append(ik); return true }; continue }
+                    inner = nil
+                }
+                var started = false
+                while ii < ifaceQueue.count, !started {
+                    let k = ifaceQueue[ii]; ii += 1
+                    var names = k.implements.prefix(8).makeIterator()
+                    var current: AnyIterator<FTClass>?
+                    inner = AnyIterator { [ev] in
+                        while true {
+                            if let c = current { if let n = c.next() { return n }; current = nil }
+                            guard let name = names.next() else { return nil }
+                            current = ev.hierarchy(name).makeIterator()
+                        }
+                    }
+                    started = true
+                }
+                if !started { phase = 2 }
+            default:
+                return false
+            }
+        }
+    }
+
+    func element(_ i: Int) -> FTClass? {
+        while out.count <= i, advance() {}
+        return i < out.count ? out[i] : nil
+    }
+    var all: [FTClass] { while advance() {}; return out }
+
+    func makeIterator() -> AnyIterator<FTClass> {
+        var i = 0
+        return AnyIterator { [self] in
+            guard let k = element(i) else { return nil }
+            i += 1
+            return k
+        }
+    }
+}
+
 final class NPResolver {
     let fp: FastProject
     let url: URL
@@ -44,9 +108,12 @@ final class NPResolver {
     var light = false
     private var docMemo: [String: NPDoc] = [:]
 
-    init(fp: FastProject, url: URL, text: NSString, lex: PHPLex, cur: FTClass?) {
-        self.fp = fp; self.url = url; ns = text; self.lex = lex; self.cur = cur
+    private let shared: NPSharedMemo?
+
+    init(fp: FastProject, url: URL, text: NSString, lex: PHPLex, cur: FTClass?, shared: NPSharedMemo? = nil) {
+        self.fp = fp; self.url = url; ns = text; self.lex = lex; self.cur = cur; self.shared = shared
         ev = FTEval(fp: fp, text: text, lex: lex, cur: cur)
+        ev.shared = shared
         isBlade = url.lastPathComponent.hasSuffix(".blade.php")
     }
 
@@ -599,24 +666,23 @@ final class NPResolver {
     }
 
     /// All classes to search for a member: the hierarchy (traits, parents, interfaces), then @mixin/@see targets for facades.
-    func searchClasses(_ owner: String) -> [FTClass] {
-        var out: [FTClass] = []
-        var seen = Set<String>()
-        func add(_ k: FTClass) { if seen.insert(k.fqn).inserted { out.append(k) } }
-        let h = ev.hierarchy(owner)
-        for k in h { add(k) }
-        for k in h { for i in k.implements.prefix(8) { for ik in ev.hierarchy(i) { add(ik) } } }
-        return out
-    }
+    func searchClasses(_ owner: String) -> NPSearchClasses { NPSearchClasses(ev: ev, owner: owner) }
 
     /// Class-level docblock of `k` parsed for `query`, memoised for the lifetime of this request (a Carbon / facade docblock is asked
     /// for several times while the hierarchy is walked). `tag` distinguishes queries.
     private func classDoc(_ k: FTClass, _ query: NPDoc.Query, tag: String) -> NPDoc? {
         let key = k.fqn + "|" + tag
         if let d = docMemo[key] { return d.raw.isEmpty ? nil : d }
-        guard let t = text(of: k), let d = NPDoc.leading(t, before: k.declStart) else { docMemo[key] = NPDoc(); return nil }
+        let share = shared != nil && k !== cur
+        if share, let d = shared!.classDocs[key] { docMemo[key] = d; return d.raw.isEmpty ? nil : d }
+        guard let t = text(of: k), let d = NPDoc.leading(t, before: k.declStart) else {
+            docMemo[key] = NPDoc()
+            if share { shared!.classDocs[key] = NPDoc() }
+            return nil
+        }
         let doc = NPDoc.parse(d.text, start: d.start, query: query)
         docMemo[key] = doc
+        if share { shared!.classDocs[key] = doc; shared!.trimIfNeeded() }
         return doc
     }
 
@@ -636,8 +702,8 @@ final class NPResolver {
         while idx < queue.count, idx < 12 {
             let owner = queue[idx]; idx += 1
             guard visited.insert(owner).inserted else { continue }
-            let classes = searchClasses(owner)
-            for k in classes {
+            let lazyClasses = searchClasses(owner)
+            for k in lazyClasses {
                 if kindVariable || (!isCall && isStatic) {
                     if let p = k.props.first(where: { $0.name == name }), p.isStatic || kindVariable {
                         return NPMember(kind: .property, owner: k, name: name, loc: p.loc, declStart: p.declStart, prop: p)
@@ -655,6 +721,7 @@ final class NPResolver {
                     if let p = k.props.first(where: { $0.name == name && !$0.isStatic }) { return NPMember(kind: .property, owner: k, name: name, loc: p.loc, declStart: p.declStart, prop: p) }
                 }
             }
+            let classes = lazyClasses.all
             // Eloquent virtual members
             if let model, owner == model || owners.contains(model) {
                 let mh = ev.hierarchy(model)

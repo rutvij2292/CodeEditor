@@ -154,9 +154,29 @@ enum NativePHPBench {
             let key = kind + ":" + row.word
             freq[key] = ((freq[key]?.n ?? 0) + 1, freq[key]?.row ?? row, kind)
         }
+        var usageDump: [String: [String]] = [:]
         var chosen: [(String, Row)] = []
         for (kind, want) in [("class", 2), ("method", 2), ("function", 1)] {
             chosen += freq.filter { $0.value.kind == kind }.sorted { ($0.value.n, $0.key) > ($1.value.n, $1.key) }.prefix(want).map { ($0.key, $0.value.row) }
+        }
+        // more very common member names (first occurrence in the app's own files; skipped when the call is on an unresolvable receiver)
+        let already = Set(chosen.map { $0.0 })
+        for name in (AppEnv.value("CE_NATIVE_BENCH_USAGE_NAMES") ?? "first,save,find,create,count").split(separator: ",").map(String.init) where !already.contains("method:" + name) {
+            var found = false
+            for f in files where !found {
+                guard let t = FastProject.read(f) else { continue }
+                var from = 0
+                while from < t.length {
+                    let r = t.range(of: "->" + name + "(", options: [], range: NSRange(location: from, length: t.length - from))
+                    if r.location == NSNotFound { break }
+                    from = r.location + r.length
+                    let off = r.location + 2 + name.count / 2
+                    if case .symbol(let sy) = NPRefs.identify(url: URL(fileURLWithPath: f), text: t, offset: off, root: path), sy.kind == .method, !sy.declPath.isEmpty {
+                        chosen.append(("method:" + name, Row(file: f, offset: off, word: name, wordEnd: r.location + 2 + name.count)))
+                        found = true; break
+                    }
+                }
+            }
         }
         for (key, row) in chosen {
             guard let t = FastProject.read(row.file) else { continue }
@@ -164,9 +184,24 @@ enum NativePHPBench {
             let id = NPRefs.identify(url: URL(fileURLWithPath: row.file), text: t, offset: row.offset, root: path)
             let idMs = ms(s0)
             guard case .symbol(let sym) = id else { fputs("NBENCH usages \(key) no-symbol\n", stderr); continue }
+            if AppEnv.value("CE_NATIVE_BENCH_PAUSE_KEY") == key { fputs("NBENCH pause pid=\(getpid())\n", stderr); usleep(1_500_000) }      // profiling aid: attach `sample` to a cold request
             let s1 = Date()
+            let sc0 = (NPStats.scanReadNs, NPStats.scanLexNs, NPStats.scanParseNs, NPStats.scanResolveNs)
+            let st0 = NPStats.snapshot()
             let res = NPRefs.collect(sym)
-            fputs("NBENCH usages \(key) identifyMs=\(f1(idMs)) collectMs=\(f1(ms(s1))) candidates=\(res.candidates) hits=\(res.hits.count) resolved=\(res.resolvedCount)\n", stderr)
+            let collectMs = ms(s1)
+            let st1 = NPStats.snapshot()
+            fputs("NBENCH usagesPathMs=\(f1(Double(NPStats.pathNs) / 1e6))\n", stderr)
+            fputs("NBENCH usagesIO read=\(f1(st1.read - st0.read))ms/\(st1.reads - st0.reads) parse=\(f1(st1.parse - st0.parse))ms/\(st1.parses - st0.parses)\n", stderr)
+            fputs("NBENCH usagesCand listAndPrefilterMs=\(f1(Double(NPStats.candTotalNs) / 1e6))\n", stderr)
+            fputs("NBENCH usagesSplit read=\(f1(Double(NPStats.scanReadNs &- sc0.0) / 1e6)) lex=\(f1(Double(NPStats.scanLexNs &- sc0.1) / 1e6)) parse=\(f1(Double(NPStats.scanParseNs &- sc0.2) / 1e6)) resolve=\(f1(Double(NPStats.scanResolveNs &- sc0.3) / 1e6))\n", stderr)
+            usageDump[key] = res.hits.map { "\($0.path):\($0.range.location):\($0.range.length):\($0.role.rawValue):\($0.editable)" }
+            if let n = AppEnv.value("CE_NATIVE_BENCH_USAGE_LOOP").flatMap({ Int($0) }), key == "method:get" {     // profiling aid: `sample <pid>`
+                fputs("NBENCH usageLoop pid=\(getpid())\n", stderr)
+                for _ in 0..<n { _ = NPRefs.collect(sym) }
+            }
+            let w0 = Date(); _ = NPRefs.collect(sym); let warmMs = ms(w0)
+            fputs("NBENCH usages \(key) identifyMs=\(f1(idMs)) collectMs=\(f1(collectMs)) warmMs=\(f1(warmMs)) candidates=\(res.candidates) hits=\(res.hits.count) resolved=\(res.resolvedCount)\n", stderr)
         }
         let fpUsages = Int(footprintMB())
         // diagnostics over a broader sample
@@ -197,6 +232,24 @@ enum NativePHPBench {
             groupTimes.append("\(g)=\(f1(ms(s0)))")
         }
         fputs("NBENCH diagGroups files=\(groupFiles.count) ms: \(groupTimes.joined(separator: " "))\n", stderr)
+        // sections the project-open warm-up builds (FastTier.warm), on a fresh FastProject: cold build time each, then the per-epoch re-validation
+        do {
+            let fp2 = FastProject(path: path)
+            var parts: [String] = []
+            fp2.queue.sync {
+                fp2.beginRequest()
+                func t(_ name: String, _ f: () -> Void) { let a = Date(); f(); parts.append("\(name)=\(f1(ms(a)))") }
+                t("routes") { _ = fp2.routeNames() }
+                t("views") { _ = fp2.viewNames() }
+                t("config") { _ = fp2.configKeys() }
+                t("schema") { _ = fp2.schema() }
+                t("projectClasses") { _ = fp2.projectClasses() }
+                fp2.markDirty(); fp2.beginRequest()
+                t("revalidate:views") { _ = fp2.viewNames() }
+                t("revalidate:projectClasses") { _ = fp2.projectClasses() }
+            }
+            fputs("NBENCH sectionsMs \(parts.joined(separator: " "))\n", stderr)
+        }
         let vm = vmInfo()
         let cc = fp.queue.sync { (fp.cachedClassCount, fp.cachedClassBytes) }
         fputs("NBENCH ram baseMB=\(Int(base)) afterLookupMB=\(Int(afterCold)) afterWarmMB=\(fpWarm) afterUsagesMB=\(fpUsages) finalMB=\(Int(footprintMB())) residentMB=\(Int(Double(vm.resident_size) / 1_048_576)) growthMB=\(Int(footprintMB() - base)) classCache=\(cc.0)/\(cc.1 / 1024)KB npFiles=\(NPFiles.cachedCount) stubClasses=\(PHPStubs.cachedClassCount)\n", stderr)
@@ -207,7 +260,7 @@ enum NativePHPBench {
         fputs("NBENCH trim finalMB=\(Int(finalMB)) afterTrimMB=\(Int(footprintMB())) growthAfterTrimMB=\(Int(footprintMB() - base))\n", stderr)
         if AppEnv.value("CE_NATIVE_BENCH_HOLD") != nil { fputs("NBENCH hold pid=\(getpid())\n", stderr); sleep(90) }     // profiling aid: attach `heap` / `vmmap`
         if let out = AppEnv.value("CE_NATIVE_BENCH_OUT"),
-           let data = try? JSONSerialization.data(withJSONObject: ["root": path, "rows": cold.out], options: [.prettyPrinted]) {
+           let data = try? JSONSerialization.data(withJSONObject: ["root": path, "rows": cold.out, "usages": usageDump], options: [.prettyPrinted]) {
             try? data.write(to: URL(fileURLWithPath: out))
         }
     }

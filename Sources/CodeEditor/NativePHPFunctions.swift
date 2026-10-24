@@ -5,6 +5,24 @@ import Foundation
 // on the first function lookup, rebuilt when composer's autoload_files.php changes); signatures and docblocks are read from
 // the file at lookup time.
 
+/// One growable byte buffer per concurrently running thread (keyed by thread), for repeated file reads without an allocation each.
+final class NPReadBuffers {
+    private let lock = NSLock()
+    private var free: [[UInt8]] = []
+    func withBuffer<T>(_ body: (inout [UInt8]) -> T) -> T {
+        lock.lock(); var buf = free.popLast() ?? []; lock.unlock()
+        defer { lock.lock(); if free.count < 16 { free.append(buf) }; lock.unlock() }
+        return body(&buf)
+    }
+}
+
+/// Lock-protected counter handing out work indices to concurrent workers.
+final class NPCounter {
+    private let lock = NSLock()
+    private var n = -1
+    func next() -> Int { lock.lock(); n += 1; let v = n; lock.unlock(); return v }
+}
+
 final class NPFuncIndex {
     struct Entry { var file: Int32; var loc: Int32; var declStart: Int32 }
 
@@ -71,34 +89,53 @@ final class NPFuncIndex {
         defer { NPStats.funcIndexNs &+= NPStats.now() &- t0 }
         files = autoloadFiles()
         functions.removeAll(); constants.removeAll()
-        let fnRe = NPRe.make(pattern: #"(?m)(?:^|[\s;{}])function\s+&?\s*([A-Za-z_]\w*)\s*\("#)
-        let defRe = NPRe.make(pattern: #"define\(\s*['"]([A-Za-z_]\w*)['"]"#)
-        let constRe = NPRe.make(pattern: #"(?m)^const\s+([A-Za-z_]\w*)\s*="#)
-        for (idx, f) in files.enumerated() {
-            // fast path: ASCII files are scanned as bytes (no decoding, no regex); anything else takes the regex path below
-            if let data = FileManager.default.contents(atPath: f), data.count < Self.maxFileBytes, let found = Self.scanBytes(data) {
-                for e in found.functions { let key = e.name.lowercased(); if functions[key] == nil { functions[key] = Entry(file: Int32(idx), loc: Int32(e.loc), declStart: Int32(e.declStart)) } }
-                for e in found.constants where constants[e.name] == nil { constants[e.name] = Entry(file: Int32(idx), loc: Int32(e.loc), declStart: Int32(e.declStart)) }
-                continue
-            }
-            guard let size = (try? FileManager.default.attributesOfItem(atPath: f))?[.size] as? NSNumber, size.intValue < Self.maxFileBytes,
-                  let ns = FastProject.read(f) else { continue }
-            let full = NSRange(location: 0, length: ns.length)
-            for m in fnRe?.matches(in: ns as String, range: full) ?? [] {
-                let r = m.range(at: 1)
-                // skip methods: preceded by a visibility/static keyword on the same statement
-                if Self.followsModifier(ns, m.range.location) { continue }
-                let key = ns.substring(with: r).lowercased()
-                if functions[key] == nil { functions[key] = Entry(file: Int32(idx), loc: Int32(r.location), declStart: Int32(m.range.location)) }
-            }
-            for (re, group) in [(defRe, 1), (constRe, 1)] {
-                for m in re?.matches(in: ns as String, range: full) ?? [] {
-                    let r = m.range(at: group)
-                    let key = ns.substring(with: r)
-                    if constants[key] == nil { constants[key] = Entry(file: Int32(idx), loc: Int32(r.location), declStart: Int32(m.range.location)) }
+        // Every autoload file is scanned independently (on several threads: the first helper lookup read and scanned ~30 files serially),
+        // then merged in file order so the first definition still wins.
+        typealias Hit = (name: String, loc: Int, declStart: Int)
+        var perFile = [(functions: [Hit], constants: [Hit])](repeating: ([], []), count: files.count)
+        let fileList = files
+        let counter = NPCounter()
+        let workers = max(1, min(PowerState.shared.maxWorkers, 4, fileList.count))
+        perFile.withUnsafeMutableBufferPointer { buf in
+            let base = buf.baseAddress!
+            DispatchQueue.concurrentPerform(iterations: workers) { _ in
+                while true {
+                    let idx = counter.next()
+                    if idx >= fileList.count { break }
+                    base[idx] = Self.scanFile(fileList[idx])
                 }
             }
         }
+        for (idx, found) in perFile.enumerated() {
+            for e in found.functions { let key = e.name.lowercased(); if functions[key] == nil { functions[key] = Entry(file: Int32(idx), loc: Int32(e.loc), declStart: Int32(e.declStart)) } }
+            for e in found.constants where constants[e.name] == nil { constants[e.name] = Entry(file: Int32(idx), loc: Int32(e.loc), declStart: Int32(e.declStart)) }
+        }
+    }
+
+    /// Functions and constants of one helper file. ASCII files are scanned as bytes (no decoding, no regex); anything else takes the regex path.
+    /// Pure, so it may run on any thread.
+    private static func scanFile(_ f: String) -> (functions: [(name: String, loc: Int, declStart: Int)], constants: [(name: String, loc: Int, declStart: Int)]) {
+        if let data = FileManager.default.contents(atPath: f), data.count < maxFileBytes, let found = scanBytes(data) { return found }
+        guard let size = (try? FileManager.default.attributesOfItem(atPath: f))?[.size] as? NSNumber, size.intValue < maxFileBytes,
+              let ns = FastProject.readRaw(f) else { return ([], []) }
+        let fnRe = NPRe.make(pattern: #"(?m)(?:^|[\s;{}])function\s+&?\s*([A-Za-z_]\w*)\s*\("#)
+        let defRe = NPRe.make(pattern: #"define\(\s*['"]([A-Za-z_]\w*)['"]"#)
+        let constRe = NPRe.make(pattern: #"(?m)^const\s+([A-Za-z_]\w*)\s*="#)
+        var fns: [(name: String, loc: Int, declStart: Int)] = [], consts: [(name: String, loc: Int, declStart: Int)] = []
+        let full = NSRange(location: 0, length: ns.length)
+        for m in fnRe?.matches(in: ns as String, range: full) ?? [] {
+            let r = m.range(at: 1)
+            // skip methods: preceded by a visibility/static keyword on the same statement
+            if followsModifier(ns, m.range.location) { continue }
+            fns.append((ns.substring(with: r), r.location, m.range.location))
+        }
+        for re in [defRe, constRe] {
+            for m in re?.matches(in: ns as String, range: full) ?? [] {
+                let r = m.range(at: 1)
+                consts.append((ns.substring(with: r), r.location, m.range.location))
+            }
+        }
+        return (fns, consts)
     }
 
     /// Byte scanner with the semantics of the regexes below (`function name(`, `define('X'`, `const X =` at a line start). Offsets are

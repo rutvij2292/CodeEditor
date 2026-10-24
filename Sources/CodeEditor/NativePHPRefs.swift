@@ -401,16 +401,98 @@ enum NPRefs {
 
     // MARK: - Scanning one file
 
-    static func scanFile(_ sym: NPRefSymbol, path: String, fp: FastProject, rel: NPRelations, text given: NSString? = nil, opts: NPScanOptions = NPScanOptions()) -> NPFileScan {
-        guard let text = given ?? FastProject.read(path) else { return NPFileScan() }
+    /// Lowercased UTF-16 needles and their lengths, only when every name is plain ASCII (otherwise the byte-level rejections are off).
+    static func asciiNeedles(_ names: [String]) -> (needles: [[UInt16]], lengths: Set<Int>)? {
+        var out: [[UInt16]] = []
+        for n in names {
+            guard !n.isEmpty, n.utf8.allSatisfy({ $0 < 128 }) else { return nil }
+            out.append(Array(n.lowercased().utf16))
+        }
+        return (out, Set(out.map(\.count)))
+    }
+
+    /// Necessary condition for the string-token branches of `scanMember`: the raw token text contains one of the needles (ASCII case
+    /// insensitive). Non-ASCII or very long tokens are never rejected here (the exact code decides).
+    static func stringMayContain(_ text: NSString, _ t: PHPTok, _ needles: [[UInt16]], _ buf: inout [unichar]) -> Bool {
+        let n = Int(t.len) - 2
+        guard n > 0 else { return false }                  // strValue is "" -> skipped by the exact code too
+        guard n <= 1024 else { return true }
+        text.getCharacters(&buf, range: NSRange(location: Int(t.loc) + 1, length: n))
+        var i = 0
+        var esc = false
+        while i < n { if buf[i] >= 128 { return true }; if buf[i] == 92 { esc = true }; i += 1 }
+        if n >= 120, !esc { return false }                       // ASCII: Character count == n, the exact code requires < 120
+        for nd in needles {
+            let m = nd.count
+            if m > n { continue }
+            let f = nd[0]
+            var a = 0
+            while a <= n - m {
+                var c = buf[a]; if c >= 65 && c <= 90 { c += 32 }
+                if c == f {
+                    var k = 1
+                    while k < m { var d = buf[a + k]; if d >= 65 && d <= 90 { d += 32 }; if d != nd[k] { break }; k += 1 }
+                    if k == m { return true }
+                }
+                a += 1
+            }
+        }
+        return false
+    }
+
+    /// Text, token stream and parsed declaration of one candidate file: everything that does not need the project's fast-tier state,
+    /// so it can be produced on several threads while the resolver pass runs serially on the project queue.
+    struct PreparedFile {
+        let path: String
+        let text: NSString
+        let lex: PHPLex
+        let cur: FTClass?
+    }
+
+    /// Read (or take the live text), precheck that the file mentions one of the names, lex and parse. Pure: safe on any thread.
+    static func prepareFile(_ sym: NPRefSymbol, path: String, text given: NSString? = nil) -> PreparedFile? {
+        guard let text = given ?? FastProject.readRaw(path) else { return nil }
         // cheap precheck: the file must mention one of the names
         let names = sym.searchNames.isEmpty ? [sym.name] : sym.searchNames
-        guard names.contains(where: { text.range(of: $0.hasPrefix("$") ? $0 : $0, options: [.caseInsensitive, .literal]).location != NSNotFound }) else { return NPFileScan() }
-        let url = URL(fileURLWithPath: path)
+        guard names.contains(where: { text.range(of: $0, options: [.caseInsensitive, .literal]).location != NSNotFound }) else { return nil }
         let lex = PHPLex(text)
         let cur = FTParser.parse(text, lex: lex)
-        let r = NPResolver(fp: fp, url: url, text: text, lex: lex, cur: cur)
+        return PreparedFile(path: path, text: text, lex: lex, cur: cur)
+    }
+
+    /// Prepares `paths` on up to `workers` threads, results in input order.
+    static func prepareFiles(_ sym: NPRefSymbol, paths: [String], live: [String: NSString], workers: Int) -> [PreparedFile?] {
+        var out = [PreparedFile?](repeating: nil, count: paths.count)
+        if paths.count < 2 || workers < 2 {
+            for (i, p) in paths.enumerated() { out[i] = prepareFile(sym, path: p, text: live[p]) }
+            return out
+        }
+        let counter = RefCounter()
+        out.withUnsafeMutableBufferPointer { buf in
+            let base = buf.baseAddress!
+            DispatchQueue.concurrentPerform(iterations: min(workers, paths.count)) { _ in
+                while true {
+                    let i = counter.next()
+                    if i >= paths.count { break }
+                    base[i] = prepareFile(sym, path: paths[i], text: live[paths[i]])     // each index is written by exactly one worker
+                }
+            }
+        }
+        return out
+    }
+
+    static func scanFile(_ sym: NPRefSymbol, path: String, fp: FastProject, rel: NPRelations, text given: NSString? = nil, opts: NPScanOptions = NPScanOptions(),
+                         shared: NPSharedMemo? = nil) -> NPFileScan {
+        guard let pf = prepareFile(sym, path: path, text: given) else { return NPFileScan() }
+        return scanPrepared(sym, pf, fp: fp, rel: rel, opts: opts, shared: shared)
+    }
+
+    static func scanPrepared(_ sym: NPRefSymbol, _ pf: PreparedFile, fp: FastProject, rel: NPRelations, opts: NPScanOptions, shared: NPSharedMemo? = nil) -> NPFileScan {
+        let tD = NPStats.now()
+        let path = pf.path, text = pf.text, lex = pf.lex, cur = pf.cur
+        let r = NPResolver(fp: fp, url: URL(fileURLWithPath: path), text: text, lex: lex, cur: cur, shared: shared)
         var scan = NPFileScan()
+        defer { NPStats.scanResolveNs &+= NPStats.now() &- tD }
         switch sym.kind {
         case .classLike: scanClass(sym, path, text, lex, cur, r, fp, rel, opts, &scan)
         case .method, .property, .constant, .enumCase: scanMember(sym, path, text, lex, cur, r, fp, rel, opts, &scan)
@@ -543,9 +625,12 @@ enum NPRefs {
             if let roots = opts.roots { return rel.inFamily(owner, roots: roots, live: cur) }
             return rel.related(owner, sym.fqn, live: cur)
         }
+        // Cheap rejection before any String is built: the token length must be one of the searched names' lengths (ASCII names only).
+        let fastNames = NPRefs.asciiNeedles(sym.kind == .method ? Array(aliasL) + [nameL] : [sym.name])
         for i in 0..<lex.count {
             let t = lex.toks[i]
             guard t.kind == .ident || t.kind == .variable else { continue }
+            if let f = fastNames, !f.lengths.contains(t.kind == .variable ? Int(t.len) - 1 : Int(t.len)) { continue }
             let w = lex.text(i)
             let isVar = t.kind == .variable
             let word = isVar ? String(w.dropFirst()) : w
@@ -583,7 +668,9 @@ enum NPRefs {
         }
         // array callables and relation names written as strings: [Foo::class, 'method'], [$this, 'method'], with('relation')
         if sym.kind == .method {
+            var sbuf = [unichar](repeating: 0, count: 1024)
             for i in 0..<lex.count where lex.toks[i].kind == .string {
+                if let f = fastNames, !NPRefs.stringMayContain(text, lex.toks[i], f.needles, &sbuf) { continue }
                 let v = lex.strValue(i)
                 guard !v.isEmpty, v.count < 120 else { continue }
                 let t = lex.toks[i]
@@ -784,7 +871,106 @@ enum NPRefs {
 
     // MARK: - Candidate files (bounded byte prefilter)
 
-    static func phpFiles(root: String, includeVendor: Bool) -> [String] {
+    /// Every `.php` / `.phtml` file under `root` (skip rules of `FindEngine.listFiles`: `.git`, `.DS_Store` and `ProjectIndex.skipNames` single names;
+    /// vendor walked without skip rules), as a directory walk that only allocates Strings for directories and matching files
+    /// (the generic walk allocated two paths per entry and cost 33 ms on a 2 700 entry project). Same set and spelling as `phpFilesViaEngine`.
+    static func phpFiles(root: String, includeVendor: Bool, filter: ((String) -> Bool)? = nil) -> [String] {
+        var out = walkPHP(realPath(root), skip: ProjectIndex.skipNames, filter: filter)
+        out.sort()
+        if includeVendor, LaravelFS.isDir(root + "/vendor") {
+            var v = walkPHP(realPath(root + "/vendor"), skip: [], filter: filter)
+            v.sort()
+            out += v
+        }
+        return out
+    }
+
+    private static func realPath(_ p: String) -> String {
+        var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
+        return realpath(p, &buf) != nil ? String(cString: buf) : p
+    }
+
+    /// Parallel directory walk (a work stack shared by up to 8 workers; one directory read costs ~20 us, a Laravel project has ~1 500 of them).
+    /// `filter` (when given) runs on the worker that found the file, right after its directory was read, so the file reads of the content
+    /// prefilter overlap with the directory walk instead of following it.
+    private static func walkPHP(_ top: String, skip: Set<String>, filter: ((String) -> Bool)? = nil) -> [String] {
+        let cond = NSCondition()
+        var stack = [top]
+        var active = 0
+        var out: [String] = []
+        var seen = 0
+        let workers = max(1, min(PowerState.shared.maxWorkers, 8))
+        DispatchQueue.concurrentPerform(iterations: workers) { _ in
+            var mine: [String] = []
+            while true {
+                cond.lock()
+                while stack.isEmpty, active > 0 { cond.wait() }
+                guard let dir = stack.popLast() else { cond.unlock(); break }     // empty and nobody can add more
+                let capped = seen >= 300_000
+                active += 1
+                cond.unlock()
+                var subs: [String] = [], count = 0
+                if !capped {
+                    let before = mine.count
+                    readPHPDir(dir, skip: skip, subdirs: &subs, files: &mine, count: &count)
+                    if let filter, mine.count > before {
+                        var keep = Array(mine[..<before])
+                        for p in mine[before...] where filter(p) { keep.append(p) }
+                        mine = keep
+                    }
+                }
+                cond.lock()
+                seen += count
+                stack += subs
+                active -= 1
+                cond.broadcast()
+                cond.unlock()
+            }
+            cond.lock(); out += mine; cond.unlock()
+        }
+        return out
+    }
+
+    private static func readPHPDir(_ dir: String, skip: Set<String>, subdirs: inout [String], files: inout [String], count: inout Int) {
+        guard let d = opendir(dir) else { return }
+        defer { closedir(d) }
+        while let e = readdir(d) {
+            let len = Int(e.pointee.d_namlen)
+            let (isDot, isPHP) = withUnsafePointer(to: &e.pointee.d_name) { tup in
+                tup.withMemoryRebound(to: UInt8.self, capacity: len + 1) { b -> (Bool, Bool) in
+                    if b[0] == 46, len == 1 || (len == 2 && b[1] == 46) { return (true, false) }
+                    let php = len >= 4 && b[len - 4] == 46 && b[len - 3] == 112 && b[len - 2] == 104 && b[len - 1] == 112
+                    let phtml = len >= 6 && b[len - 6] == 46 && b[len - 5] == 112 && b[len - 4] == 104 && b[len - 3] == 116 && b[len - 2] == 109 && b[len - 1] == 108
+                    return (false, php || phtml)
+                }
+            }
+            if isDot { continue }
+            var type = e.pointee.d_type
+            if type == UInt8(DT_REG) || type == UInt8(DT_LNK) {
+                count += 1
+                guard isPHP else { continue }                 // a skipNames entry never ends in .php, so no name test is needed for files
+                let name = withUnsafePointer(to: &e.pointee.d_name) { $0.withMemoryRebound(to: CChar.self, capacity: len + 1) { String(cString: $0) } }
+                files.append(dir + "/" + name)
+                continue
+            }
+            let name = withUnsafePointer(to: &e.pointee.d_name) { $0.withMemoryRebound(to: CChar.self, capacity: len + 1) { String(cString: $0) } }
+            if name == ".git" || name == ".DS_Store" { continue }
+            if skip.contains(name) { continue }
+            let full = dir + "/" + name
+            if type == UInt8(DT_UNKNOWN) {
+                var st = stat()
+                if lstat(full, &st) == 0 { type = (st.st_mode & S_IFMT) == S_IFDIR ? UInt8(DT_DIR) : (st.st_mode & S_IFMT) == S_IFLNK ? UInt8(DT_LNK) : UInt8(DT_REG) }
+            }
+            if type == UInt8(DT_DIR) { subdirs.append(full) }
+            else if type == UInt8(DT_REG) || type == UInt8(DT_LNK) {
+                count += 1
+                if isPHP { files.append(full) }
+            }
+        }
+    }
+
+    /// Reference implementation (the generic `FindEngine` walk); kept for the equivalence self-test.
+    static func phpFilesViaEngine(root: String, includeVendor: Bool) -> [String] {
         let engine = FindEngine(root: URL(fileURLWithPath: root), files: { [] })
         func isPHP(_ p: String) -> Bool { p.hasSuffix(".php") || p.hasSuffix(".phtml") }
         var out = engine.listFiles(FindOptions(query: "x")).map(\.path).filter(isPHP)
@@ -799,34 +985,49 @@ enum NPRefs {
 
     /// Files that contain one of `needles` (ASCII case-insensitive), plus `extra` paths. Files are mmapped, nothing is kept.
     static func candidates(root: String, needles: [String], includeVendor: Bool, extra: [String], cancel: CancelToken?) -> [String] {
-        let files = phpFiles(root: root, includeVendor: includeVendor)
+        let tL = NPStats.now()
+        defer { NPStats.candTotalNs = NPStats.now() &- tL }
         let pats: [[UInt8]] = needles.map { Array($0.utf8).map { ($0 >= 65 && $0 <= 90) ? $0 + 32 : $0 } }.filter { !$0.isEmpty }
         guard !pats.isEmpty else { return extra }
-        let lock = NSLock()
-        var found: [String] = []
-        let counter = RefCounter()
-        let total = files.count
-        let workers = max(1, min(PowerState.shared.maxWorkers, 8))
-        files.withUnsafeBufferPointer { fs in
-            DispatchQueue.concurrentPerform(iterations: workers) { _ in
-                var local: [String] = []
-                while cancel?.isCancelled != true {
-                    let i = counter.next()
-                    if i >= total { break }
-                    guard let data = try? Data(contentsOf: URL(fileURLWithPath: fs[i]), options: .alwaysMapped), data.count < 4_000_000 else { continue }
-                    let hit = data.withUnsafeBytes { raw -> Bool in
-                        guard let b = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return false }
-                        for p in pats where containsCI(b, data.count, p) { return true }
-                        return false
-                    }
-                    if hit { local.append(fs[i]) }
+        // The directory walk and the content prefilter run together: each walker thread reads (into a reused buffer, no mmap) the PHP files
+        // of the directory it just listed and keeps those that mention a needle.
+        let tls = NPReadBuffers()
+        var found = phpFiles(root: root, includeVendor: includeVendor, filter: { path in
+            if cancel?.isCancelled == true { return false }
+            return tls.withBuffer { buf in
+                guard let n = readFile(path, into: &buf, limit: 4_000_000) else { return false }
+                return buf.withUnsafeBufferPointer { raw -> Bool in
+                    for p in pats where containsCI(raw.baseAddress!, n, p) { return true }
+                    return false
                 }
-                lock.lock(); found += local; lock.unlock()
             }
-        }
+        })
         var seen = Set(found)
         for e in extra where seen.insert(e).inserted { found.append(e) }
         return found.sorted()
+    }
+
+    /// Reads a whole file (< `limit` bytes) into `buf` (grown as needed, reused across calls). nil when unreadable or too big (the old mmap
+    /// prefilter skipped those too); an empty file reads as 0 bytes.
+    private static func readFile(_ path: String, into buf: inout [UInt8], limit: Int) -> Int? {
+        let fd = open(path, O_RDONLY)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_size < limit else { return nil }
+        let size = Int(st.st_size)
+        if size == 0 { return nil }                                  // nothing to find (an empty mmap failed before as well)
+        if buf.count < size { buf = [UInt8](repeating: 0, count: max(size, 64 * 1024)) }
+        var got = 0
+        let ok: Bool = buf.withUnsafeMutableBytes { raw in
+            while got < size {
+                let r = read(fd, raw.baseAddress! + got, size - got)
+                if r <= 0 { break }
+                got += r
+            }
+            return got == size
+        }
+        return ok ? size : nil
     }
 
     @inline(__always) private static func lowerByte(_ b: UInt8) -> UInt8 { (b >= 65 && b <= 90) ? b + 32 : b }
@@ -869,20 +1070,39 @@ enum NPRefs {
         result.candidates = paths.count
         var unresolved: [NPRefHit] = []
         var index = 0
+        let shared = NPSharedMemo()
+        let workers = max(1, min(PowerState.shared.maxWorkers, 4))
+        let chunkSize = workers > 1 ? 12 : 6
+        func chunkAt(_ i: Int) -> [String] { Array(paths[min(i, paths.count)..<min(paths.count, i + chunkSize)]) }
+        // Double buffered: the next chunk is read / lexed / parsed on worker threads while the current one is resolved on the project queue.
+        var pending: [PreparedFile?]? = paths.isEmpty ? nil : prepareFiles(sym, paths: chunkAt(0), live: liveTexts, workers: workers)
         while index < paths.count {
             if cancel?.isCancelled == true { result.cancelled = true; break }
-            let chunk = Array(paths[index..<min(paths.count, index + 6)])
+            let chunk = chunkAt(index)
             index += chunk.count
+            let current = pending ?? []
+            var nextBox: [PreparedFile?]?
+            let group = DispatchGroup()
+            if index < paths.count {
+                let nextPaths = chunkAt(index)
+                group.enter()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    nextBox = prepareFiles(sym, paths: nextPaths, live: liveTexts, workers: workers)
+                    group.leave()
+                }
+            }
             var batch: [NPRefHit] = []
             fp.queue.sync {
                 fp.beginRequest()
-                for p in chunk {
-                    let live = liveTexts[p]
-                    let s = scanFile(sym, path: p, fp: fp, rel: rel, text: live, opts: options.scan)
+                for pf in current {
+                    guard let pf else { continue }
+                    let s = scanPrepared(sym, pf, fp: fp, rel: rel, opts: options.scan, shared: shared)
                     batch += s.hits
                     result.conflicts += s.conflicts
                 }
             }
+            group.wait()
+            pending = nextBox
             result.filesScanned += chunk.count
             let resolved = batch.filter { $0.role != .unresolved }
             unresolved += batch.filter { $0.role == .unresolved }

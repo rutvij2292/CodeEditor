@@ -282,6 +282,48 @@ release). A warm lookup is 0.1 - 0.5 ms. The parse profile of 53 big vendor file
 round, so parsing is already near 200 MB/s; making the hierarchy lazy (stop at the first class that has the member) would save more but was not done
 because the member search order and the `@mixin` / interface walks need the whole list.
 
+### Cold start and common-member find usages (second pass)
+
+Same project and bench (two runs of each build, `CE_NATIVE_BENCH`), answers compared before / after: 319 lookups and 7 usage lists (3 + 9 + 54 + 59 + 75 + 110 + 120 hits)
+identical (the only textual difference is the stub directory path of the baseline build).
+
+| Metric (release) | Before | After |
+| --- | --- | --- |
+| Go to definition cold pass, p50 / p95 / p99 / max | 0.2 / 2.2 / 7.8 / 20.5 ms | 0.1 / 1.0 / 2.8 / 5.4 ms |
+| First lookup of a process | 6.1 - 7.0 ms | 0.8 ms |
+| First helper-function index (`response()->json`) | 20 ms | ~3 ms |
+| Cold slowest: Carbon `parse` / Auth `id` / `subDays` | 17.8 / 17.2 / ~14 ms | ~3 / 4.4 / 5.4 ms |
+| Cold pass total | 202 - 206 ms | 80 - 82 ms |
+| Find usages `get` (cold) | 257 - 325 ms | 75 ms |
+| Find usages `user` | 135 - 176 ms | 35 - 38 ms |
+| Find usages `first` (cold / warm) | 310 - 390 / 180 - 218 ms | 79 - 84 / 46 ms |
+| Find usages `create` / `count` | 197 - 248 / 197 - 244 ms | 46 - 49 / 45 - 46 ms |
+| Find usages of a class (8 candidates, cold) | 50 - 160 ms | 23 - 40 ms |
+| Project class index: cold build / per-epoch revalidation | 109 - 174 / 53 - 86 ms | 24 / 9 - 11 ms |
+| RAM growth over the whole bench | +18 MB | +13 - 15 MB |
+
+(Numbers vary by machine load; the baseline runs above were slower than the first baseline run because the machine was busy. Ratios are what matters.)
+
+What changed:
+
+* **Find usages.** The file walk is a parallel `readdir` walk (no per-entry strings) with the content prefilter fused into it (files read into reused buffers, no mmap);
+  candidate files are read / lexed / parsed on worker threads one chunk ahead of the serial resolver pass; `scanMember` rejects tokens by length before building Strings
+  and rejects string tokens with a byte check before `strValue` / `lowercased` (this alone halved the resolve time); a per-request `NPSharedMemo` shares docblock queries and
+  completed hierarchies of library classes between files (never anything that involves the file's own, possibly unsaved, class);
+  `FTEval.varType` skips tokens of the wrong length and only runs its `@var` regex when the range contains `@var`.
+* **Class cache** re-checks the file mtime once per validation epoch (`beginRequest`: 1.5 s or after a change notification) instead of a `stat` on every call.
+* **Lazy hierarchy.** `FTEval.hierarchy` returns `FTHier`, a lazy sequence with the same order and caps as the old eager walk; member searches (`NPSearchClasses`) stop
+  at the first class that declares the member. `FastProject.prefetch` reads and parses the classes the walk will need next on worker threads (capped at 48 pending, skipped
+  in power saver; unclaimed results go into the normal LRU class cache on the next request).
+* **Helper index** scans autoload files in parallel and merges in file order.
+* **Project class index / other sections**: one `readdir` pass with entry types instead of `FileManager.contentsOfDirectory` + `stat` per entry; PSR-4 roots in parallel.
+
+Tried / not done: a persistent on-disk header cache and a byte-level member scan before the full parse (not needed once reads and parses overlap; a member that is
+not declared anywhere, such as an Eloquent column `id`, still has to load its whole hierarchy). Walk worker count was not tuned.
+
+New self-tests (`SelfTestNativePHPPerf`): fast walk equals the FindEngine walk, walk filter, string prefilter verdicts, lazy hierarchy order and early stop,
+nested-trait member lookup, class cache sees a changed file after revalidation, `collect` equals a plain per-file scan.
+
 ### RAM
 
 Retained by the engine, all bounded and all dropped by `NativePHP.trimMemory()`:
