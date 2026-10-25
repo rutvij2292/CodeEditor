@@ -45,6 +45,23 @@ extension NJSEnv {
         return md
     }
 
+    /// True when the declaration leaves its type to inference, so a TypeScript server (if running) has a better hover.
+    func isInferred(_ r: NJSRes) -> Bool {
+        guard !r.fileTop, let t = text(r.path), r.sigEnd <= t.length, r.loc >= 0, r.loc <= r.sigEnd else { return false }
+        let tail = t.substring(with: NSRange(location: r.loc, length: r.sigEnd - r.loc))
+        switch r.kind {
+        case .variable, .constant, .property:
+            let head = tail.range(of: " = ").map { String(tail[..<$0.lowerBound]) } ?? tail
+            return !head.contains(":")
+        case .parameter:
+            return !t.substring(with: NSRange(location: r.declStart, length: max(0, r.sigEnd - r.declStart))).contains(":")
+        case .function, .method, .getter:
+            let sig = t.substring(with: NSRange(location: r.declStart, length: max(0, r.sigEnd - r.declStart)))
+            return sig.range(of: #"\)\s*:"#, options: .regularExpression) == nil
+        default: return false
+        }
+    }
+
     static func jsdoc(_ raw: String) -> String {
         var lines: [String] = []
         for l in raw.components(separatedBy: "\n") {

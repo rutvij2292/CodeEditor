@@ -242,9 +242,19 @@ enum SelfTestNativeJS {
             check("js hover: jsdoc text and tags", h.markdown.contains("Formats a number.") && h.markdown.contains("*@param* `a`") && h.markdown.contains("*@returns* text"))
             check("js hover: defining file is named", h.markdown.contains("src/util.ts"))
         } else { check("js hover: resolves", false) }
+        check("js hover: annotated function is final (no need to ask the server)", hit("helper(V)")?.inferred == false)
+        check("js hover: inferred const defers to a running server", hit("w.name", 0, plus: 0)?.inferred == true)
         check("js hover: const with a literal", hit("VALUE", 0)?.markdown.contains("const VALUE = 1") == true)
         check("js hover: member label", hit("name\n  w.owner")?.markdown.contains("(property) Widget.name: string") == true)
         check("js hover: class shows heritage", hit("Widget", 1)?.markdown.contains("class Widget extends Base") == true)
+
+        // `this` of an object literal method is not the enclosing class; generic parameters are not top-level types
+        let tricky = "class Box<T> { item: T; own = 1; m() { const o = { f() { return this.own } }; return this.own } }\nclass T { zed = 1 }\nfunction id<T>(x: T) { return x.zed }\n"
+        put(root, "src/tricky.ts", tricky)
+        let tu = root.appendingPathComponent("src/tricky.ts")
+        check("js tricky: this inside an object-literal method is not resolved to the class", hit("own }", 0, plus: 0, in: tricky, file: tu) == nil)
+        check("js tricky: this in a class method is", where_(hit("own }", 1, plus: 0, in: tricky, file: tu)) == "src/tricky.ts:1")
+        check("js tricky: a type parameter never resolves to a same-named top-level class", hit("zed }", 0, plus: 0, in: tricky, file: tu) == nil)
 
         // JS: CommonJS, class fields assigned in the constructor, JSX
         let jsMain = """
@@ -293,6 +303,8 @@ enum SelfTestNativeJS {
         check("alias: vite fileURLToPath(new URL('./src', import.meta.url))", mods.resolve("~/util", from: url.path)?.hasSuffix("src/util.ts") == true)
         check("alias: root relative '/src/models' target", mods.resolve("@c/user", from: url.path)?.hasSuffix("src/models/user.ts") == true)
         check("alias: only exact keys / key + '/' (no accidental prefix match)", mods.resolve("@libx", from: url.path) == nil)
+        put(root, "src/CasedName.ts", "export const cased = 1\n")
+        check("resolve: a wrongly cased import path resolves to the file's real spelling", mods.resolve("./casedname", from: url.path)?.hasSuffix("src/CasedName.ts") == true)
         check("resolve: unknown bare package", mods.resolve("no-such-package", from: url.path) == nil)
         check("resolve: exports map subpath without types falls back to the target", mods.resolve("exp/sub", from: url.path)?.hasSuffix("node_modules/exp/sub.js") == true)
         let cfg = NJSJSON.parse(Data("{/*c*/\"a\":[1,2,],\"b\":\"x//y\",}".utf8)) as? [String: Any]

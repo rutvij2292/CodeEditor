@@ -58,6 +58,12 @@ struct NJSExtractor {
         return nil
     }
 
+    /// Names of the type parameters declared by `node` (`<T, U extends X>`).
+    private func typeParams(_ node: Node) -> Set<String> {
+        guard let tp = node.field("type_parameters") else { return [] }
+        return Set(tp.kids.compactMap { $0.kind == "type_parameter" ? $0.field("name")?.text(ns) : nil })
+    }
+
     private func memberName(_ n: Node?) -> (String, Node)? {
         guard let n else { return nil }
         switch n.kind {
@@ -213,6 +219,7 @@ struct NJSExtractor {
             guard let n = node.field("name") else { return [] }
             let sy = sym(n, .function, outer: outer, sigEnd: node.field("body")?.start ?? node.end)
             sy.typeName = typeName(node.field("return_type"))
+            if let t = sy.typeName, typeParams(node).contains(t) { sy.typeName = nil }
             return [sy]
         case "class_declaration", "abstract_class_declaration", "class":
             guard let n = node.field("name") else { return [] }
@@ -222,18 +229,18 @@ struct NJSExtractor {
                     if let v = ext.field("value") { sy.heritage.append(v.text(ns)) }
                 } else if let v = h.kids.first { sy.heritage.append(v.text(ns)) }
             }
-            if let body = node.field("body") { sy.members = classMembers(body) }
+            if let body = node.field("body") { sy.members = classMembers(body, typeParams: typeParams(node)) }
             return [sy]
         case "interface_declaration":
             guard let n = node.field("name") else { return [] }
             let sy = sym(n, .interface, outer: outer, sigEnd: node.field("body")?.start ?? node.end)
             for h in node.kids where h.kind == "extends_type_clause" { for t in h.kids { if let tn = typeName(t) { sy.heritage.append(tn) } } }
-            if let body = node.field("body") { sy.members = signatureMembers(body) }
+            if let body = node.field("body") { sy.members = signatureMembers(body, typeParams: typeParams(node)) }
             return [sy]
         case "type_alias_declaration":
             guard let n = node.field("name") else { return [] }
             let sy = sym(n, .typeAlias, outer: outer, sigEnd: node.end)
-            if let v = node.field("value"), v.kind == "object_type" { sy.members = signatureMembers(v) }
+            if let v = node.field("value"), v.kind == "object_type" { sy.members = signatureMembers(v, typeParams: typeParams(node)) }
             return [sy]
         case "enum_declaration":
             guard let n = node.field("name") else { return [] }
@@ -322,7 +329,7 @@ struct NJSExtractor {
 
     // MARK: members
 
-    private func classMembers(_ body: Node) -> [NJSMember] {
+    private func classMembers(_ body: Node, typeParams tps: Set<String>) -> [NJSMember] {
         var out: [NJSMember] = []
         var seen = Set<String>()
         func add(_ m: NJSMember) { out.append(m); seen.insert((m.isStatic ? "s:" : "i:") + m.name) }
@@ -340,6 +347,7 @@ struct NJSExtractor {
                 var mem = NJSMember(name: nm, kind: kind, loc: nn.start, len: nn.range.length, declStart: m.start, sigEnd: m.field("body")?.start ?? m.end)
                 mem.isStatic = isStatic
                 mem.typeName = typeName(m.field("return_type"))
+                if let t = mem.typeName, tps.contains(t) || typeParams(m).contains(t) { mem.typeName = nil }
                 (mem.docStart, mem.docEnd) = docRange(before: m)
                 add(mem)
                 if nm == "constructor", let b = m.field("body") {
@@ -349,6 +357,7 @@ struct NJSExtractor {
                         guard mods, let pat = p.field("pattern"), pat.kind == "identifier" else { continue }
                         var pm = NJSMember(name: pat.text(ns), kind: .property, loc: pat.start, len: pat.range.length, declStart: p.start, sigEnd: p.end)
                         pm.typeName = typeName(p.field("type"))
+                        if let t = pm.typeName, tps.contains(t) { pm.typeName = nil }
                         add(pm)
                     }
                 } else if let b = m.field("body") { ctorBodies.append(b) }
@@ -357,6 +366,7 @@ struct NJSExtractor {
                 var mem = NJSMember(name: nm, kind: .property, loc: nn.start, len: nn.range.length, declStart: m.start, sigEnd: m.end)
                 mem.isStatic = m.allKids.contains { $0.kind == "static" && $0.start < nn.start }
                 mem.typeName = typeName(m.field("type")) ?? newName(m.field("value"))
+                if let t = mem.typeName, tps.contains(t) { mem.typeName = nil }
                 (mem.docStart, mem.docEnd) = docRange(before: m)
                 add(mem)
             default: break
@@ -379,7 +389,7 @@ struct NJSExtractor {
         return out
     }
 
-    private func signatureMembers(_ body: Node) -> [NJSMember] {
+    private func signatureMembers(_ body: Node, typeParams tps: Set<String>) -> [NJSMember] {
         var out: [NJSMember] = []
         for m in body.kids {
             switch m.kind {
@@ -387,6 +397,7 @@ struct NJSExtractor {
                 guard let (nm, nn) = memberName(m.field("name")) else { continue }
                 var mem = NJSMember(name: nm, kind: m.kind == "method_signature" ? .method : .property, loc: nn.start, len: nn.range.length, declStart: m.start, sigEnd: m.end)
                 mem.typeName = typeName(m.field(m.kind == "method_signature" ? "return_type" : "type"))
+                if let t = mem.typeName, tps.contains(t) || typeParams(m).contains(t) { mem.typeName = nil }
                 (mem.docStart, mem.docEnd) = docRange(before: m)
                 out.append(mem)
             default: break

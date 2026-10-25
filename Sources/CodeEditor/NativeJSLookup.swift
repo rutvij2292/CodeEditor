@@ -24,7 +24,9 @@ extension NJSEnv {
         guard !res.isEmpty else { return nil }
         var seen = Set<String>()
         let uniq = res.filter { seen.insert("\($0.path):\($0.loc):\($0.fileTop)").inserted }
-        return NPHit(range: node.range, targets: uniq.map { target($0) }, markdown: markdown(uniq[0], others: uniq.count - 1), kind: uniq[0].kind.label)
+        var hit = NPHit(range: node.range, targets: uniq.map { target($0) }, markdown: markdown(uniq[0], others: uniq.count - 1), kind: uniq[0].kind.label)
+        hit.inferred = isInferred(uniq[0])
+        return hit
     }
 
     func resolveToken(_ node: Node) -> [NJSRes] {

@@ -301,13 +301,19 @@ final class NJSEnv {
                     return r.isEmpty ? nil : NJSTV(res: r, isStatic: staticCtx, module: nil)
                 case "function_expression", "function_declaration", "generator_function", "generator_function_declaration", "class":
                     return nil
+                case "method_definition":
+                    if c.parent?.kind != "class_body" { return nil }          // a method of an object literal binds its own `this`
+                    p = c.parent
                 default: p = c.parent
                 }
             }
             return nil
         case "identifier":
             let name = n.text(doc.text)
-            if let b = localBinding(name, from: n) { return tv(of: [resolve(b)]) ?? bindingType(b) }
+            if let b = localBinding(name, from: n) {
+                if let t = b.typeName, localBinding(t.split(separator: ".").first.map(String.init) ?? t, from: n) != nil { return nil }   // a local type (type parameter, local class)
+                return tv(of: [resolve(b)]) ?? bindingType(b)
+            }
             return tv(of: resolveTop(path, name))
         case "member_expression":
             guard let o = n.field("object"), let p = n.field("property"), let base = typeOf(o, depth: depth + 1) else { return nil }

@@ -339,7 +339,10 @@ extension LSPSession {
         if docs, NativeJS.handles(url) {           // native JS / TS first, the TypeScript server only when it has no answer
             NativeJS.lookupAsync(url: url, text: text as NSString, offset: offset) { [weak self] hit in
                 guard let self, token == self.hoverToken else { return }
-                if let md = hit?.markdown, !md.isEmpty { present(md) } else { self.lspHover(at: offset, docs: docs, present: present) }
+                guard let md = hit?.markdown, !md.isEmpty else { self.lspHover(at: offset, docs: docs, present: present); return }
+                // The declaration as written is the whole answer unless its type is inferred and a server can say more.
+                if hit?.inferred == true, !self.instances(supporting: "hoverProvider").isEmpty { self.lspHover(at: offset, docs: docs) { present($0 ?? md) } }
+                else { present(md) }
             }
             return
         }

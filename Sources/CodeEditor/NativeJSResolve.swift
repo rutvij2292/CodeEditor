@@ -109,6 +109,19 @@ final class NJSModules {
         return nil
     }
 
+    /// On a case-insensitive volume `./itemsRoutes` finds `ItemsRoutes.js`; the real spelling is what a tab / the server uses.
+    /// Only a pure case difference is adopted (symlink resolution such as /var -> /private/var is not).
+    static func canonicalCase(_ p: String) -> String {
+        let fd = open(p, O_RDONLY | O_EVTONLY)
+        guard fd >= 0 else { return p }
+        defer { close(fd) }
+        var buf = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(fd, F_GETPATH, &buf) == 0 else { return p }
+        var real = String(cString: buf)
+        if real.hasPrefix("/private/"), !p.hasPrefix("/private/") { real = String(real.dropFirst(8)) }      // /var -> /private/var is not a case change
+        return real != p && real.lowercased() == p.lowercased() ? real : p
+    }
+
     static func isTS(_ p: String) -> Bool {
         p.hasSuffix(".ts") || p.hasSuffix(".tsx") || p.hasSuffix(".mts") || p.hasSuffix(".cts")
     }
@@ -273,7 +286,7 @@ final class NJSModules {
         let dir = (file as NSString).deletingLastPathComponent
         let key = dir + "|" + spec
         lock.lock(); if let m = resolveMemo[key] { lock.unlock(); return m.isEmpty ? nil : m }; lock.unlock()
-        let r = resolveUncached(spec, dir: dir, file: file)
+        let r = resolveUncached(spec, dir: dir, file: file).map { NJSModules.canonicalCase($0) }
         lock.lock(); if resolveMemo.count > 600 { resolveMemo.removeAll() }; resolveMemo[key] = r ?? ""; lock.unlock()
         return r
     }
