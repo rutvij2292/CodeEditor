@@ -43,6 +43,7 @@ enum CompletionSystem {
         CompletionRegistry.register(BuiltinProvider(LiveTemplateCompletion.generate), forExtensions: LiveTemplateCompletion.extensions)
         CompletionRegistry.register(SymbolCompletionProvider(), forExtensions: ["php", "phtml", "js", "jsx", "ts", "tsx", "mjs", "vue"])
         StructuredCompletion.register()   // YAML / JSON key + value completion (StructuredCompletion.swift)
+        NativeJSCompletion.register()
         FastTier.register()   // last: wins score ties when deduping against the other providers
     }
 }

@@ -47,7 +47,6 @@ extension SelfTestNativeJS {
 
         if let (r, s) = usages(in: mainURL, text: main, "helper(V)") {
             let sm = summary(r)
-            fputs("REFS helper: \(sm)\n", stderr)
             check("refs: function usages across files (declaration, imports, calls, namespace member)", s.name == "helper" && sm.contains("src/util.ts:6:declaration")
                   && sm.contains("src/main.ts:1:import") && sm.contains("src/main.ts:18:usage") && sm.contains("src/main.ts:20:usage")
                   && sm.contains("src/other.ts:1:import") && sm.contains("src/other.ts:5:usage") && sm.contains("src/other.ts:8:usage")
@@ -59,7 +58,6 @@ extension SelfTestNativeJS {
 
         if let (r, s) = usages(in: mainURL, text: main, "name\n  w.owner") {
             let sm = summary(r)
-            fputs("REFS name: \(sm)\n", stderr)
             check("refs: member usages via typed receivers", s.isMember && sm.contains("src/util.ts:11:declaration") && sm.contains("src/main.ts:15:usage")
                   && sm.contains("src/other.ts:7:usage") && sm.contains("src/main.ts:32:usage"))
             check("refs: untyped receivers are listed as possible, last", sm.last == "src/other.ts:9:unresolved" && r.resolvedCount < r.hits.count)
@@ -73,7 +71,6 @@ extension SelfTestNativeJS {
         let utilText = (try? String(contentsOf: root.appendingPathComponent("src/util.ts"))) ?? ""
         if let (r, _) = usages(in: root.appendingPathComponent("src/util.ts"), text: utilText, "Widget extends", 0) {
             let sm = summary(r)
-            fputs("REFS Widget: \(sm)\n", stderr)
             check("refs: class from its declaration (default import with another name)", sm.contains("src/util.ts:9:declaration") && sm.contains("src/other.ts:2:import") && sm.contains("src/other.ts:4:usage") && sm.contains("src/main.ts:14:usage"))
         } else { check("refs: class identified from declaration", false) }
         check("refs: unknown / global tokens are not native", usages(in: mainURL, text: main, "console") == nil)

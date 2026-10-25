@@ -23,7 +23,17 @@ enum SelfTestNativeJS {
             fputs(out, stderr); exit(0)
         }
         if let p = AppEnv.value("CE_NJS_BENCH") { NativeJSBench.run(p); exit(0) }
-        if AppEnv.value("CE_NJS_ONLY") != nil { run(); runRefs(); SelfTest.finish() }
+        if let spec = AppEnv.value("CE_NJS_PROBE") {        // file:word:nth (0-based occurrence)
+            let parts = spec.split(separator: ":").map(String.init)
+            if parts.count >= 2 { let m = NJSModules(root: NativeJS.root(for: URL(fileURLWithPath: parts[0]))); fputs("PROBE root \(m.root) aliases \(m.aliases(inConfig: m.root + "/vite.config.js").map { "\($0.key)=\($0.target)" })\n", stderr) }
+            if parts.count >= 2, let text = FastProject.read(parts[0]) {
+                let at = off(text as String, parts[1], parts.count > 2 ? Int(parts[2]) ?? 0 : 0, plus: 1)
+                let hit = NativeJS.lookup(url: URL(fileURLWithPath: parts[0]), text: text, offset: at)
+                fputs("PROBE \(parts[1]) -> \(hit?.kind ?? "nil") \((hit?.targets ?? []).map { "\($0.path):\($0.line)" })\n\(hit?.markdown ?? "")\n", stderr)
+            }
+            exit(0)
+        }
+        if AppEnv.value("CE_NJS_ONLY") != nil { run(); runRefs(); runExtras(); SelfTest.finish() }
     }
 
     private static func check(_ name: String, _ ok: @autoclosure () -> Bool) { SelfTest.check(name, ok()) }
@@ -96,6 +106,16 @@ enum SelfTestNativeJS {
         put(root, "node_modules/exp/t.d.ts", "export declare const expVal: number;\n")
         put(root, "node_modules/exp/i.js", "export const expVal = 1\n")
         put(root, "node_modules/exp/sub.js", "export const subVal = 1\n")
+        put(root, "node_modules/plain/package.json", "{\"name\":\"plain\",\"main\":\"index.js\"}")
+        put(root, "node_modules/plain/index.js", "module.exports = function plain() {}\n")
+        put(root, "node_modules/@types/plain/index.d.ts", "declare function plain(): void;\nexport default plain;\n")
+        put(root, "node_modules/jsonly/package.json", "{\"name\":\"jsonly\",\"main\":\"lib.js\"}")
+        put(root, "node_modules/jsonly/lib.js", "exports.only = 1\n")
+        put(root, "vite.config.js", """
+        import { fileURLToPath, URL } from 'node:url'
+        import path from 'path'
+        export default { plugins: [], resolve: { alias: { '@lib': path.resolve(__dirname, 'lib'), '~': fileURLToPath(new URL('./src', import.meta.url)), '@c': '/src/models' } } }
+        """)
         put(root, "src/cjs.js", """
         function legacy(a) { return a }
         class Store { constructor() { this.items = [] ; this.helper = new Helper() } add(x) {} }
@@ -267,6 +287,12 @@ enum SelfTestNativeJS {
         check("resolve: ./x.js maps to x.ts", { put(root, "src/e.ts", "export {}"); return mods.resolve("./e.js", from: url.path)?.hasSuffix("src/e.ts") == true }())
         check("resolve: directory index", mods.resolve("./models", from: url.path)?.hasSuffix("src/models/index.ts") == true)
         check("resolve: pattern with * suffix", mods.resolve("@/models/user", from: url.path)?.hasSuffix("src/models/user.ts") == true)
+        check("resolve: @types beats the package's plain JavaScript", mods.resolve("plain", from: url.path)?.hasSuffix("node_modules/@types/plain/index.d.ts") == true)
+        check("resolve: a package with only JavaScript still resolves (to its main)", mods.resolve("jsonly", from: url.path)?.hasSuffix("node_modules/jsonly/lib.js") == true)
+        check("alias: vite path.resolve(__dirname, ...)", mods.resolve("@lib", from: url.path)?.hasSuffix("lib/index.ts") == true)
+        check("alias: vite fileURLToPath(new URL('./src', import.meta.url))", mods.resolve("~/util", from: url.path)?.hasSuffix("src/util.ts") == true)
+        check("alias: root relative '/src/models' target", mods.resolve("@c/user", from: url.path)?.hasSuffix("src/models/user.ts") == true)
+        check("alias: only exact keys / key + '/' (no accidental prefix match)", mods.resolve("@libx", from: url.path) == nil)
         check("resolve: unknown bare package", mods.resolve("no-such-package", from: url.path) == nil)
         check("resolve: exports map subpath without types falls back to the target", mods.resolve("exp/sub", from: url.path)?.hasSuffix("node_modules/exp/sub.js") == true)
         let cfg = NJSJSON.parse(Data("{/*c*/\"a\":[1,2,],\"b\":\"x//y\",}".utf8)) as? [String: Any]

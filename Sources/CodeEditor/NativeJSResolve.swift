@@ -51,6 +51,7 @@ struct NJSConfig {
     var baseUrl: String?             // absolute
     var rules: [NJSPathRule] = []
     var pathsBase: String            // directory the `paths` targets are relative to
+    var hasRootDirs = false          // virtual directories (SvelteKit `$types`, ...): relative specifiers cannot be judged
 }
 
 /// One package.json, reduced to what resolution needs.
@@ -58,13 +59,15 @@ struct NJSPackage {
     var types: String?
     var main: String?
     var module: String?
-    var exports: Any?
-    var imports: [String: Any]?
+    var exports: NJSOJ?
+    var imports: NJSOJ?
     var name: String?
 }
 
 final class NJSModules {
-    private let lock = NSLock()
+    let lock = NSLock()
+    var aliasCache: [String: (stamp: Int64, list: [NJSAlias])] = [:]      // vite / webpack config path -> its string aliases
+    var aliasConfigForDir: [String: String] = [:]
     private var configCache: [String: (stamp: Int64, cfg: NJSConfig?)] = [:]
     private var packageCache: [String: (stamp: Int64, pkg: NJSPackage?)] = [:]
     private var configForDir: [String: String] = [:]     // dir -> config path ("" none), cleared with each epoch
@@ -79,11 +82,11 @@ final class NJSModules {
 
     /// Request boundary: forget directory-level memos (files may have appeared / vanished since).
     func beginRequest() {
-        lock.lock(); configForDir.removeAll(); resolveMemo.removeAll(); lock.unlock()
+        lock.lock(); configForDir.removeAll(); aliasConfigForDir.removeAll(); resolveMemo.removeAll(); lock.unlock()
     }
 
     func trim() {
-        lock.lock(); configCache.removeAll(); packageCache.removeAll(); configForDir.removeAll(); resolveMemo.removeAll(); lock.unlock()
+        lock.lock(); configCache.removeAll(); packageCache.removeAll(); configForDir.removeAll(); aliasConfigForDir.removeAll(); resolveMemo.removeAll(); lock.unlock()
     }
 
     var cachedCount: Int { lock.lock(); defer { lock.unlock() }; return configCache.count + packageCache.count }
@@ -106,22 +109,28 @@ final class NJSModules {
         return nil
     }
 
+    static func isTS(_ p: String) -> Bool {
+        p.hasSuffix(".ts") || p.hasSuffix(".tsx") || p.hasSuffix(".mts") || p.hasSuffix(".cts")
+    }
+
     /// A path used as a module: the exact file, extension probes, then the directory (package.json main / types, index.*).
-    func tryModule(_ base: String, preferTypes: Bool = false, depth: Int = 0) -> String? {
-        if NJSModules.isFile(base) {
+    /// `tsOnly`: accept TypeScript sources / declarations only (TypeScript looks for those before it falls back to plain JS).
+    func tryModule(_ base: String, preferTypes: Bool = false, tsOnly: Bool = false, depth: Int = 0) -> String? {
+        func ok(_ p: String) -> Bool { NJSModules.isFile(p) && (!tsOnly || NJSModules.isTS(p)) }
+        if ok(base) {
             if preferTypes, let rep = NJSModules.jsReplacements(base) { for r in rep where NJSModules.isFile(r) { return r } }
             return base
         }
         if let rep = NJSModules.jsReplacements(base) { for r in rep where NJSModules.isFile(r) { return r } }
-        for e in NJSModules.exts where NJSModules.isFile(base + e) { return base + e }
+        for e in NJSModules.exts where ok(base + e) { return base + e }
         guard NJSModules.isDir(base) else { return nil }
         if depth < 3, let pkg = package(at: base + "/package.json") {
             for f in [pkg.types, pkg.main, pkg.module].compactMap({ $0 }) {
                 let p = NJSModules.join(base, f)
-                if p != base, let r = tryModule(p, preferTypes: true, depth: depth + 1) { return r }
+                if p != base, let r = tryModule(p, preferTypes: true, tsOnly: tsOnly, depth: depth + 1) { return r }
             }
         }
-        for e in NJSModules.exts where NJSModules.isFile(base + "/index" + e) { return base + "/index" + e }
+        for e in NJSModules.exts where ok(base + "/index" + e) { return base + "/index" + e }
         return nil
     }
 
@@ -168,11 +177,13 @@ final class NJSModules {
             }
             if let t = target, let parent = loadConfig(t, depth: depth + 1) {
                 if parent.baseUrl != nil { cfg.baseUrl = parent.baseUrl }
+                if parent.hasRootDirs { cfg.hasRootDirs = true }
                 if !parent.rules.isEmpty { cfg.rules = parent.rules; cfg.pathsBase = parent.pathsBase; parentDefinesPaths = true }
             }
         }
         _ = parentDefinesPaths
         if let co = raw["compilerOptions"] as? [String: Any] {
+            if co["rootDirs"] != nil { cfg.hasRootDirs = true }
             if let b = co["baseUrl"] as? String { cfg.baseUrl = NJSModules.join(dir, b) }
             if let paths = co["paths"] as? [String: Any] {
                 cfg.rules = []
@@ -243,10 +254,10 @@ final class NJSModules {
         if let c = packageCache[path], c.stamp == stamp { lock.unlock(); return c.pkg }
         lock.unlock()
         var pkg: NJSPackage?
-        if let d = readFile(path), let o = NJSJSON.parse(d) as? [String: Any] {
-            func str(_ k: String) -> String? { o[k] as? String }
-            pkg = NJSPackage(types: str("types") ?? str("typings"), main: str("main"), module: str("module"), exports: o["exports"],
-                             imports: o["imports"] as? [String: Any], name: str("name"))
+        if let d = readFile(path), case .o(let pairs)? = NJSOJ.parse(d) {
+            func val(_ k: String) -> NJSOJ? { pairs.first { $0.0 == k }?.1 }
+            func str(_ k: String) -> String? { if case .s(let v)? = val(k) { return v }; return nil }
+            pkg = NJSPackage(types: str("types") ?? str("typings"), main: str("main"), module: str("module"), exports: val("exports"), imports: val("imports"), name: str("name"))
         }
         lock.lock()
         if packageCache.count > 64 { packageCache.removeAll() }
@@ -289,6 +300,7 @@ final class NJSModules {
             }
             if let b = cfg.baseUrl, let r = tryModule(NJSModules.join(b, spec)) { return r }
         }
+        if let r = resolveBundlerAlias(spec, dir: dir) { return r }
         return resolveBare(spec, dir: dir)
     }
 
@@ -298,47 +310,62 @@ final class NJSModules {
         return (parts[0], parts.dropFirst().joined(separator: "/"))
     }
 
+    /// TypeScript's `typesRoot` caches filled by automatic type acquisition (read only here, nothing is downloaded).
+    private static var ataDirs: [String] = {
+        let base = NSHomeDirectory() + "/Library/Caches/typescript"
+        guard let vs = try? FileManager.default.contentsOfDirectory(atPath: base) else { return [] }
+        return vs.sorted().last.map { [base + "/" + $0 + "/node_modules"] } ?? []      // newest only: older caches belong to other TypeScript versions
+    }()
+
     private func resolveBare(_ spec: String, dir: String) -> String? {
         let (name, sub) = NJSModules.splitBare(spec)
         guard !name.isEmpty else { return nil }
+        let mangled = name.hasPrefix("@") ? String(name.dropFirst()).replacingOccurrences(of: "/", with: "__") : name
+        // 1. declarations: the package itself, then @types/<name>, walking up the node_modules chain
         var d = dir
+        var pkgDirsSeen: [String] = []
         for _ in 0..<60 {
             let nm = d + "/node_modules"
             if NJSModules.isDir(nm) {
                 let pkgDir = nm + "/" + name
-                if NJSModules.isDir(pkgDir), let r = resolveInPackage(pkgDir, sub: sub) { return r }
-                let mangled = name.hasPrefix("@") ? String(name.dropFirst()).replacingOccurrences(of: "/", with: "__") : name
+                if NJSModules.isDir(pkgDir) { pkgDirsSeen.append(pkgDir); if let r = resolveInPackage(pkgDir, sub: sub, tsOnly: true) { return r } }
                 let typesDir = nm + "/@types/" + mangled
-                if NJSModules.isDir(typesDir), let r = resolveInPackage(typesDir, sub: sub) { return r }
+                if NJSModules.isDir(typesDir), let r = resolveInPackage(typesDir, sub: sub, tsOnly: true) { return r }
             }
             if d == "/" || d.isEmpty { break }
             d = (d as NSString).deletingLastPathComponent
         }
+        for nm in NJSModules.ataDirs {
+            let typesDir = nm + "/@types/" + mangled
+            if NJSModules.isDir(typesDir), let r = resolveInPackage(typesDir, sub: sub, tsOnly: true) { return r }
+        }
+        // 2. plain JavaScript of the package
+        for pkgDir in pkgDirsSeen { if let r = resolveInPackage(pkgDir, sub: sub, tsOnly: false) { return r } }
         return nil
     }
 
-    private func resolveInPackage(_ pkgDir: String, sub: String) -> String? {
+    private func resolveInPackage(_ pkgDir: String, sub: String, tsOnly: Bool) -> String? {
         let pkg = package(at: pkgDir + "/package.json")
         if let ex = pkg?.exports {
-            if let r = resolveExportsMap(ex, key: sub.isEmpty ? "." : "./" + sub, pkgDir: pkgDir) { return r }
+            if let r = resolveExportsMap(ex, key: sub.isEmpty ? "." : "./" + sub, pkgDir: pkgDir, tsOnly: tsOnly) { return r }
             // a package with `exports` does not expose other paths; types fallbacks below still fire for `.`
             if !sub.isEmpty { return nil }
         }
         if sub.isEmpty {
             for f in [pkg?.types, pkg?.main, pkg?.module].compactMap({ $0 }) {
                 let p = NJSModules.join(pkgDir, f)
-                if let r = tryModule(p, preferTypes: true) { return r }
+                if let r = tryModule(p, preferTypes: true, tsOnly: tsOnly) { return r }
             }
-            return tryModule(pkgDir + "/index")
+            return tryModule(pkgDir + "/index", tsOnly: tsOnly)
         }
-        return tryModule(pkgDir + "/" + sub, preferTypes: true)
+        return tryModule(pkgDir + "/" + sub, preferTypes: true, tsOnly: tsOnly)
     }
 
     private func resolvePackageImport(_ spec: String, dir: String) -> String? {
         var d = dir
         for _ in 0..<40 {
             if let pkg = package(at: d + "/package.json") {
-                if let imps = pkg.imports { return resolveExportsMap(imps, key: spec, pkgDir: d) }
+                if let imps = pkg.imports { return resolveExportsMap(imps, key: spec, pkgDir: d, tsOnly: false) }
                 if pkg.name != nil || d == root { return nil }
             }
             if d == "/" || d.isEmpty { break }
@@ -347,39 +374,117 @@ final class NJSModules {
         return nil
     }
 
-    private static let conditions = ["types", "import", "node", "require", "default"]
+    /// Conditions an ES-module importer matches, in no particular order: the FIRST matching key of an exports object wins (TypeScript / Node).
+    private static let conditions: Set<String> = ["types", "import", "default"]
 
-    private func resolveExportsMap(_ exports: Any, key: String, pkgDir: String) -> String? {
-        var target: Any?
+    private func resolveExportsMap(_ exports: NJSOJ, key: String, pkgDir: String, tsOnly: Bool) -> String? {
+        var target: NJSOJ?
         var star: String?
-        if let dict = exports as? [String: Any] {
-            if dict.keys.contains(where: { $0.hasPrefix(".") || $0.hasPrefix("#") }) {
-                if let t = dict[key] { target = t }
-                else {
-                    var best: (len: Int, key: String)?
-                    for k in dict.keys {
-                        guard let s = k.firstIndex(of: "*") else { continue }
-                        let pre = String(k[..<s]), suf = String(k[k.index(after: s)...])
-                        if key.hasPrefix(pre), key.hasSuffix(suf), key.count >= pre.count + suf.count, best == nil || pre.count > best!.len { best = (pre.count, k) }
-                    }
-                    if let b = best, let s = b.key.firstIndex(of: "*") {
-                        let pre = String(b.key[..<s]), suf = String(b.key[b.key.index(after: s)...])
-                        star = String(key.dropFirst(pre.count).dropLast(suf.count))
-                        target = dict[b.key]
-                    }
+        if case .o(let pairs) = exports, pairs.contains(where: { $0.0.hasPrefix(".") || $0.0.hasPrefix("#") }) {
+            if let t = pairs.first(where: { $0.0 == key }) { target = t.1 }
+            else {
+                var best: (len: Int, key: String, value: NJSOJ)?
+                for (k, v) in pairs {
+                    guard let s = k.firstIndex(of: "*") else { continue }
+                    let pre = String(k[..<s]), suf = String(k[k.index(after: s)...])
+                    if key.hasPrefix(pre), key.hasSuffix(suf), key.count >= pre.count + suf.count, best == nil || pre.count > best!.len { best = (pre.count, k, v) }
                 }
-            } else if key == "." { target = dict }     // conditions at the top level
-        } else if key == "." { target = exports }
+                if let b = best, let s = b.key.firstIndex(of: "*") {
+                    let pre = String(b.key[..<s]), suf = String(b.key[b.key.index(after: s)...])
+                    star = String(key.dropFirst(pre.count).dropLast(suf.count))
+                    target = b.value
+                }
+            }
+        } else if key == "." { target = exports }          // conditions (or a plain string / array) at the top level
         guard let t = target, let path = pickCondition(t, star: star) else { return nil }
-        return tryModule(NJSModules.join(pkgDir, path), preferTypes: true)
+        return tryModule(NJSModules.join(pkgDir, path), preferTypes: true, tsOnly: tsOnly)
     }
 
-    private func pickCondition(_ t: Any, star: String?) -> String? {
-        if let s = t as? String { return star.map { s.replacingOccurrences(of: "*", with: $0) } ?? s }
-        if let arr = t as? [Any] { for x in arr { if let r = pickCondition(x, star: star) { return r } }; return nil }
-        if let d = t as? [String: Any] {
-            for c in NJSModules.conditions { if let v = d[c], let r = pickCondition(v, star: star) { return r } }
+    private func pickCondition(_ t: NJSOJ, star: String?) -> String? {
+        switch t {
+        case .s(let s): return star.map { s.replacingOccurrences(of: "*", with: $0) } ?? s
+        case .a(let arr): for x in arr { if let r = pickCondition(x, star: star) { return r } }; return nil
+        case .o(let pairs):
+            for (k, v) in pairs where NJSModules.conditions.contains(k) { if let r = pickCondition(v, star: star) { return r } }
+            return nil
+        case .n: return nil
         }
-        return nil
+    }
+}
+
+/// Order preserving JSON (package.json `exports` objects are matched by key order, which NSDictionary loses).
+indirect enum NJSOJ {
+    case s(String), o([(String, NJSOJ)]), a([NJSOJ]), n
+
+    static func parse(_ data: Data) -> NJSOJ? {
+        let u = [UInt8](data)
+        var i = 0
+        func ws() { while i < u.count, u[i] == 32 || u[i] == 10 || u[i] == 13 || u[i] == 9 || (i == 0 && u[i] == 0xEF) || u[i] == 0xBB || u[i] == 0xBF { i += 1 } }
+        func str() -> String? {
+            guard i < u.count, u[i] == 34 else { return nil }
+            i += 1
+            var out = [UInt8]()
+            while i < u.count, u[i] != 34 {
+                if u[i] == 92, i + 1 < u.count {
+                    i += 1
+                    switch u[i] {
+                    case 110: out.append(10)
+                    case 116: out.append(9)
+                    case 117:
+                        if i + 4 < u.count, let v = UInt32(String(decoding: u[(i + 1)...(i + 4)], as: UTF8.self), radix: 16), let sc = Unicode.Scalar(v) { out += Array(String(Character(sc)).utf8) }
+                        i += 4
+                    default: out.append(u[i])
+                    }
+                } else { out.append(u[i]) }
+                i += 1
+            }
+            i += 1
+            return String(decoding: out, as: UTF8.self)
+        }
+        func value(_ depth: Int) -> NJSOJ? {
+            guard depth < 40 else { return nil }
+            ws()
+            guard i < u.count else { return nil }
+            switch u[i] {
+            case 34: return str().map { .s($0) }
+            case 123:
+                i += 1
+                var pairs: [(String, NJSOJ)] = []
+                ws()
+                if i < u.count, u[i] == 125 { i += 1; return .o(pairs) }
+                while i < u.count {
+                    ws()
+                    guard let k = str() else { return nil }
+                    ws()
+                    guard i < u.count, u[i] == 58 else { return nil }
+                    i += 1
+                    guard let v = value(depth + 1) else { return nil }
+                    pairs.append((k, v))
+                    ws()
+                    if i < u.count, u[i] == 44 { i += 1; continue }
+                    if i < u.count, u[i] == 125 { i += 1; return .o(pairs) }
+                    return nil
+                }
+                return nil
+            case 91:
+                i += 1
+                var arr: [NJSOJ] = []
+                ws()
+                if i < u.count, u[i] == 93 { i += 1; return .a(arr) }
+                while i < u.count {
+                    guard let v = value(depth + 1) else { return nil }
+                    arr.append(v)
+                    ws()
+                    if i < u.count, u[i] == 44 { i += 1; continue }
+                    if i < u.count, u[i] == 93 { i += 1; return .a(arr) }
+                    return nil
+                }
+                return nil
+            default:
+                while i < u.count, u[i] != 44, u[i] != 125, u[i] != 93 { i += 1 }     // number / true / false / null
+                return .n
+            }
+        }
+        return value(0)
     }
 }

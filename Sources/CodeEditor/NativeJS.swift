@@ -95,6 +95,8 @@ enum NativeJS {
         dropLastParse()
         NJSProject.trimAll()
         NJSParsers.drop()
+        NPFiles.clear()
+        NPText.dropTables()
         malloc_zone_pressure_relief(nil, 0)
     }
 

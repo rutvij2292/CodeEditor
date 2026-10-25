@@ -66,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         CompletionSystem.start()
         ViewerSystem.start()
         NativePHPDiagController.start()
+        NativeJSDiagController.start()
         NativePHP.installMemoryHooks()
         NativeJS.installMemoryHooks()
         CompletionSystem.symbolProvider = { [weak self] in self?.active?.symbolEntries ?? [] }

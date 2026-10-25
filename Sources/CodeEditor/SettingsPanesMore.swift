@@ -41,6 +41,23 @@ final class LanguagesPane: SettingsPane {
         onRefresh { severity.selectItem(at: NativePHPDiag.classSeverity == 1 ? 1 : 0) }
         row("Undefined class severity", severity)
 
+        section("JavaScript / TypeScript")
+        let nativeJS = NSButton(checkboxWithTitle: "Native JavaScript / TypeScript engine", target: nil, action: nil)
+        nativeJS.target = action { c in NativeJS.enabled = (c as? NSButton)?.state == .on; NativeJS.trimMemory() }
+        nativeJS.action = #selector(SettingsAction.fire(_:))
+        nativeJS.setAccessibilityLabel("Native JavaScript and TypeScript engine")
+        onRefresh { nativeJS.state = NativeJS.enabled ? .on : .off }
+        row(nil, nativeJS, help: "Go to definition, hover, find usages, import and member completion come from Kode's built-in parser first (tsconfig paths, node_modules, re-exports, classes); the TypeScript server answers whatever native cannot be certain about. Turn off to leave everything to the server.")
+        let nativeJSDiag = NSButton(checkboxWithTitle: "Native JS / TS diagnostics (missing relative imports, unused imports)", target: nil, action: nil)
+        nativeJSDiag.target = action { c in
+            NativeJSDiag.enabled = (c as? NSButton)?.state == .on
+            for ctl in NativeJSDiagController.controllers.values { ctl.schedule(initial: true) }
+        }
+        nativeJSDiag.action = #selector(SettingsAction.fire(_:))
+        nativeJSDiag.setAccessibilityLabel("Native JavaScript and TypeScript diagnostics")
+        onRefresh { nativeJSDiag.state = NativeJSDiag.enabled ? .on : .off }
+        row(nil, nativeJSDiag, help: nil)
+
         section("Language servers")
         for server in LanguageServers.serverIds {
             let status = infoLabel { [weak self] in self?.statusText(for: server.id) ?? "" }

@@ -54,7 +54,7 @@ enum NJSRefs {
 
     // MARK: collect
 
-    private static func files(_ root: String, cancel: CancelToken?, truncated: inout Bool) -> [String] {
+    static func files(_ root: String, cancel: CancelToken?, truncated: inout Bool) -> [String] {
         var out: [String] = []
         let fm = FileManager.default
         guard let en = fm.enumerator(at: URL(fileURLWithPath: root), includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else { return [] }
@@ -95,6 +95,7 @@ enum NJSRefs {
             var trunc = false
             paths = files(sym.root, cancel: cancel, truncated: &trunc)
             if trunc { result.truncated = true }
+            for d in sym.decls where !paths.contains(d.path) { paths.append(d.path) }      // declarations inside node_modules / .d.ts files
             for p in liveTexts.keys where !paths.contains(p) && NJSModules.codeExts.contains((p as NSString).pathExtension.lowercased()) { paths.append(p) }
         }
         // names that can appear in text: the symbol itself and, for default / require exports, the declaring file's stem
