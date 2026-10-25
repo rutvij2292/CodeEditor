@@ -41,6 +41,10 @@ enum SelfTestCompletionUsage {
         put(root, "app/Services/Names.php", "<?php\nclass Names { function f() { return config('app.name') . config(\"app.name\") . config('billing.tax.rate'); } }\n")
         put(root, "app/Http/Controllers/OrderController.php", "<?php\nclass OrderController { function f() { return route('orders.show'); } }\n")
         put(root, "app/Http/Controllers/Scratch.php", "<?php\nclass Scratch { }\n")
+        put(root, "app/Policies/PostPolicy.php", "<?php\nclass PostPolicy { public function update($u, $p) {} public function publish($u, $p) {} public function before() {} }\n")
+        put(root, "bootstrap/app.php", "<?php\n$middleware->alias(['role' => \\App\\Http\\Middleware\\Role::class, 'tenant' => Tenant::class]);\n")
+        for i in 0..<3 { put(root, "app/Services/Sess\(i).php", "<?php\nclass Sess\(i) { function f() { session('cart'); Cache::get('stats'); $u->can('publish'); } }\n") }
+        put(root, "app/Services/Sess9.php", "<?php\nclass Sess9 { function f() { session('flash_x'); } }\n")
 
         // scanner
         var counts: [String: UInt16] = [:]
@@ -78,6 +82,39 @@ enum SelfTestCompletionUsage {
         c("usage proximity: leading segment counts most", FUsage.proximity("items.reports.pdf", tokens: ["item", "report"]) > FUsage.proximity("zeta.reports.pdf", tokens: ["item", "report"])
           && FUsage.proximity("zzzz.yyyy", tokens: ["item"]) == 0)
         c("usage tier: more uses = lower (earlier) tier; proximity helps", FUsage.tier(count: 9, prox: 0) < FUsage.tier(count: 1, prox: 0) && FUsage.tier(count: 0, prox: 6) < FUsage.tier(count: 1, prox: 0))
+
+        // gates / middleware / session / cache
+        let gate = ranked(root, "app/Http/Controllers/Scratch.php", "<?php\nclass Scratch { function f($u) { return $u->can('§') } }")
+        c("names: gate abilities = policy methods + used abilities, used first", gate.first == "publish" && gate.contains("update") && !gate.contains("before"))
+        let mw = ranked(root, "app/Http/Controllers/Scratch.php", "<?php\nRoute::get('/')->middleware('§');")
+        c("names: middleware aliases from bootstrap/app.php and built-ins", Set(["role", "tenant", "auth", "throttle"]).isSubset(of: Set(mw)))
+        let ses = ranked(root, "app/Http/Controllers/Scratch.php", "<?php\nclass Scratch { function f() { return session('§') } }")
+        c("names: session keys already used in the project, most used first", ses.first == "cart" && ses.contains("flash_x"))
+        let cch = ranked(root, "app/Http/Controllers/Scratch.php", "<?php\nclass Scratch { function f() { return Cache::get('§') } }")
+        c("names: cache keys already used in the project", cch.first == "stats")
+        let sesOwn = ranked(root, "app/Services/Sess9.php", "<?php\nclass Sess9 { function f() { return session('§') } }")
+        c("names: the current file does not vote for itself", sesOwn.first == "cart")
+
+        // Eloquent depth: dynamic wheres, cast types
+        put(root, "vendor/composer/autoload_psr4.php", "<?php\n$vendorDir = dirname(__DIR__);\n$baseDir = dirname($vendorDir);\nreturn array(\n    'Illuminate\\\\' => array($vendorDir . '/laravel/framework/src/Illuminate'),\n    'App\\\\' => array($baseDir . '/app'),\n);\n")
+        put(root, "vendor/laravel/framework/src/Illuminate/Database/Eloquent/Model.php", "<?php\nnamespace Illuminate\\Database\\Eloquent;\nabstract class Model { public function save(array $o = []): bool { return true; } }\n")
+        put(root, "app/Models/Post.php", "<?php\nnamespace App\\Models;\nuse Illuminate\\Database\\Eloquent\\Model;\nclass Post extends Model {\n protected $fillable = ['title', 'author_name', 'published'];\n protected $casts = ['published' => 'boolean', 'meta' => 'array'];\n}\n")
+        FastProject.shared(root: root).queue.sync { FastProject.shared(root: root).markDirty(); FastProject.shared(root: root).dropCaches() }
+        let it = FastTier.items(for: {
+            let t = "<?php\nuse App\\Models\\Post;\nPost::whe"
+            let ns = t as NSString
+            return CompletionContext(text: t, caret: ns.length, fileURL: root.appendingPathComponent("app/Http/Controllers/Scratch.php"), fileExtension: "php", triggerCharacter: nil,
+                                     isManual: false, prefixRange: NSRange(location: ns.length - 3, length: 3))
+        }())
+        c("eloquent: dynamic where<Column> methods (studly case)", it.contains { $0.label == "whereTitle" } && it.contains { $0.label == "whereAuthorName" })
+        let it2 = FastTier.items(for: {
+            let t = "<?php\nuse App\\Models\\Post;\nfunction f(Post $p) { $p->"
+            let ns = t as NSString
+            return CompletionContext(text: t, caret: ns.length, fileURL: root.appendingPathComponent("app/Http/Controllers/Scratch.php"), fileExtension: "php", triggerCharacter: nil,
+                                     isManual: true, prefixRange: NSRange(location: ns.length, length: 0))
+        }())
+        c("eloquent: cast type shows as the attribute type", it2.first { $0.label == "published" }?.detail == "boolean" && it2.first { $0.label == "published" }?.valueType == "bool"
+          && it2.first { $0.label == "meta" }?.valueType == "array")
 
         // memory: capped, dropped on trim, rebuilt on demand
         let fp = FastProject.shared(root: root)

@@ -104,6 +104,11 @@ enum FastEngine {
     private static let configCalls: Set<String> = ["config", "config::get", "config::has", "config::string", "config::integer", "config::boolean",
                                                    "config::array", "config::float", "config::set"]
     private static let envCalls: Set<String> = ["env", "env::get"]
+    private static let sessionCalls: Set<String> = ["session", "session::get", "session::has", "session::put", "session::forget", "session::pull", "session::exists", "session::flash", "session::increment"]
+    private static let cacheCalls: Set<String> = ["cache", "cache::get", "cache::has", "cache::put", "cache::remember", "cache::rememberforever", "cache::forget", "cache::pull", "cache::add",
+                                                  "cache::increment", "cache::decrement", "cache::missing", "cache::forever", "cache::lock"]
+    private static let gateCalls: Set<String> = ["gate::allows", "gate::denies", "gate::check", "gate::any", "gate::none", "gate::authorize", "gate::inspect", "gate::define", "->can", "->cannot",
+                                                 "->authorize", "@can", "@cannot", "@canany", "can", "authorize"]
     private static let langCalls: Set<String> = ["__", "trans", "trans_choice", "@lang", "@choice", "lang::get", "lang::has", "lang::choice", "->trans"]
 
     static func run(_ ctx: CompletionContext, region: CompletionLex.Region, state: CompletionLex.State, fp: FastProject) -> Result {
@@ -213,6 +218,16 @@ enum FastEngine {
             items = fp.envKeys().map { CI.make($0.name, .constant, detail: $0.detail, sort: "0" + $0.name, range: range) }
         } else if call.argIndex == 0, langCalls.contains(key) {
             items = names(fp.langKeys(), kind: .value, range: range, detail: "lang")
+        } else if call.argIndex == 0, sessionCalls.contains(key) || cacheCalls.contains(key) || gateCalls.contains(key) || key == "->middleware" || key == "middleware" {
+            let isGate = gateCalls.contains(key), isMW = key == "->middleware" || key == "middleware"
+            let kind: FUsageKind = isGate ? .gate : (isMW ? .middleware : (sessionCalls.contains(key) ? .session : .cache))
+            let uv = fp.usageView(file: ctx.fileURL, live: ctx.text as NSString)
+            var seen = Set<String>()
+            var fixed: [FTName] = isGate ? fp.policyAbilities() : (isMW ? fp.middlewareAliases() : [])
+            fixed = fixed.filter { seen.insert($0.name).inserted }
+            let label = isGate ? "ability" : (isMW ? "middleware" : (kind == .session ? "session key" : "cache key"))
+            items = fixed.map { CI.make($0.name, .value, detail: $0.detail, sort: "0" + $0.name, range: range) }
+            for n in (uv?.names(kind) ?? []) where seen.insert(n).inserted { items.append(CI.make(n, .value, detail: label, sort: "0" + n, range: range)) }
         } else if (FTEval.columnMethods.contains(method) || FTEval.relationMethods.contains(method)), !blade,
                   let r = modelStringItems(ctx, ns, open: open, caret: caret, method: method, fp: fp) {
             return r
@@ -239,6 +254,12 @@ enum FastEngine {
         if argIndex == 0, configCalls.contains(key) { return .config }
         if argIndex == 0, envCalls.contains(key) { return .env }
         if argIndex == 0, langCalls.contains(key) { return .lang }
+        if argIndex == 0 {
+            if sessionCalls.contains(key) { return .session }
+            if cacheCalls.contains(key) { return .cache }
+            if gateCalls.contains(key) { return .gate }
+            if key == "->middleware" || key == "middleware" { return .middleware }
+        }
         return nil
     }
 
