@@ -170,6 +170,39 @@ enum FUsage {
         stride(from: 0, to: a.count, by: n).map { Array(a[$0..<min($0 + n, a.count)]) }
     }
 
+    // MARK: Scan memo (the current file is scanned once per save / edit, not once per keystroke)
+
+    private static let memoLock = NSLock()
+    private static var savedMemo: [String: (stamp: String, counts: [String: UInt16])] = [:]
+    private static var liveMemo: [String: (stamp: Int, counts: [String: UInt16])] = [:]
+
+    static func clearScanCache() { memoLock.lock(); savedMemo.removeAll(); liveMemo.removeAll(); memoLock.unlock() }
+    static var memoCount: Int { memoLock.lock(); defer { memoLock.unlock() }; return savedMemo.count + liveMemo.count }
+
+    /// (saved copy of `file`, live buffer) occurrence tables, memoised per file (saved: mtime + size; live: length + hash). At most 6 files each.
+    static func scanCached(file: URL, live: NSString, members: Bool) -> (saved: [String: UInt16], live: [String: UInt16]) {
+        let path = file.path
+        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+        let stamp = "\((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)|\(attrs?[.size] as? Int ?? -1)"
+        memoLock.lock()
+        let s = savedMemo[path]; let l = liveMemo[path]
+        memoLock.unlock()
+        var saved: [String: UInt16]
+        if let s, s.stamp == stamp { saved = s.counts } else {
+            saved = [:]
+            if let t = try? NSString(contentsOfFile: path, encoding: String.Encoding.utf8.rawValue) { scan(t, into: &saved, members: members) }
+        }
+        let liveStamp = live.length &* 31 &+ live.hash
+        var liveCounts: [String: UInt16]
+        if let l, l.stamp == liveStamp { liveCounts = l.counts } else { liveCounts = [:]; scan(live, into: &liveCounts, members: members) }
+        memoLock.lock()
+        if savedMemo.count >= 6 { savedMemo.removeAll() }
+        if liveMemo.count >= 6 { liveMemo.removeAll() }
+        savedMemo[path] = (stamp, saved); liveMemo[path] = (liveStamp, liveCounts)
+        memoLock.unlock()
+        return (saved, liveCounts)
+    }
+
     // MARK: Per request ranking
 
     /// Words of the current file's path that name a feature: `Modules/Items/.../ProductReportController.php` -> items, product, report.
@@ -245,8 +278,8 @@ enum FUsage {
         init(table: FUsageTable, file: URL, live: NSString) {
             self.table = table
             tokens = FUsage.fileTokens(file)
-            if let t = try? NSString(contentsOfFile: file.path, encoding: String.Encoding.utf8.rawValue) { FUsage.scan(t, into: &minus, members: file.pathExtension == "php") }
-            FUsage.scan(live, into: &plus, members: file.pathExtension == "php")
+            let isPHP = file.pathExtension == "php"
+            (minus, plus) = FUsage.scanCached(file: file, live: live, members: isPHP)
             for kk in plus.keys {
                 let parts = kk.split(separator: "\u{1}", maxSplits: 1)
                 guard parts.count == 2, let k = FUsageKind(rawValue: String(parts[0])), let dot = parts[1].lastIndex(of: ".") else { continue }

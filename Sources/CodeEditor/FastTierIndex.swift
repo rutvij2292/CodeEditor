@@ -571,6 +571,7 @@ final class FastProject {
         prefetchLock.lock(); prefetched.removeAll(); prefetchLock.unlock()
         pathCache.removeAll(); shortCache.removeAll()
         usageTable = nil
+        FUsage.clearScanCache()
     }
 
     static func trimAll() {
