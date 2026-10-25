@@ -80,6 +80,20 @@ enum SelfTestNativeJS {
             fputs("MEM relief -> \(mb())\n", stderr)
             exit(0)
         }
+        if let list = AppEnv.value("CE_NJS_WHYLIST"), let body = try? String(contentsOfFile: list, encoding: .utf8) {       // path<TAB>line<TAB>word per row
+            for row in body.split(separator: "\n") {
+                let f = row.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+                guard f.count >= 3, let line = Int(f[1]), let text = FastProject.read(f[0]) else { continue }
+                var start = 0, cur = 1
+                while cur < line, start < text.length { let r = text.range(of: "\n", options: [], range: NSRange(location: start, length: text.length - start)); if r.location == NSNotFound { break }; start = NSMaxRange(r); cur += 1 }
+                let lineEnd = text.range(of: "\n", options: [], range: NSRange(location: start, length: text.length - start))
+                let rng = NSRange(location: start, length: (lineEnd.location == NSNotFound ? text.length : lineEnd.location) - start)
+                let w = text.range(of: "." + f[2], options: [], range: rng).location != NSNotFound ? text.range(of: "." + f[2], options: [], range: rng).location + 1 : text.range(of: f[2], options: [], range: rng).location
+                guard w != NSNotFound, let e = NativeJS.env(url: URL(fileURLWithPath: f[0]), text: text) else { continue }
+                fputs("WHY \((f[0] as NSString).lastPathComponent):\(line) \(f[2]) <= \(e.whyReceiver(at: w + 1))\n", stderr)
+            }
+            exit(0)
+        }
         if let spec = AppEnv.value("CE_NJS_PROBE") {        // file:word:nth (0-based occurrence)
             let parts = spec.split(separator: ":").map(String.init)
             if parts.count >= 2 { let m = NJSModules(root: NativeJS.root(for: URL(fileURLWithPath: parts[0]))); fputs("PROBE root \(m.root) aliases \(m.aliases(inConfig: m.root + "/vite.config.js").map { "\($0.key)=\($0.target)" })\n", stderr) }
@@ -87,6 +101,7 @@ enum SelfTestNativeJS {
                 let at = off(text as String, parts[1], parts.count > 2 ? Int(parts[2]) ?? 0 : 0, plus: 1)
                 let hit = NativeJS.lookup(url: URL(fileURLWithPath: parts[0]), text: text, offset: at)
                 fputs("PROBE \(parts[1]) -> \(hit?.kind ?? "nil") \((hit?.targets ?? []).map { "\($0.path):\($0.line)" })\n\(hit?.markdown ?? "")\n", stderr)
+                if AppEnv.value("CE_NJS_WHY") != nil, let e = NativeJS.env(url: URL(fileURLWithPath: parts[0]), text: text) { fputs("WHY \(e.whyReceiver(at: at))\n", stderr) }
             }
             exit(0)
         }
@@ -117,7 +132,7 @@ enum SelfTestNativeJS {
             fputs("SYNTAX scanned \(files) files, \(bad) non-declaration files with a syntax finding (+\(dts) declaration files)\n", stderr)
             exit(0)
         }
-        if AppEnv.value("CE_NJS_ONLY") != nil { run(); runRefs(); runExtras(); runRename(); runSig(); runLib(); runAmbient(); SelfTest.finish() }
+        if AppEnv.value("CE_NJS_ONLY") != nil { run(); runRefs(); runExtras(); runRename(); runSig(); runLib(); runAmbient(); runInfer(); SelfTest.finish() }
     }
 
     private static func check(_ name: String, _ ok: @autoclosure () -> Bool) { SelfTest.check(name, ok()) }

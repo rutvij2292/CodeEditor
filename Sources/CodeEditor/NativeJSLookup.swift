@@ -26,6 +26,7 @@ extension NJSEnv {
         let uniq = res.filter { seen.insert("\($0.path):\($0.loc):\($0.fileTop)").inserted }
         var hit = NPHit(range: node.range, targets: uniq.map { target($0) }, markdown: markdown(uniq[0], others: uniq.count - 1), kind: uniq[0].kind.label)
         hit.inferred = isInferred(uniq[0])
+        if hit.inferred, let md = inferredHover(token: node, res: uniq[0], current: hit.markdown) { hit.markdown = md }
         return hit
     }
 
@@ -35,8 +36,9 @@ extension NJSEnv {
         guard let parent = node.parent else { return [] }
         switch node.kind {
         case "property_identifier", "private_property_identifier":
-            guard parent.kind == "member_expression", let p = parent.field("property"), p == node, let o = parent.field("object"), let t = typeOf(o) else { return [] }
-            return memberOf(t, name)
+            guard parent.kind == "member_expression", let p = parent.field("property"), p == node, let o = parent.field("object") else { return [] }
+            if let t = typeOf(o) { let m = memberOf(t, name); if !m.isEmpty { return m } }
+            return inferredMember(of: o, name)
         default: break
         }
         switch parent.kind {
