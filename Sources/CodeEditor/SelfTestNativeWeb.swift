@@ -200,7 +200,7 @@ enum SelfTestNativeWeb {
         let props = labels(css, ".x { col§ }")
         check("css: property names", props.contains("color") && props.contains("column-gap") && !props.contains("display"))
         check("css: values for display", { let l = labels(css, ".x { display: §"); return l.contains("flex") && l.contains("grid") && l.contains("inherit") }())
-        check("css: named colors for color", { let l = labels(scratch, ".x { color: §"); return l.contains("rebeccapurple") && l.contains("var(--brand-color)") }())
+        check("css: named colors for color", { let l = labels(scratch, ".x { color: §"); return l.contains("rebeccapurple") && l.contains("--brand-color") && l.contains("currentColor") }())
         check("css: units after a number", labels(css, ".x { width: 10§").contains("10px"))
         check("css: at-rules", labels(css, "@me§").contains("media"))
         check("css: tailwind at-rules in a tailwind project", labels(css, "@ap§").contains("apply"))

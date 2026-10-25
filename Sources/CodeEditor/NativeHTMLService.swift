@@ -71,7 +71,12 @@ enum NWHtmlService {
         if prefix.hasPrefix("x-") || prefix.hasPrefix("@") || prefix.hasPrefix(":") { for n in NWHtmlData.alpineAttrs { add(n, doc: "Alpine.js directive.", kind: "alpine", sort: "3" + n) } }
         for n in NWHtmlData.eventHandlers { add(n, doc: "Event handler content attribute.", kind: "event", sort: "4" + n) }
         for n in NWHtmlData.ariaAttrs { add(n, doc: "WAI-ARIA attribute.", kind: "aria", sort: "5" + n) }
-        if prefix.hasPrefix("data") { add("data-", doc: "Custom data attribute.", kind: "data", sort: "1data-") }
+        if prefix.hasPrefix("data") {
+            add("data-", doc: "Custom data attribute.", kind: "data", sort: "1data-")
+            var used = Set<String>()                       // data-* attributes already used in this document (like the HTML server)
+            NWHtml.eachAttribute(b) { _, name, _, _, _ in if name.hasPrefix("data-"), name.count > 5, used.count < 200 { used.insert(name) } }
+            for n in used.sorted() { add(n, doc: "Custom data attribute used in this file.", kind: "data", sort: "1" + n) }
+        }
         return items
     }
 

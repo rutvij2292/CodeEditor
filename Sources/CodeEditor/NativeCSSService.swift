@@ -217,7 +217,7 @@ enum NWCssService {
         if prop != "content" {
             let idx = NWCss.index(b, lang: lang, from: from)
             for n in customProps(p, current: idx, currentBuf: b, currentPath: url.path, limit: 250) {
-                add("var(\(n.name))", .variable, detail: n.value, doc: "`\(n.name): \(n.value)`  \n\(n.file)", sort: n.file == "this file" ? "2" + n.name : "3" + n.name)
+                add(n.name, .variable, detail: n.value, insert: "var(\(n.name))", doc: "`\(n.name): \(n.value)`  \n\(n.file)", sort: n.file == "this file" ? "2" + n.name : "3" + n.name)
             }
         }
         return items
