@@ -32,6 +32,7 @@ enum SelfTest {
             finish()
         }
         if AppEnv.value("CE_WEB_ONLY") != nil || AppEnv.value("CE_WEB_BENCH") != nil || AppEnv.value("CE_WEB_LOCATE") != nil { if let p = AppEnv.value("CE_WEB_BENCH") { NativeWebBench.run(p); exit(0) }; SelfTestNativeWeb.run(); SelfTestNativeWebPerf.run(); finish() }   // dev aid: just the native web checks
+        if AppEnv.value("CE_VUE_ONLY") != nil || AppEnv.value("CE_VUE_BENCH") != nil { if let p = AppEnv.value("CE_VUE_BENCH") { NativeVueBench.run(p); exit(0) }; SelfTestNativeVue.run(); finish() }   // dev aid: just the native Vue checks
         SelfTestNativeJS.devHooks()
         // Hermetic: the host's battery / Low Power Mode must not switch the saver features these checks exercise.
         Prefs.powerSaver = "off"
@@ -110,6 +111,7 @@ enum SelfTest {
                     SelfTestNativePyDiag.runUI()
                     SelfTestNativeWeb.run()
                     SelfTestNativeWebPerf.run()
+                    SelfTestNativeVue.run()
                     SelfTestSpeedSearch.run(w: w)
                     SelfTestToolFocus.run(w: w)
                     SelfTestLocationsNewFile.run(w: w)

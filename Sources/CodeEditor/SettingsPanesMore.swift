@@ -91,6 +91,12 @@ final class LanguagesPane: SettingsPane {
         nativeJSDiag.setAccessibilityLabel("Native JavaScript and TypeScript diagnostics")
         onRefresh { nativeJSDiag.state = NativeJSDiag.enabled ? .on : .off }
         row(nil, nativeJSDiag, help: nil)
+        let nativeVue = NSButton(checkboxWithTitle: "Native Vue template service", target: nil, action: nil)
+        nativeVue.target = action { c in NativeVue.enabled = (c as? NSButton)?.state == .on; NativeVue.trimMemory() }
+        nativeVue.action = #selector(SettingsAction.fire(_:))
+        nativeVue.setAccessibilityLabel("Native Vue template service")
+        onRefresh { nativeVue.state = NativeVue.enabled ? .on : .off }
+        row(nil, nativeVue, help: "In .vue templates: go to definition, hover, find usages and completion for custom component tags, their props / events / slots, template variables, assets and router links come from Kode itself (imports, components option, global and auto-imported components, aliases). The Vue language server only answers what native cannot be certain about.")
 
         section("Language servers")
         for server in LanguageServers.serverIds {

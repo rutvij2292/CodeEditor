@@ -45,6 +45,7 @@ enum CompletionSystem {
         StructuredCompletion.register()   // YAML / JSON key + value completion (StructuredCompletion.swift)
         NativeWeb.register()  // native CSS / HTML / Tailwind (NativeWeb*.swift)
         NativeJSCompletion.register()
+        NativeVue.register()  // native Vue template completion (NativeVue*.swift)
         FastTier.register()   // last: wins score ties when deduping against the other providers
     }
 }
