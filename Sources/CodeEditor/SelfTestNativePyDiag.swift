@@ -171,6 +171,7 @@ enum SelfTestNativePyDiag {
         let project = NativePy.project(for: probe)
         let env = project.queue.sync { project.env }
         guard let stdlib = env.stdlib.first else { fputs("PYBENCH no system python found, real-world checks skipped\n", stderr); return }
+        accuracy(project, stdlib)
         let files = pyFiles(in: stdlib, limit: 160)
         // no false positives: standard library files are valid and define every name they use
         var bad: [String] = []
@@ -206,6 +207,46 @@ enum SelfTestNativePyDiag {
         fputs(String(format: "PYBENCH cold-lookup=%.1fms second-file=%.1fms warm-p50=%.2fms warm-max=%.2fms os.py-live-parse=%.1fms reparse-after-edit=%.1fms cache=%d files/%.1fMB footprintDelta=%.1fMB\n",
                      cold, cold2, warm[warm.count / 2], warm.last ?? 0, osParse, edit, stats.files, Double(stats.bytes) / 1_048_576, after - base), stderr)
         check("real: warm lookup is fast", warm[warm.count / 2] < 10)
+    }
+
+    /// Go to definition on every identifier of real stdlib files: a hit must point at a declaration of that very name (or a module).
+    static func accuracy(_ project: PyProject, _ stdlib: String) {
+        var files = pyFiles(in: stdlib, limit: 400, maxSize: 90_000, topLevelOnly: true)
+        files = Array(files.enumerated().filter { $0.offset % 6 == 0 }.map(\.element).prefix(40))
+        guard let re = try? NSRegularExpression(pattern: #"\b[A-Za-z_][A-Za-z_0-9]*\b"#) else { return }
+        var total = 0, resolved = 0, mismatches: [String] = []
+        let t0 = Date()
+        var texts: [String: NSString] = [:]
+        func textOf(_ p: String) -> NSString? {
+            if let t = texts[p] { return t }
+            guard let s = try? String(contentsOfFile: p, encoding: .utf8) else { return nil }
+            texts[p] = s as NSString
+            return s as NSString
+        }
+        for f in files {
+            guard let ns = textOf(f) else { continue }
+            let url = URL(fileURLWithPath: f)
+            var seen = 0
+            re.enumerateMatches(in: ns as String, range: NSRange(location: 0, length: ns.length)) { m, _, stop in
+                guard let m else { return }
+                seen += 1
+                if seen > 1500 { stop.pointee = true; return }
+                let name = ns.substring(with: m.range)
+                if PyComplete.keywords.contains(name) { return }
+                total += 1
+                guard let hit = NativePy.lookup(url: url, text: ns, offset: m.range.location), let t = hit.targets.first else { return }
+                resolved += 1
+                if hit.kind == "module" { return }
+                guard let tt = textOf(t.path), t.offset + name.utf16.count <= tt.length else { mismatches.append("\((f as NSString).lastPathComponent):\(name) -> bad target"); return }
+                if tt.substring(with: NSRange(location: t.offset, length: name.utf16.count)) != name {
+                    mismatches.append("\((f as NSString).lastPathComponent): \(name) -> \(tt.substring(with: NSRange(location: t.offset, length: min(12, tt.length - t.offset)))) in \((t.path as NSString).lastPathComponent)")
+                }
+            }
+        }
+        let ms = Date().timeIntervalSince(t0) * 1000
+        if !mismatches.isEmpty { fputs("PYACC mismatches (\(mismatches.count)): \(mismatches.prefix(15))\n", stderr) }
+        fputs(String(format: "PYACC %d identifiers in %d files: %d resolved (%.0f%%), %d mismatching, %.1f ms per lookup\n", total, files.count, resolved, Double(resolved) * 100 / Double(max(total, 1)), mismatches.count, ms / Double(max(total, 1))), stderr)
+        check("accuracy: definitions point at declarations of the same name (\(mismatches.count) of \(resolved))", mismatches.count * 100 <= max(resolved, 1))
     }
 
     /// Developer tool: CE_PYREAL=/path/to/python/project prints what the diagnostics say about the project's own files.

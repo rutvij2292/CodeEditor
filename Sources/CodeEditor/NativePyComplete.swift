@@ -190,8 +190,9 @@ enum PyComplete {
         var it = CompletionItem(label: s.name, insertText: s.name, kind: kind, detail: detail, sortText: sortPrefix + s.name)
         if s.docRange != nil, let f = r.ctx.file(s.path) {
             let range = s.docRange
+            let base = it                      // a copy without `resolve`: capturing `it` itself would make a reference cycle
             it.resolve = { done in
-                var copy = it
+                var copy = base
                 copy.documentation = PyDocs.docstring(range, in: f) ?? ""
                 done(copy)
             }

@@ -94,71 +94,27 @@ enum PyRefs {
 
     // MARK: Collect
 
-    /// On the project's queue. `liveText` supplies unsaved buffers (path -> text).
+    /// Synchronous collection (tests): on the project's queue.
     static func collect(_ target: PyRefTarget, project: PyProject, liveFile: PyFile?, includeDeclarations: Bool = true,
                         cancel: CancelToken? = nil) -> PyRefsResult {
-        let ctx = PyCtx(project: project, livePath: liveFile?.path, live: liveFile)
-        let r = PyResolver(ctx: ctx)
-        let (paths, scanned) = candidates(root: project.root, word: target.name, onlyFile: target.local ? target.path : nil, cancel: cancel)
-        var hits: [PyRefHit] = []
-        var truncated = false
-        var seen = Set<String>()
-        for path in paths {
-            if cancel?.isCancelled == true { break }
-            // an unsaved buffer is searched instead of the file on disk
-            let isLive = liveFile?.path == path
-            guard let text = isLive ? liveFile!.live : (PyFS.read(path).map { $0 as NSString }) else { continue }
-            guard let parser = project.parser, let tree = parser.parse(text as String), let root = tree.rootNode else { continue }
-            guard let file = isLive ? liveFile : ctx.file(path) else { continue }
-            var words = [target.name]
-            var wi = 0
-            while wi < words.count {
-                let word = words[wi]; wi += 1
-                var from = 0
-                let n = text.length
-                while from < n {
-                    let rg = text.range(of: word, options: .literal, range: NSRange(location: from, length: n - from))
-                    if rg.location == NSNotFound { break }
-                    from = NSMaxRange(rg)
-                    if false { fputs("PYDEBUG   occ \(path.suffix(20)) @\(rg.location) ident=\(PyResolver.identifier(in: root, ns: text, at: rg.location).map { "\($0.start)/\($0.r.length)" } ?? "nil")\n", stderr) }
-                    if rg.location > 0, isWord(text.character(at: rg.location - 1)) { continue }
-                    if from < n, isWord(text.character(at: from)) { continue }
-                    guard let ident = PyResolver.identifier(in: root, ns: text, at: rg.location), ident.start == rg.location, ident.r.length == rg.length else { continue }
-                    guard let hit = r.lookupHit(file: file, root: root, ns: text, offset: rg.location) else { continue }
-                    let matches: Bool
-                    if let m = target.module { matches = hit.kind == "module" && hit.targets.contains { $0.path == m } }
-                    else { matches = hit.targets.contains { target.sites.contains("\($0.path):\($0.offset)") } }
-                    if false { fputs("PYDEBUG   cand \(path.suffix(20)) @\(rg.location) hit=\(hit.targets.map { "\($0.path.suffix(20)):\($0.offset)" }) sites=\(target.sites.map { String($0.suffix(24)) }) match=\(matches)\n", stderr) }
-                    if !matches {
-                        continue
-                    }
-                    let key = "\(path):\(rg.location)"
-                    guard seen.insert(key).inserted else { continue }
-                    let role = roleOf(ident, file: file, target: target)
-                    if role == .declaration && !includeDeclarations { continue }
-                    // `from m import foo as bar`: `bar` is another name of the same symbol inside this file
-                    if let p = ident.parent, let ai = p.type == "aliased_import" ? p : (p.type == "dotted_name" ? p.parent : nil), ai.type == "aliased_import",
-                       let al = ai.field("alias"), al.n.id != ident.n.id, !words.contains(al.text) { words.append(al.text) }
-                    let p = file.position(of: rg.location)
-                    let line = text.lineRange(for: NSRange(location: rg.location, length: 0))
-                    var snippet = text.substring(with: line).trimmingCharacters(in: .whitespacesAndNewlines)
-                    if snippet.count > 160 { snippet = String(snippet.prefix(160)) + "…" }
-                    hits.append(PyRefHit(path: path, offset: rg.location, line: p.line, column: p.col, snippet: snippet, role: role))
-                    if hits.count >= maxHits { truncated = true; break }
-                }
-                if truncated { break }
-            }
-            if truncated { break }
+        let run = PyRefsRun(target, project: project, liveFile: liveFile, includeDeclarations: includeDeclarations, cancel: cancel)
+        while run.step() {}
+        return run.result
+    }
+
+    /// Cooperative collection for the UI: one file per queue block, so hover / go to definition requests interleave with a scan
+    /// of a big project instead of waiting for all of it.
+    static func collectChunked(_ run: PyRefsRun, done: @escaping (PyRefsResult) -> Void) {
+        run.project.queue.async {
+            if run.step() { collectChunked(run, done: done) } else { done(run.result) }
         }
-        hits.sort { $0.path == $1.path ? $0.offset < $1.offset : $0.path < $1.path }
-        return PyRefsResult(hits: hits, truncated: truncated, scannedFiles: scanned, candidateFiles: paths.count)
     }
 
     static func isWord(_ c: unichar) -> Bool {
         (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || c == 95 || (c >= 97 && c <= 122) || c > 127
     }
 
-    private static func roleOf(_ ident: PN, file: PyFile, target: PyRefTarget) -> PyRefHit.Role {
+    static func roleOf(_ ident: PN, file: PyFile, target: PyRefTarget) -> PyRefHit.Role {
         var cur = ident.parent
         var hops = 0
         while let p = cur, hops < 6 {
@@ -172,6 +128,90 @@ enum PyRefs {
         if let p = ident.parent, p.type == "augmented_assignment", let l = p.field("left"), l.n.id == ident.n.id { return .write }
         if let p = ident.parent, p.type == "attribute", let pp = p.parent, pp.type == "augmented_assignment", let l = pp.field("left"), l.n.id == p.n.id { return .write }
         return .usage
+    }
+}
+
+/// One find-usages scan: candidate files first, then one file per `step()`. Only on the project's queue.
+final class PyRefsRun {
+    let target: PyRefTarget
+    let project: PyProject
+    private let includeDeclarations: Bool
+    private let cancel: CancelToken?
+    private let ctx: PyCtx
+    private let resolver: PyResolver
+    private let liveFile: PyFile?
+    private var paths: [String]?
+    private var scanned = 0
+    private var index = 0
+    private var hits: [PyRefHit] = []
+    private var truncated = false
+    private var seen = Set<String>()
+
+    init(_ target: PyRefTarget, project: PyProject, liveFile: PyFile?, includeDeclarations: Bool = true, cancel: CancelToken? = nil) {
+        self.target = target; self.project = project; self.liveFile = liveFile
+        self.includeDeclarations = includeDeclarations; self.cancel = cancel
+        ctx = PyCtx(project: project, livePath: liveFile?.path, live: liveFile)
+        resolver = PyResolver(ctx: ctx)
+    }
+
+    var result: PyRefsResult {
+        let sorted = hits.sorted { $0.path == $1.path ? $0.offset < $1.offset : $0.path < $1.path }
+        return PyRefsResult(hits: sorted, truncated: truncated, scannedFiles: scanned, candidateFiles: paths?.count ?? 0)
+    }
+
+    /// Does one unit of work; false when finished (or cancelled).
+    func step() -> Bool {
+        if cancel?.isCancelled == true { return false }
+        guard let list = paths else {
+            let c = PyRefs.candidates(root: project.root, word: target.name, onlyFile: target.local ? target.path : nil, cancel: cancel)
+            paths = c.paths; scanned = c.scanned
+            return !c.paths.isEmpty
+        }
+        guard index < list.count, !truncated else { return false }
+        process(list[index])
+        index += 1
+        return index < list.count && !truncated
+    }
+
+    private func process(_ path: String) {
+        // an unsaved buffer is searched instead of the file on disk
+        let isLive = liveFile?.path == path
+        guard let text = isLive ? liveFile!.live : (PyFS.read(path).map { $0 as NSString }),
+              let parser = project.parser, let tree = parser.parse(text as String), let root = tree.rootNode,
+              let file = isLive ? liveFile : ctx.file(path) else { return }
+        var words = [target.name]
+        var wi = 0
+        while wi < words.count {
+            let word = words[wi]; wi += 1
+            var from = 0
+            let n = text.length
+            while from < n {
+                let rg = text.range(of: word, options: .literal, range: NSRange(location: from, length: n - from))
+                if rg.location == NSNotFound { break }
+                from = NSMaxRange(rg)
+                if rg.location > 0, PyRefs.isWord(text.character(at: rg.location - 1)) { continue }
+                if from < n, PyRefs.isWord(text.character(at: from)) { continue }
+                guard let ident = PyResolver.identifier(in: root, ns: text, at: rg.location), ident.start == rg.location, ident.r.length == rg.length else { continue }
+                guard let hit = resolver.lookupHit(file: file, root: root, ns: text, offset: rg.location) else { continue }
+                let matches: Bool
+                if let m = target.module { matches = hit.kind == "module" && hit.targets.contains { $0.path == m } }
+                else { matches = hit.targets.contains { target.sites.contains("\($0.path):\($0.offset)") } }
+                if !matches { continue }
+                let key = "\(path):\(rg.location)"
+                guard seen.insert(key).inserted else { continue }
+                let role = PyRefs.roleOf(ident, file: file, target: target)
+                if role == .declaration && !includeDeclarations { continue }
+                // `from m import foo as bar`: `bar` is another name of the same symbol inside this file
+                if let p = ident.parent, let ai = p.type == "aliased_import" ? p : (p.type == "dotted_name" ? p.parent : nil), ai.type == "aliased_import",
+                   let al = ai.field("alias"), al.n.id != ident.n.id, !words.contains(al.text) { words.append(al.text) }
+                let pos = file.position(of: rg.location)
+                let line = text.lineRange(for: NSRange(location: rg.location, length: 0))
+                var snippet = text.substring(with: line).trimmingCharacters(in: .whitespacesAndNewlines)
+                if snippet.count > 160 { snippet = String(snippet.prefix(160)) + "…" }
+                hits.append(PyRefHit(path: path, offset: rg.location, line: pos.line, column: pos.col, snippet: snippet, role: role))
+                if hits.count >= PyRefs.maxHits { truncated = true; return }
+            }
+        }
     }
 }
 
@@ -226,18 +266,21 @@ enum NativePyUI {
                 onMain { message("No symbol with known usages at the caret", window: window) }
                 return
             }
-            let result = PyRefs.collect(target, project: project, liveFile: file, cancel: tok)
-            onMain {
-                guard !tok.isCancelled else { return }
-                token = nil
-                if result.hits.isEmpty { message("No usages of \(target.display) found", window: window); return }
-                var title = "Usages of \(target.display) (\(result.hits.count) in \(Set(result.hits.map(\.path)).count) files)"
-                if result.truncated { title += " - capped, narrow the search" }
-                let list = items(result.hits, root: project.root)
-                if let h = presentHook { h(title, list); return }
-                guard let window else { return }
-                QuickPicker.present(over: window, placeholder: title, items: list)
+            let run = PyRefsRun(target, project: project, liveFile: file, cancel: tok)
+            let finish: (PyRefsResult) -> Void = { result in
+                onMain {
+                    guard !tok.isCancelled else { return }
+                    token = nil
+                    if result.hits.isEmpty { message("No usages of \(target.display) found", window: window); return }
+                    var title = "Usages of \(target.display) (\(result.hits.count) in \(Set(result.hits.map(\.path)).count) files)"
+                    if result.truncated { title += " - capped, narrow the search" }
+                    let list = items(result.hits, root: project.root)
+                    if let h = presentHook { h(title, list); return }
+                    guard let window else { return }
+                    QuickPicker.present(over: window, placeholder: title, items: list)
+                }
             }
+            if synchronous { while run.step() {}; finish(run.result) } else { PyRefs.collectChunked(run, done: finish) }
         }
         if synchronous { project.queue.sync(execute: work) } else { project.queue.async(execute: work) }
         return true
