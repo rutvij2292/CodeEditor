@@ -6,6 +6,7 @@ struct PopupRow {
     let kind: CompletionKind
     let deprecated: Bool
     let matches: [Int]          // UTF-16 offsets in `label` to emphasise
+    var params = ""            // `(Money $m, string $c)` drawn dim right after the label (methods / functions)
 }
 
 private final class PopupPanel: NSPanel {
@@ -90,6 +91,9 @@ final class CompletionListView: NSView {
         for m in row.matches where m < len {
             s.addAttributes([.font: bold, .foregroundColor: PopupStyle.accent], range: NSRange(location: m, length: 1))
         }
+        if !row.params.isEmpty {
+            s.append(NSAttributedString(string: row.params, attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: PopupStyle.dim, .paragraphStyle: para]))
+        }
         return s
     }
 
@@ -98,7 +102,7 @@ final class CompletionListView: NSView {
         var maxLabel: CGFloat = 0, maxDetail: CGFloat = 0
         let font = NSFont.systemFont(ofSize: 13), dfont = NSFont.systemFont(ofSize: 12)
         for r in rows.prefix(80) {
-            maxLabel = max(maxLabel, (r.label as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold)]).width)
+            maxLabel = max(maxLabel, ((r.label + r.params) as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold)]).width)
             maxDetail = max(maxDetail, (r.detail as NSString).size(withAttributes: [.font: dfont]).width)
             _ = font
         }
@@ -371,5 +375,31 @@ final class CompletionPopup {
         guard let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:]) else { return }
         try? png.write(to: URL(fileURLWithPath: path))
+    }
+}
+
+extension PopupRow {
+    /// Row for a completion item: methods / functions show their parameter list after the name and the return type (plus the declaring
+    /// class when inherited) right-aligned; everything else shows `detail` as before. No work beyond the visible rows' text.
+    static func make(_ item: CompletionItem, matches: [Int]) -> PopupRow {
+        var params = "", detail = item.detail
+        if item.kind == .method || item.kind == .function || item.kind == .constructor, detail.hasPrefix("(") {
+            var depth = 0
+            var end: String.Index?
+            for i in detail.indices {
+                let ch = detail[i]
+                if ch == "(" { depth += 1 } else if ch == ")" { depth -= 1; if depth == 0 { end = i; break } }
+            }
+            if let end {
+                params = String(detail[...end])
+                var rest = String(detail[detail.index(after: end)...]).trimmingCharacters(in: .whitespaces)
+                if rest.hasPrefix(":") { rest.removeFirst() }
+                detail = rest.trimmingCharacters(in: .whitespaces)
+            }
+        }
+        if !item.source.isEmpty { detail = detail.isEmpty ? item.source : detail + "  " + item.source }
+        var row = PopupRow(label: item.label, detail: detail, kind: item.kind, deprecated: item.deprecated, matches: matches)
+        row.params = params.count > 60 ? String(params.prefix(57)) + "...)" : params
+        return row
     }
 }

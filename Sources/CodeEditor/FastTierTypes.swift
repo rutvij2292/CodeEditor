@@ -740,12 +740,15 @@ final class FTEval {
                 let own = idx == 0 || (fromSameClass && k.kind == "trait")
                 func visible(_ vis: Int) -> Bool { vis == 0 || (vis == 1 && fromSameClass) || (vis == 2 && own && fromSameClass) }
                 for m in k.methods where visible(m.vis) && !m.name.hasPrefix("__") && (instance || m.isStatic || includeAll) {
-                    add(methodItem(m, sort: base + (m.isStatic == instance ? "b" : "a"), owner: k), prio: tierOf + (m.isStatic == instance ? 6 : 0))
+                    var mi = methodItem(m, sort: base + (m.isStatic == instance ? "b" : "a"), owner: k)
+                    if idx > 0 { mi.source = k.name }
+                    add(mi, prio: tierOf + (m.isStatic == instance ? 6 : 0))
                 }
                 if instance {
                     for p in k.props where !p.isStatic && visible(p.vis) {
                         var it = CI.make(p.name, .property, detail: p.type, sort: base + "a" + p.name.lowercased(), doc: k.fqn)
                         it.valueType = Self.valueType(p.type, owner: k)
+                        if idx > 0 { it.source = k.name }
                         add(it, prio: tierOf)
                     }
                 } else {

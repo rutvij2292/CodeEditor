@@ -25,6 +25,8 @@ struct CompletionItem {
     var typeMatch: UInt8 = 0
     /// How much the project itself uses this name (member frequency); ranks equal tiers, higher first.
     var usage = 0
+    /// Where the candidate is declared when that is worth showing in the popup row (inherited member: the parent class / trait name).
+    var source = ""
     /// Providers may fill in documentation/edits lazily (LSP completionItem/resolve); controller calls it once on selection.
     var resolve: ((@escaping (CompletionItem) -> Void) -> Void)?
 }

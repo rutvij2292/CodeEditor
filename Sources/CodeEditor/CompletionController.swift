@@ -300,8 +300,7 @@ final class CompletionController: NSObject {
         if ranked.isEmpty { hidePopup(); return }
         if ranked.count == 1, ranked[0].query == ranked[0].item.label, !lastRequestManual { hidePopup(); return }
         selected = previous.flatMap { p in ranked.firstIndex { $0.item.label + $0.item.kind.rawValue == p } } ?? 0
-        let rows = ranked.map { PopupRow(label: $0.item.label, detail: $0.item.detail, kind: $0.item.kind,
-                                         deprecated: $0.item.deprecated, matches: matches($0.item.label, $0.query)) }
+        let rows = ranked.map { PopupRow.make($0.item, matches: matches($0.item.label, $0.query)) }
         let wasOpen = isOpen
         isOpen = true
         let anchorLoc = min(anchor, textView.selectedRange().location)
