@@ -83,6 +83,24 @@ extension SelfTestNativeJS {
             check("refs: 40 files scanned in parallel give 80 hits, in path order, no duplicates", gen.count == 80 && gen.map { $0.path } == gen.map { $0.path }.sorted() && Set(gen.map { "\($0.path):\($0.line)\($0.column)" }).count == 80)
         } else { check("refs: parallel search ran", false) }
 
+        // the scan cache survives a relaunch: a second graph starts from disk and rescans nothing
+        NJSImportGraph.cacheDirectory = fm.temporaryDirectory.appendingPathComponent("ce-njs-cache-\(getpid())")
+        defer { try? fm.removeItem(at: NJSImportGraph.cacheDirectory) }
+        try? fm.removeItem(at: NJSImportGraph.cacheFile(root.path))
+        var tr = false
+        let listing = NJSRefs.files(root.path, cancel: nil, truncated: &tr)
+        let g1 = NJSImportGraph()
+        _ = g1.ensureBuilt(files: listing, live: [:], modules: proj.modules, stateKey: 7)
+        var waited = 0
+        while !fm.fileExists(atPath: NJSImportGraph.cacheFile(root.path).path), waited < 100 { Thread.sleep(forTimeInterval: 0.02); waited += 1 }
+        let g2 = NJSImportGraph()
+        let b2 = g2.ensureBuilt(files: listing, live: [:], modules: proj.modules, stateKey: 7)
+        check("graph cache: a relaunch loads every scan from disk and rescans nothing", g1.misses > 0 && g2.misses == 0 && g2.count == g1.count && b2.scanned.count > 20)
+        put(root, "src/gen/g00.ts", "import { helper } from '../util'\nimport { VALUE } from '../util'\n")
+        let g3 = NJSImportGraph()
+        _ = g3.ensureBuilt(files: listing, live: [:], modules: proj.modules, stateKey: 8)
+        check("graph cache: a changed file is rescanned, the others are not", g3.misses == 1)
+
         // import graph: scanner flags, pruning, memo
         let sc = NJSScanner.scan("import a, { b } from './x'\nimport * as ns from \"./n\"\nimport { c } from './c'\nexport * from './y'\nexport { a as q } from './r'\nconst z = require('./z')\nmodule.exports = require('./m')\nimport('./d')\nimport './side.css'\nexport { a }\nconst s = 'from ./not-a-spec'\n" as NSString)
         func edge(_ spec: String) -> NJSEdge? { sc.edges.first { $0.spec == spec } }

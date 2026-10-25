@@ -14,6 +14,9 @@ struct NJSRes {
     var keyword: String?
     var typeName: String?
     var initCall: String?
+    var aliasOf: String?
+    var valueMembers: [NJSMember] = []
+    var returnMembers: [NJSMember] = []
     var members: [NJSMember] = []
     var heritage: [String] = []
     var siblings: [NJSMember]?          // members of the enclosing namespace (heritage names resolve there first)
@@ -23,7 +26,7 @@ struct NJSRes {
 
     init(path: String, sym s: NJSSym) {
         self.path = path; name = s.name; kind = s.kind; loc = s.loc; len = s.len; declStart = s.declStart; sigEnd = s.sigEnd
-        docStart = s.docStart; docEnd = s.docEnd; keyword = s.keyword; typeName = s.typeName; initCall = s.initCall; members = s.members; heritage = s.heritage
+        docStart = s.docStart; docEnd = s.docEnd; keyword = s.keyword; typeName = s.typeName; initCall = s.initCall; aliasOf = s.aliasOf; valueMembers = s.valueMembers; returnMembers = s.returnMembers; members = s.members; heritage = s.heritage
     }
     init(path: String, member m: NJSMember, owner: String?, siblings: [NJSMember]? = nil) {
         self.path = path; name = m.name; kind = m.kind; loc = m.loc; len = m.len; declStart = m.declStart; sigEnd = m.sigEnd
@@ -44,6 +47,8 @@ struct NJSTV {
     var res: [NJSRes]
     var isStatic: Bool
     var module: String?
+    var valueMembers: [NJSMember]?       // `ref({...})`: members of what `.value` holds
+    var valuePath: String?
 }
 
 /// Per-project state: serial queue, module resolver and a byte-capped LRU of file summaries (no trees are kept).
@@ -296,21 +301,23 @@ final class NJSEnv {
         var out: [NJSRes] = []
         var isStatic = false
         var module: String?
+        var valueM: [NJSMember]?, valueP: String?
         for r in res {
             if r.fileTop { module = r.path; continue }
             switch r.kind {
             case .class, .enum, .namespace: out.append(r); isStatic = true
             case .variable, .constant, .property, .parameter, .getter:
                 if let t = r.typeName { out += resolveTypeRef(t, in: r.path, siblings: r.siblings).filter { $0.kind != .function } }
-                else if !r.members.isEmpty { out.append(r) }
-                else if let c = r.initCall, let v = tvOfResult(resolveTypeRef(c, in: r.path)) { out += v.res }       // const x = f(): the declared return type of f
+                if !r.members.isEmpty { out.append(r) }             // properties declared by an object literal (also: the keys handed to a factory)
+                if !r.valueMembers.isEmpty { valueM = r.valueMembers; valueP = r.path }
+                if r.typeName == nil, let c = r.initCall, let v = tvOfResult(resolveTypeRef(c, in: r.path)) { out += v.res }       // const x = f(): the declared return type of f
             case .function, .method:
                 break
             default: break
             }
         }
-        if out.isEmpty && module == nil { return nil }
-        return NJSTV(res: out, isStatic: isStatic, module: module)
+        if out.isEmpty && module == nil && valueM == nil { return nil }
+        return NJSTV(res: out, isStatic: isStatic, module: module, valueMembers: valueM, valuePath: valueP)
     }
 
     func instance(of typeName: String, in file: String, siblings: [NJSMember]? = nil) -> NJSTV? {
@@ -329,8 +336,17 @@ final class NJSEnv {
     /// Vue's reactivity factories: whatever the overload, the result is a Ref family interface and `.value` is declared there.
     private static let vueRefs: [String: String] = ["ref": "Ref", "shallowRef": "ShallowRef", "toRef": "Ref", "customRef": "Ref", "computed": "ComputedRef"]
 
-    func tvOfResult(_ res: [NJSRes]) -> NJSTV? {
+    /// A synthetic holder of properties declared at some literal's keys.
+    static func container(_ path: String, _ members: [NJSMember]) -> NJSRes {
+        let sym = NJSSym(name: "(object)", kind: .variable, loc: 0, len: 0, declStart: 0, sigEnd: 0)
+        sym.members = members
+        return NJSRes(path: path, sym: sym)
+    }
+
+    func tvOfResult(_ res: [NJSRes], depth: Int = 0) -> NJSTV? {
         for r in res {
+            if !r.returnMembers.isEmpty { return NJSTV(res: [NJSEnv.container(r.path, r.returnMembers)], isStatic: false, module: nil) }
+            if let a = r.aliasOf, depth < 3, let v = tvOfResult(resolveTop(r.path, a), depth: depth + 1) { return v }
             if let iface = NJSEnv.vueRefs[r.name], r.path.contains("/@vue/reactivity/"), let v = instance(of: iface, in: r.path) { return v }
             if let t = r.typeName, let v = instance(of: t, in: r.path, siblings: r.siblings) { return v }
         }
@@ -373,6 +389,7 @@ final class NJSEnv {
             return tv(of: resolveTop(path, name))
         case "member_expression":
             guard let o = n.field("object"), let p = n.field("property"), let base = typeOf(o, depth: depth + 1) else { return nil }
+            if p.text(doc.text) == "value", let vm = base.valueMembers, let vp = base.valuePath { return NJSTV(res: [NJSEnv.container(vp, vm)], isStatic: false, module: nil) }
             let found = memberOf(base, p.text(doc.text))
             return tv(of: found)
         case "call_expression":

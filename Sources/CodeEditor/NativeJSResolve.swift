@@ -237,7 +237,7 @@ final class NJSModules {
         var d = dir, found = ""
         for _ in 0..<40 {
             for n in ["tsconfig.json", "jsconfig.json"] where NJSModules.isFile(d + "/" + n) { found = d + "/" + n; break }
-            if !found.isEmpty || d == "/" || d.isEmpty || d == root { break }
+            if !found.isEmpty || d == "/" || d.isEmpty { break }
             d = (d as NSString).deletingLastPathComponent
         }
         lock.lock(); configForDir[dir] = found; lock.unlock()

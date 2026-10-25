@@ -222,6 +222,9 @@ final class NJSSym {
     var docStart = -1, docEnd = -1
     var keyword: String?                // const / let / var for variables
     var typeName: String?               // variable annotation / `new X()`, function return type
+    var valueMembers: [NJSMember] = []  // `ref({...})`: what `.value` holds
+    var returnMembers: [NJSMember] = [] // a function whose only return is an object literal
+    var aliasOf: String?                // `declare const f: typeof g`: f has the type of g (same file)
     var initCall: String?               // `const x = callee(...)`: the callee as written (its declared return type is x's type)
     var heritage: [String] = []         // extends (class: one; interface: several)
     var members: [NJSMember] = []

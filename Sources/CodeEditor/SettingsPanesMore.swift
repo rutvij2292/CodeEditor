@@ -95,6 +95,12 @@ final class LanguagesPane: SettingsPane {
         nativeJS.setAccessibilityLabel("Native JavaScript and TypeScript engine")
         onRefresh { nativeJS.state = NativeJS.enabled ? .on : .off }
         row(nil, nativeJS, help: "Go to definition, hover, find usages, import and member completion come from Kode's built-in parser first (tsconfig paths, node_modules, re-exports, classes); the TypeScript server answers whatever native cannot be certain about. Turn off to leave everything to the server.")
+        let nativeJSOnly = NSButton(checkboxWithTitle: "Plain JS / TS projects: do not start the TypeScript server (opt-in)", target: nil, action: nil)
+        nativeJSOnly.target = action { c in NativeJS.nativeOnly = (c as? NSButton)?.state == .on }
+        nativeJSOnly.action = #selector(SettingsAction.fire(_:))
+        nativeJSOnly.setAccessibilityLabel("Do not start the TypeScript server for plain JavaScript and TypeScript projects")
+        onRefresh { nativeJSOnly.state = NativeJS.nativeOnly ? .on : .off }
+        row(nil, nativeJSOnly, help: "Saves the server's 230 MB - 1 GB. You keep go to definition, hover, find usages, import and member completion and missing / unused import checks; you lose rename, type errors, completion and hover for inferred types, signature help and quick fixes. Vue projects always keep the server. Applies to projects opened afterwards.")
         let nativeJSDiag = NSButton(checkboxWithTitle: "Native JS / TS diagnostics (missing relative imports, unused imports)", target: nil, action: nil)
         nativeJSDiag.target = action { c in
             NativeJSDiag.enabled = (c as? NSButton)?.state == .on

@@ -14,17 +14,19 @@ extension NJSModules {
     static let aliasConfigNames = ["vite.config.js", "vite.config.mjs", "vite.config.ts", "vite.config.mts", "vite.config.cjs", "vite.config.cts",
                                    "webpack.config.js", "webpack.mix.js", "vue.config.js", "rspack.config.js", "rollup.config.js", "nuxt.config.ts", "nuxt.config.js"]
 
-    private func aliasConfig(for dir: String) -> String? {
-        lock.lock(); if let c = aliasConfigForDir[dir] { lock.unlock(); return c.isEmpty ? nil : c }; lock.unlock()
-        var d = dir, found = ""
+    /// Every bundler config from `dir` up to the repository top, nearest first (a module's own vite.config.js usually has no aliases;
+    /// the app's does).
+    private func aliasConfigs(for dir: String) -> [String] {
+        lock.lock(); if let c = aliasConfigForDir[dir] { lock.unlock(); return c.isEmpty ? [] : c.components(separatedBy: "\n") }; lock.unlock()
+        var d = dir
+        var found: [String] = []
         for _ in 0..<12 {
-            for n in NJSModules.aliasConfigNames where LaravelFS.isFile(d + "/" + n) { found = d + "/" + n; break }
-            if !found.isEmpty || d == "/" || d.isEmpty || d == root { break }
+            for n in NJSModules.aliasConfigNames where LaravelFS.isFile(d + "/" + n) { found.append(d + "/" + n); break }
+            if d == "/" || d.isEmpty || LaravelFS.exists(d + "/.git") { break }
             d = (d as NSString).deletingLastPathComponent
         }
-        if found.isEmpty, d == root || d.isEmpty { for n in NJSModules.aliasConfigNames where LaravelFS.isFile(root + "/" + n) { found = root + "/" + n; break } }
-        lock.lock(); aliasConfigForDir[dir] = found; lock.unlock()
-        return found.isEmpty ? nil : found
+        lock.lock(); aliasConfigForDir[dir] = found.joined(separator: "\n"); lock.unlock()
+        return found
     }
 
     func aliases(inConfig path: String) -> [NJSAlias] {
@@ -46,9 +48,11 @@ extension NJSModules {
     }
 
     func resolveBundlerAlias(_ spec: String, dir: String) -> String? {
-        guard !spec.hasPrefix("."), !spec.hasPrefix("/"), let cfg = aliasConfig(for: dir) else { return nil }
+        guard !spec.hasPrefix("."), !spec.hasPrefix("/") else { return nil }
+        let all = aliasConfigs(for: dir).flatMap { aliases(inConfig: $0) }
+        guard !all.isEmpty else { return nil }
         // longest key first (vite checks them in order; the most specific wins for the same prefix)
-        for a in aliases(inConfig: cfg).sorted(by: { $0.key.count > $1.key.count }) {
+        for a in all.sorted(by: { $0.key.count > $1.key.count }) {
             if spec == a.key { if let r = tryModule(a.target, preferTypes: true) { return r }; continue }
             if spec.hasPrefix(a.key + "/") || (a.key.hasSuffix("/") && spec.hasPrefix(a.key)) {
                 let rest = spec.dropFirst(a.key.count).drop(while: { $0 == "/" })
