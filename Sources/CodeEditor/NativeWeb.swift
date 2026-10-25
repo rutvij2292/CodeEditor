@@ -3,7 +3,7 @@ import AppKit
 /// Native CSS / HTML / Tailwind language service (replaces vscode-html / vscode-css / the Tailwind server feature by feature,
 /// see docs/native-web.md). Same shape as the native PHP engine: everything is on demand, runs on a per-project serial utility
 /// queue, keeps small byte-capped caches (parsed CSS indexes, the resolved Tailwind theme) and never polls or starts a process.
-/// External servers stay the fallback unless "native only" is switched on.
+/// External servers are only started when "native only" is switched off.
 enum NativeWeb {
     static let enabledKey = "web.native.enabled"
     static let nativeOnlyKey = "web.nativeOnly"
@@ -14,9 +14,9 @@ enum NativeWeb {
         set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
     }
 
-    /// 'Use native HTML / CSS / Tailwind only (stop the external servers)'. Default OFF: the servers stay the fallback.
+    /// 'Use native HTML / CSS / Tailwind only (stop the external servers)'. Default ON: the html / css / tailwind servers (about 100 / 165 / 345 MB) are not started; turn off to run them.
     static var nativeOnly: Bool {
-        get { UserDefaults.standard.object(forKey: nativeOnlyKey) as? Bool ?? false }
+        get { UserDefaults.standard.object(forKey: nativeOnlyKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: nativeOnlyKey) }
     }
 

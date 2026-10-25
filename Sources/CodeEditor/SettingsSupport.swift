@@ -163,6 +163,8 @@ enum SettingsDefaults {
         NativePHPDiag.resetPrefs()
         UserDefaults.standard.removeObject(forKey: NativePy.enabledKey)
         PyDiagGroup.resetPrefs()
+        UserDefaults.standard.removeObject(forKey: NativeWeb.enabledKey)
+        UserDefaults.standard.removeObject(forKey: NativeWeb.nativeOnlyKey)
     }
 
     static func restoreTerminal() {
