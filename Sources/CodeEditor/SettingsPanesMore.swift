@@ -16,7 +16,7 @@ final class LanguagesPane: SettingsPane {
         nativeOnly.action = #selector(SettingsAction.fire(_:))
         nativeOnly.setAccessibilityLabel("Use native PHP engine only")
         onRefresh { nativeOnly.state = NativePHP.nativeOnly ? .on : .off }
-        row(nil, nativeOnly, help: "Go to definition and hover come from Kode's built-in PHP index (about 0 MB extra). Intelephense (160-600 MB) is not started; features not yet native (find usages, rename, signature help) are unavailable meanwhile; diagnostics are native (see PHP diagnostics below). See docs/native-php.md.")
+        row(nil, nativeOnly, help: "Definition, hover, find usages, rename, signature help and diagnostics come from Kode's built-in PHP engine (about 0 MB extra). Intelephense (160-1100 MB) is not started; turn this off to run it alongside. See docs/native-php.md.")
 
         section("PHP diagnostics")
         for g in NPDiagGroup.allCases {

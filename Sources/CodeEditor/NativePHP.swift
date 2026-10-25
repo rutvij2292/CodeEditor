@@ -9,9 +9,9 @@ import AppKit
 enum NativePHP {
     static let nativeOnlyKey = "php.nativeOnly"
 
-    /// 'Use native PHP engine only (stop Intelephense)'. Default OFF: Intelephense stays the fallback.
+    /// 'Use native PHP engine only (stop Intelephense)'. Default ON: Intelephense (160-1100 MB, aborts at its 512 MB heap cap on large vendor trees) is not started; turn off to run it.
     static var nativeOnly: Bool {
-        get { UserDefaults.standard.object(forKey: nativeOnlyKey) as? Bool ?? false }
+        get { UserDefaults.standard.object(forKey: nativeOnlyKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: nativeOnlyKey) }
     }
 
