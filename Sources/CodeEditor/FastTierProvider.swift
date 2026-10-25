@@ -76,7 +76,7 @@ final class FastTierProvider: CompletionProvider {
         CompletionLex.resetCache()
         let region = CompletionLex.info(context).region
         let state = CompletionLex.state(context)
-        if state == .comment && region != .html { deliver([], false); return }
+        if state == .comment && region != .html && !(region == .php && !CompletionLex.isBlade(context)) { deliver([], false); return }
         let fp = FastProject.shared(root: URL(fileURLWithPath: r))
         fp.queue.async { [weak self] in
             guard let self, self.token == mine else { return }
@@ -128,6 +128,7 @@ enum FastEngine {
         if blade, region == .html, let r = componentItems(ns, caret, fp) { return r }
         if region == .js || region == .css || region == .html && !blade { return Result(items: []) }
         if blade && region == .html { return Result(items: []) }
+        if state == .comment, region == .php, !blade { return docblockItems(ctx, ns, caret: caret, fp: fp) }
         guard state == .code else { return Result(items: []) }
         // 3. PHP code: use-statements, members, class names
         return phpItems(ctx, ns, caret: caret, blade: blade, fp: fp)
@@ -344,7 +345,7 @@ enum FastEngine {
             let typed = line.substring(with: m.range(at: 1))
             return useStatementItems(typed: typed, range: NSRange(location: caret - typed.utf16.count, length: typed.utf16.count), fp: fp)
         }
-        if blade { return Result(items: []) }
+        if blade { return bladeClassItems(ctx, ns, caret: caret, fp: fp) }
         // member access
         let nullsafe = before.hasSuffix("?->")
         let isArrow = before.hasSuffix("->")
@@ -417,6 +418,30 @@ enum FastEngine {
         for kw in ["function", "class", "interface", "trait", "enum", "const", "namespace", "case", "->", "::", "use"] where t.hasSuffix(kw) && !(kw == "use") { return Result(items: []) }
         if prefix.count < 2 && !ctx.isManual { return Result(items: []) }
         return classItems(prefix: prefix, ctx: ctx, ns: ns, range: ctx.prefixRange, fp: fp, typed: classPositionExpectation(ns, before: t, prefixStart: p, ctx: ctx, fp: fp))
+    }
+
+    /// Types in docblock tags (`@param Fo|`, `@return Collection<int, Us|>`, `@var`, `@throws`): project / vendor / built-in classes, `use` added on accept.
+    private static let docTypeRx = try! NSRegularExpression(pattern: #"@(?:param|return|var|throws|property|property-read|property-write|method|extends|implements|template-extends|mixin)\s+(?:[\w\\|<>\[\]?&,\s]*[|<,&?\s])?$"#)
+
+    private static func docblockItems(_ ctx: CompletionContext, _ ns: NSString, caret: Int, fp: FastProject) -> Result {
+        let prefix = ctx.prefix
+        guard prefix.count >= 2 || ctx.isManual, let f = prefix.unicodeScalars.first, CharacterSet.letters.contains(f) else { return Result(items: []) }
+        let before = CompletionLex.line(before: ctx.prefixRange.location, ns)
+        // `@param Foo $x`: once a `$name` follows the type we are in the description
+        guard !before.contains("$"), docTypeRx.firstMatch(in: before, range: NSRange(location: 0, length: (before as NSString).length)) != nil else { return Result(items: []) }
+        if ctx.prefixRange.location > 0, ns.character(at: ctx.prefixRange.location - 1) == 92 { return Result(items: []) }
+        return classItems(prefix: prefix, ctx: ctx, ns: ns, range: ctx.prefixRange, fp: fp)
+    }
+
+    /// Blade `{{ new Fo| }}` / `@php` blocks: classes inserted fully qualified (a Blade view has no `use` section to extend).
+    private static func bladeClassItems(_ ctx: CompletionContext, _ ns: NSString, caret: Int, fp: FastProject) -> Result {
+        let prefix = ctx.prefix
+        guard prefix.count >= 2, let f = prefix.unicodeScalars.first, CharacterSet.letters.contains(f), CompletionLex.info(ctx).region == .bladeExpr else { return Result(items: []) }
+        let p = ctx.prefixRange.location
+        let t = CompletionLex.line(before: p, ns).trimmingCharacters(in: .whitespaces)
+        guard p == 0 || ![36, 92, 64, 62, 45].contains(Int(ns.character(at: p - 1))) else { return Result(items: []) }
+        guard t.hasSuffix("new") || t.hasSuffix("instanceof") || t.hasSuffix("(") || t.hasSuffix(",") else { return Result(items: []) }
+        return classItems(prefix: prefix, ctx: ctx, ns: ns, range: ctx.prefixRange, fp: fp, qualified: true)
     }
 
     /// `new |`, `throw new |`, `catch (|`: what the surrounding code expects there (ev + expected type), nil when unknown.
@@ -527,7 +552,7 @@ enum FastEngine {
         return Result(items: items, incomplete: true)
     }
 
-    private static func classItems(prefix: String, ctx: CompletionContext, ns: NSString, range: NSRange, fp: FastProject, typed: (FTEval, FTExpected)? = nil) -> Result {
+    private static func classItems(prefix: String, ctx: CompletionContext, ns: NSString, range: NSRange, fp: FastProject, typed: (FTEval, FTExpected)? = nil, qualified: Bool = false) -> Result {
         let cands = candidates(prefix, fp: fp, limit: 40)
         guard !cands.isEmpty else { return Result(items: []) }
         let cur = FTParser.parse(ns)
@@ -537,7 +562,7 @@ enum FastEngine {
         for c in cands {
             var insert = c.short
             var edits: [(range: NSRange, text: String)] = []
-            if let cur { (insert, edits) = importEdit(c.fqn, short: c.short, cur: cur) }
+            if qualified { insert = "\\" + c.fqn } else if let cur { (insert, edits) = importEdit(c.fqn, short: c.short, cur: cur, text: ns) }
             let ambiguous = (count[c.short] ?? 0) > 1
             var it = CI.make(ambiguous ? "\(c.short) (\((c.fqn as NSString).deletingLastPathComponent.isEmpty ? namespaceOf(c.fqn) : namespaceOf(c.fqn)))" : c.short, c.kind,
                              detail: c.fqn, insert: insert, sort: (c.project ? "1" : "2") + c.short.lowercased(), doc: "`\(c.fqn)`\n\nAdds `use \(c.fqn);` when accepted.", range: range)
@@ -559,7 +584,17 @@ enum FastEngine {
     }
 
     /// (text to insert at the caret, extra edits) for referencing `fqn` from the file described by `cur`.
-    static func importEdit(_ fqn: String, short: String, cur: FTClass) -> (String, [(range: NSRange, text: String)]) {
+    static func importEdit(_ fqn: String, short: String, cur: FTClass, text: NSString? = nil) -> (String, [(range: NSRange, text: String)]) {
+        // the real planner (alias / same namespace / conflict aware, sorted among the existing imports, `declare(strict_types)` aware, CRLF)
+        if let text {
+            switch PHPImports.plan(fqn: fqn, short: short, in: text) {
+            case .edit(let e): return (short, [(e.range, e.text)])
+            case .sameNamespace: return (short, [])
+            case .alreadyImported: return (cur.uses.first(where: { $0.value == fqn })?.key ?? short, [])
+            case .conflict: return ("\\" + fqn, [])
+            case .unsupported: break
+            }
+        }
         let ns = namespaceOf(fqn) == "global" ? "" : namespaceOf(fqn)
         if ns == cur.ns { return (short, []) }
         if cur.uses.values.contains(fqn) { return (cur.uses.first(where: { $0.value == fqn })?.key ?? short, []) }
