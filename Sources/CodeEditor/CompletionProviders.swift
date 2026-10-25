@@ -344,6 +344,7 @@ enum HTMLCompletion {
                                                  "async", "defer", "controls", "autoplay", "loop", "muted", "novalidate", "allowfullscreen", "v-else", "v-once", "v-pre", "v-cloak", "playsinline"]
 
     static func generate(_ ctx: CompletionContext) -> [CompletionItem] {
+        guard !NativeWeb.handles(ctx.fileURL) else { return [] }    // native HTML service (NativeHTMLService.swift) answers these files
         let inf = CompletionLex.info(ctx)
         guard inf.region == .html, CompletionLex.state(ctx) == .code else { return [] }
         let ns = ctx.text as NSString
@@ -515,6 +516,7 @@ enum BladeCompletion {
 
 enum CSSCompletion {
     static func generate(_ ctx: CompletionContext) -> [CompletionItem] {
+        guard !NativeWeb.handles(ctx.fileURL) else { return [] }    // native CSS service (NativeCSSService.swift) answers these files
         let inf = CompletionLex.info(ctx)
         guard inf.region == .css, CompletionLex.state(ctx) != .comment else { return [] }
         let ns = ctx.text as NSString
@@ -621,6 +623,7 @@ enum TailwindCompletion {
     private static func words(_ s: String) -> [String] { CompletionData.words(s) }
 
     static func generate(_ ctx: CompletionContext) -> [CompletionItem] {
+        if NativeWeb.tailwindActive(for: ctx.fileURL) { return [] }   // the project's real theme answers (NativeTailwind*.swift)
         let inf = CompletionLex.info(ctx)
         let ns = ctx.text as NSString
         let caret = ctx.caret

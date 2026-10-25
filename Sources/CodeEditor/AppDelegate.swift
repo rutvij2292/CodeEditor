@@ -68,6 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         NativePHPDiagController.start()
         NativePHP.installMemoryHooks()
         NativePy.start()
+        NativeWeb.installMemoryHooks()
+        NativeWebDiagController.start()
         CompletionSystem.symbolProvider = { [weak self] in self?.active?.symbolEntries ?? [] }
         LanguageServers.start()
         LanguageServers.openLocation = { [weak self] url, line, _ in self?.active?.open(url, line: line) }
@@ -102,7 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         Self.installLanguageHandlers()
         // Laravel-aware targets (view(), route(), <x-…>) take precedence over the language server for Cmd-click / Cmd-B.
         LanguageServers.beforeDefinition = { tab, offset in
-            guard !LaravelNavigator.targets(in: tab, at: offset).isEmpty else { return NativeLang.goToDefinition(in: tab, at: offset) }
+            guard !LaravelNavigator.targets(in: tab, at: offset).isEmpty else { return NativeLang.goToDefinition(in: tab, at: offset) || NativeWeb.goToDefinition(in: tab, at: offset) }
             tab.textView.setSelectedRange(NSRange(location: offset, length: 0))
             return LaravelNavigator.goToDeclaration(in: tab, openLocation: { url, line, column in LaravelNavigator.openLocation?(url, line, column) },
                                                     over: tab.textView.window)

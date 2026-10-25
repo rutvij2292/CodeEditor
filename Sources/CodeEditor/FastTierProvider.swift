@@ -17,6 +17,7 @@ enum FastTier {
     /// FSEvents batch handler hook: forces the next request to re-validate its sections.
     static func invalidate(root: URL) {
         FastProject.existing(root: root)?.markDirty()
+        NativeWeb.invalidate(root: root)
         rootCache = rootCache.filter { $0.value == "" ? false : true }
     }
 
