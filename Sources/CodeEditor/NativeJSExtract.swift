@@ -91,7 +91,10 @@ struct NJSExtractor {
         switch node.kind {
         case "import_statement": importStatement(node, s)
         case "export_statement": exportStatement(node, s)
-        case "expression_statement": commonJS(node, s)
+        case "expression_statement":
+            if let m = node.kids.first, m.kind == "internal_module" || m.kind == "module" {            // `namespace X { }` at the top level
+                for sy in syms(for: m, outer: exp ?? node, ambient: false) { s.add(sy) }
+            } else { commonJS(node, s) }
         default:
             for sy in syms(for: node, outer: exp ?? node, ambient: false) {
                 if exp != nil { sy.exported = true; s.exports[sy.name] = s.exports[sy.name] ?? .local(sy.name) }
@@ -275,7 +278,7 @@ struct NJSExtractor {
             guard let n = node.field("name"), n.kind == "identifier" || n.kind == "nested_identifier" else { return [] }
             let nameNode = n.kind == "nested_identifier" ? (n.kids.first ?? n) : n
             let sy = sym(nameNode, .namespace, outer: outer, sigEnd: node.field("body")?.start ?? node.end)
-            if let body = node.field("body") { sy.members = namespaceMembers(body, ambient: ambient || outer.kind == "ambient_declaration") }
+            if let body = node.field("body") { sy.members = namespaceMembers(body, ambient: ambient || outer.kind == "ambient_declaration" || doc.path.hasSuffix(".d.ts")) }
             return [sy]
         case "ambient_declaration":
             var out: [NJSSym] = []
@@ -339,6 +342,7 @@ struct NJSExtractor {
                 sy.valueMembers = sh.valueMembers
                 if sy.typeName == nil { sy.typeName = sh.typeName }
             }
+            if let ta = d.field("type")?.kids.first, ta.kind == "object_type" { sy.members = signatureMembers(ta, typeParams: []) }       // `declare var x: { go(): void }`
             if sy.typeName == nil, let v = value, v.kind == "call_expression", let f = v.field("function"), f.kind == "identifier" || f.kind == "member_expression" { sy.initCall = f.text(ns) }
             out.append(sy)
         } else {
@@ -422,6 +426,14 @@ struct NJSExtractor {
         var out: [NJSMember] = []
         for m in body.kids {
             switch m.kind {
+            case "construct_signature", "call_signature":                 // `new (...): T` / `(...): T` of a constructor / callable interface
+                let isNew = m.kind == "construct_signature"
+                var mem = NJSMember(name: isNew ? "new" : "()", kind: .method, loc: m.start, len: isNew ? 3 : 1, declStart: m.start, sigEnd: m.end)
+                mem.typeName = typeName(m.field(isNew ? "type" : "return_type"))
+                if let t = mem.typeName, tps.contains(t) || typeParams(m).contains(t) { mem.typeName = nil }
+                mem.sigText = fnSig(m)
+                (mem.docStart, mem.docEnd) = docRange(before: m)
+                out.append(mem)
             case "property_signature", "method_signature":
                 guard let (nm, nn) = memberName(m.field("name")) else { continue }
                 var mem = NJSMember(name: nm, kind: m.kind == "method_signature" ? .method : .property, loc: nn.start, len: nn.range.length, declStart: m.start, sigEnd: m.end)
@@ -569,7 +581,7 @@ extension NJSExtractor {
         var start = params.start
         if let tp = fn.field("type_parameters") { start = min(start, tp.start) }
         var end = params.end
-        if let rt = fn.field("return_type") { end = max(end, rt.end) }
+        if let rt = fn.field("return_type") ?? (fn.kind == "construct_signature" ? fn.field("type") : nil) { end = max(end, rt.end) }
         guard end > start, end - start < 600 else { return nil }
         var t = ns.substring(with: NSRange(location: start, length: end - start)).replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         if params.kind == "identifier" { t = "(" + t + ")" }              // `x => ...`

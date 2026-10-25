@@ -172,7 +172,7 @@ if sigs:
                     pr = pr.lstrip(".")
                     m = re.match(r"[A-Za-z_$][\w$]*", pr)
                     names.append(m.group(0) if m else pr[:6])
-                return l[:i].split("<")[0] + "(" + ",".join(names) + ")"
+                return (l[:i].split("<")[0]).replace("new", "", 1) + "(" + ",".join(names) + ")"
             if {key(x) for x in sl} & {key(x) for x in nl}: agree += 1
             else:
                 lab += 1

@@ -117,7 +117,7 @@ enum SelfTestNativeJS {
             fputs("SYNTAX scanned \(files) files, \(bad) non-declaration files with a syntax finding (+\(dts) declaration files)\n", stderr)
             exit(0)
         }
-        if AppEnv.value("CE_NJS_ONLY") != nil { run(); runRefs(); runExtras(); runRename(); runSig(); SelfTest.finish() }
+        if AppEnv.value("CE_NJS_ONLY") != nil { run(); runRefs(); runExtras(); runRename(); runSig(); runLib(); runAmbient(); SelfTest.finish() }
     }
 
     private static func check(_ name: String, _ ok: @autoclosure () -> Bool) { SelfTest.check(name, ok()) }
@@ -315,8 +315,7 @@ enum SelfTestNativeJS {
         is_("this.baseMethod (two levels)", "baseMethod()", 1, "src/util.ts:16")
         // scope
         is_("shadowing parameter beats the import", "helper }", 0, "src/main.ts:29")
-        is_("builtin global stays with the server", "console", 0, "nil")
-        is_("Promise stays with the server", "Promise)", 0, "nil")
+        check("js: builtin globals resolve into the TypeScript libs", where_(hit("console")).contains("lib.dom.d.ts") && where_(hit("Promise)")).contains("lib.es"))
         is_("declaration itself resolves to itself", "use(u", 0, "src/main.ts:13")
         is_("export specifier", "helper as h2", 0, "src/util.ts:6")
 

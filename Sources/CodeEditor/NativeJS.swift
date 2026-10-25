@@ -14,6 +14,13 @@ enum NativeJS {
     }
 
     static let nativeOnlyKey = "js.nativeOnly"
+    static let libsKey = "js.libs"
+
+    /// Resolve globals (Math, Promise, console, document, ...) into the TypeScript standard library (default on).
+    static var libsEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: libsKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: libsKey) }
+    }
 
 
     /// OPT-IN (default off): do not start the TypeScript server for plain JS / TS projects. Native then answers go to definition, hover,
@@ -110,6 +117,7 @@ enum NativeJS {
         NJSProject.trimAll()
         NJSRefs.dropMemos()
         NJSAutoImport.dropCaches()
+        NJSLib.trim()
         NJSParsers.drop()
         NJSTexts.clear()
         NJSRefs.dropFileList()

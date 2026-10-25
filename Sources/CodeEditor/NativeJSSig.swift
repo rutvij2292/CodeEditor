@@ -67,13 +67,15 @@ extension NJSEnv {
     }
 
     private func signature(for r: NJSRes, label name: String, argCount: Int, activeIndex: Int) -> (payload: [String: Any], fits: Bool)? {
-        guard let sig = r.sigText else { return nil }
+        guard var sig = r.sigText else { return nil }
+        // a `this:` parameter is a type annotation, not an argument: tsc leaves it out of the list
+        if let m = sig.range(of: #"\(this: [^,)]*(, )?"#, options: .regularExpression) { sig.replaceSubrange(m, with: "(") }
         let label = name + sig
         let prefix = (name as NSString).length
         let ranges = NJSEnv.parameterRanges(sig).map { NSRange(location: $0.location + prefix, length: $0.length) }
         var docs: [String: String] = [:], summary = ""
-        if r.docStart >= 0, let t = text(r.path), r.docEnd <= t.length, r.docEnd > r.docStart {
-            (summary, docs) = NJSEnv.jsdocParts(t.substring(with: NSRange(location: r.docStart, length: r.docEnd - r.docStart)))
+        if r.docStart >= 0, let t = source(r.path), r.docEnd <= t.length, r.docEnd > r.docStart {
+            (summary, docs) = NJSEnv.jsdocParts(t.sub(r.docStart, r.docEnd))
         }
         var params: [[String: Any]] = []
         let ns = label as NSString
@@ -121,6 +123,10 @@ extension NJSEnv {
         if isNew || res.contains(where: { $0.kind == .class }) {
             guard isNew else { return .unknown }                                // calling a class without `new`: not a signature
             var out: [NJSRes] = []
+            for r in res where r.kind == .variable || r.kind == .constant {      // `declare var Map: MapConstructor`
+                guard let t = r.typeName else { continue }
+                for iface in resolveTypeRef(t, in: r.path) { out += members(of: iface, name: "new", isStatic: false) }
+            }
             for r in res where r.kind == .class {
                 let ctors = members(of: r, name: "constructor", isStatic: false)
                 out += ctors
@@ -128,6 +134,10 @@ extension NJSEnv {
             }
             guard !out.isEmpty else { return .unknown }
             res = out; name = "new " + name
+        } else if res.allSatisfy({ ($0.kind == .variable || $0.kind == .constant) && $0.sigText == nil && $0.typeName != nil }) {
+            var out: [NJSRes] = []                                              // a callable interface: `Number(x)`
+            for r in res { for iface in resolveTypeRef(r.typeName ?? "", in: r.path) { out += members(of: iface, name: "()", isStatic: false) } }
+            if !out.isEmpty { res = out }
         }
         // an overload list hides its implementation
         if res.contains(where: { $0.overload }) { res = res.filter { $0.overload } }

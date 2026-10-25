@@ -22,6 +22,10 @@ cp Fonts/*.ttf Fonts/OFL.txt "$APP/Contents/Resources/Fonts/"
 [ -f PhpStubs/index.txt ] || { echo "PhpStubs/ missing: run scripts/make-php-stubs.py" >&2; exit 1; }
 cp -R PhpStubs "$APP/Contents/Resources/PhpStubs"
 
+# TypeScript standard library (lib.*.d.ts, Apache-2.0) for the native JS / TS engine: read lazily, memory mapped, never at launch.
+[ -f TsLib/lib.es5.d.ts ] || { echo "TsLib/ missing" >&2; exit 1; }
+cp -R TsLib "$APP/Contents/Resources/TsLib"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

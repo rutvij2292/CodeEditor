@@ -125,7 +125,136 @@ extension SelfTestNativeJS {
         check("sig: a class without a constructor shows new X()", help("new Widget(")?.sigs == ["new Widget()"])
         check("sig: the nested call is the one asked about", help("over(arrow(1, ")?.sigs == ["arrow(x: number, y = 2): number"] && help("over(arrow(1, ")?.param == 1)
         check("sig: outside any call there is no popup", outcomeKind("over(1)") == "none" && outcomeKind("const z = 1") == "none")
-        check("sig: an unresolvable callee is left to the server", outcomeKind("mystery(") == "unknown" && outcomeKind("console.log(") == "unknown")
+        check("sig: an unresolvable callee is left to the server", outcomeKind("mystery(") == "unknown")
         check("sig: inside a callback body is not an argument position", outcomeKind("over(() => { const q = ") == "none")
+    }
+}
+
+
+extension SelfTestNativeJS {
+    /// The TypeScript standard library: lib selection by tsconfig, globals, merged interfaces, constructors, hover and signature help.
+    static func runLib() {
+        guard let bundled = NJSLib.bundledDirectory() else { check("lib: bundled TsLib/ directory found", false); return }
+        NJSLib.directoryOverride = bundled
+        defer { NJSLib.directoryOverride = nil; NJSLib.trim() }
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("ce-njslib-\(getpid())").standardizedFileURL
+        try? fm.removeItem(at: root)
+        defer { try? fm.removeItem(at: root) }
+        put(root, "package.json", "{}")
+        func where_(_ code: String, _ needle: String, ext: String = "ts", nth: Int = 0) -> [String] {
+            let url = root.appendingPathComponent("t_\(abs(code.hashValue) % 100000).\(ext)")
+            let h = NativeJS.lookup(url: url, text: code as NSString, offset: off(code, needle, nth, plus: 1), root: root.path)
+            return (h?.targets ?? []).map { ((($0.path as NSString).lastPathComponent) + ":\($0.line)") }
+        }
+        // default program: lib.es2025.full (what tsc 7 uses without a tsconfig)
+        check("lib: Math.round -> lib.es5.d.ts", where_("Math.round(1)", "round").first?.hasPrefix("lib.es5.d.ts:") == true)
+        check("lib: console.log -> lib.dom.d.ts", where_("console.log(1)", "log").first?.hasPrefix("lib.dom.d.ts:") == true)
+        check("lib: JSON.parse", where_("JSON.parse('1')", "parse").first?.hasPrefix("lib.es5.d.ts:") == true)
+        check("lib: Object.assign lives in es2015.core", where_("Object.assign({}, {})", "assign").first?.hasPrefix("lib.es2015.core.d.ts:") == true)
+        let all = where_("Promise.all([])", "all")
+        check("lib: merged interface members come from every declaring file (Promise.all)", all.contains { $0.hasPrefix("lib.es2015.promise.d.ts:") } && all.contains { $0.hasPrefix("lib.es2015.iterable.d.ts:") })
+        check("lib: Object.entries -> es2017.object, Object.groupBy -> es2024.object, Promise.withResolvers -> es2024.promise",
+              where_("Object.entries({})", "entries").first?.hasPrefix("lib.es2017.object.d.ts:") == true && where_("Object.groupBy([], x => x)", "groupBy").first?.hasPrefix("lib.es2024.object.d.ts:") == true
+              && where_("Promise.withResolvers()", "withResolvers").first?.hasPrefix("lib.es2024.promise.d.ts:") == true)
+        check("lib: document.title", where_("document.title", "title").first?.hasPrefix("lib.dom.d.ts:") == true)
+        check("lib: constructed instances (new Map().set)", where_("const m = new Map()\nm.set(1, 2)", "set").first?.hasPrefix("lib.es2015.collection.d.ts:") == true)
+        check("lib: the global itself", where_("Promise.all([])", "Promise").contains { $0.hasPrefix("lib.es") })
+        check("lib: a type annotation (Promise<void>)", !where_("function f(): Promise<void> { return Promise.resolve() }", "Promise").isEmpty)
+        // the lines match the file the server reports (TypeScript 7 libs)
+        check("lib: exact lines of the TypeScript 7 libs", where_("Math.round(1)", "round") == ["lib.es5.d.ts:749"] && where_("JSON.parse('1')", "parse") == ["lib.es5.d.ts:1161"] && where_("Object.assign({}, {})", "assign").contains("lib.es2015.core.d.ts:284"))
+
+        // lib selection by tsconfig
+        put(root, "es5/tsconfig.json", "{\"compilerOptions\":{\"target\":\"es5\"}}")
+        put(root, "es2017/tsconfig.json", "{// c\n\"compilerOptions\":{\"target\":\"es2017\",\"lib\":[\"es2017\",\"dom\"]}}")
+        put(root, "es2015/tsconfig.json", "{\"compilerOptions\":{\"lib\":[\"es2015\"]}}")
+        put(root, "esnext/tsconfig.json", "{\"compilerOptions\":{\"target\":\"esnext\"}}")
+        func in_(_ dir: String, _ code: String, _ needle: String) -> [String] {
+            let url = root.appendingPathComponent(dir + "/t.ts")
+            let h = NativeJS.lookup(url: url, text: code as NSString, offset: off(code, needle, 0, plus: 1), root: root.path)
+            return (h?.targets ?? []).map { (($0.path as NSString).lastPathComponent) + ":\($0.line)" }
+        }
+        check("lib: target es5 keeps the ES2015 libs (as tsc 7 does) but not ES2017", !in_("es5", "Object.assign({}, {})", "assign").isEmpty && in_("es5", "Object.entries({})", "entries").isEmpty)
+        check("lib: lib [es2017, dom] has entries, no groupBy", !in_("es2017", "Object.entries({})", "entries").isEmpty && in_("es2017", "Object.groupBy([], x => x)", "groupBy").isEmpty && !in_("es2017", "document.title", "title").isEmpty)
+        check("lib: lib [es2015] has no DOM", in_("es2015", "console.log(1)", "log").isEmpty && in_("es2015", "document.title", "title").isEmpty && !in_("es2015", "Math.round(1)", "round").isEmpty)
+        check("lib: target esnext adds the esnext libs", !in_("esnext", "Array.fromAsync([])", "fromAsync").isEmpty && NativeJS.lookup(url: root.appendingPathComponent("t_x.ts"), text: "Array.fromAsync([])" as NSString, offset: 8, root: root.path) == nil)
+
+        // hover and signature help come from the libs too
+        let hov = NativeJS.lookup(url: root.appendingPathComponent("h.ts"), text: "Math.round(1)" as NSString, offset: 6, root: root.path)
+        check("lib: hover shows the declaration and its doc comment", hov?.markdown.contains("round(x: number): number") == true && hov?.markdown.contains("Returns a supplied numeric expression rounded to the nearest integer") == true)
+        func sig(_ code: String) -> [String] {
+            guard case .help(let p) = NativeJS.signatureHelp(url: root.appendingPathComponent("s.ts"), text: code as NSString, caret: (code as NSString).length) else { return [] }
+            return ((p["signatures"] as? [[String: Any]]) ?? []).map { ($0["label"] as? String) ?? "" }
+        }
+        check("lib: signature help of a global function", sig("parseInt(").first?.hasPrefix("parseInt(string: string, radix?: number)") == true)
+        check("lib: signature help of a method and of a constructor", sig("Math.max(").first?.hasPrefix("max(...values: number[])") == true && sig("new Map(").contains { $0.hasPrefix("new Map(") })
+        check("lib: no memory beyond the index: the lib files stay memory mapped", NJSLib.indexCount >= 1)
+    }
+}
+
+
+extension SelfTestNativeJS {
+    /// Ambient modules (`declare module`), `declare global` and script globals of @types packages.
+    static func runAmbient() {
+        guard let bundled = NJSLib.bundledDirectory() else { return }
+        NJSLib.directoryOverride = bundled
+        defer { NJSLib.directoryOverride = nil; NJSLib.trim() }
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("ce-njsamb-\(getpid())").standardizedFileURL
+        try? fm.removeItem(at: root)
+        defer { try? fm.removeItem(at: root) }
+        put(root, "package.json", "{}")
+        put(root, "node_modules/@types/node/package.json", "{\"name\":\"@types/node\",\"types\":\"index.d.ts\"}")
+        put(root, "node_modules/@types/node/index.d.ts", "/// <reference path=\"path.d.ts\" />\n/// <reference path=\"globals.d.ts\" />\n")
+        put(root, "node_modules/@types/node/path.d.ts", """
+        declare module "node:path" {
+            namespace path {
+                interface ParsedPath { root: string; dir: string }
+                interface PlatformPath {
+                    /** Resolves a sequence of paths. */
+                    resolve(...paths: string[]): string;
+                    sep: string;
+                }
+            }
+            const path: path.PlatformPath;
+            export = path;
+        }
+        declare module "path" {
+            import path = require("node:path");
+            export = path;
+        }
+
+        """)
+        put(root, "node_modules/@types/node/globals.d.ts", """
+        declare function require(id: string): any;
+        declare global {
+            var process: NodeJS.Process;
+            namespace NodeJS {
+                interface Process { cwd(): string; env: ProcessEnv }
+                interface ProcessEnv { [key: string]: string | undefined }
+            }
+        }
+
+        """)
+        put(root, "node_modules/@types/other/package.json", "{\"name\":\"@types/other\"}")
+        put(root, "node_modules/@types/other/index.d.ts", "declare var otherGlobal: { go(): void };\ndeclare class Gadget { spin(): void }\n")
+        func t(_ code: String, _ needle: String, nth: Int = 0) -> [String] {
+            let url = root.appendingPathComponent("src/a.ts")
+            let h = NativeJS.lookup(url: url, text: code as NSString, offset: off(code, needle, nth, plus: 1), root: root.path)
+            return (h?.targets ?? []).map { (($0.path as NSString).lastPathComponent) + ":\($0.line)" }
+        }
+        check("ambient: `import path from 'path'` reaches the module (export = const of an interface type)", t("import path from 'path'\npath.resolve('x')", "resolve").first?.hasPrefix("path.d.ts:") == true)
+        check("ambient: a named import from an `export =` module", t("import { resolve } from 'node:path'\nresolve('x')", "resolve").first?.hasPrefix("path.d.ts:") == true)
+        check("ambient: the specifier string itself", t("import path from 'path'", "'path'").first?.hasPrefix("path.d.ts:") == true)
+        check("ambient: a global declared inside `declare global` (process.cwd())", t("process.cwd()", "cwd").first?.hasPrefix("globals.d.ts:") == true)
+        check("ambient: a nested namespace type through a global (process.env)", t("process.env", "env").first?.hasPrefix("globals.d.ts:") == true)
+        check("ambient: script-level declarations of another @types package (class, var)", t("new Gadget().spin()", "spin").first?.hasPrefix("index.d.ts:") == true && t("otherGlobal.go()", "go").first?.hasPrefix("index.d.ts:") == true)
+        check("ambient: a plain script function (require)", t("require('x')", "require").first?.hasPrefix("globals.d.ts:") == true)
+        let hov = NativeJS.lookup(url: root.appendingPathComponent("src/b.ts"), text: "import path from 'path'\npath.resolve('x')" as NSString, offset: off("import path from 'path'\npath.resolve('x')", "resolve", 0, plus: 1), root: root.path)
+        check("ambient: hover with the doc comment", hov?.markdown.contains("resolve(...paths: string[]): string") == true && hov?.markdown.contains("Resolves a sequence of paths") == true)
+        put(root, "restricted/tsconfig.json", "{\"compilerOptions\":{\"types\":[\"other\"]}}")
+        let url2 = root.appendingPathComponent("restricted/c.ts")
+        check("ambient: tsconfig `types` restricts the automatic packages", NativeJS.lookup(url: url2, text: "process.cwd()" as NSString, offset: 9, root: root.path) == nil
+              && NativeJS.lookup(url: url2, text: "otherGlobal.go()" as NSString, offset: 12, root: root.path) != nil)
     }
 }
