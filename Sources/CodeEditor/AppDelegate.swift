@@ -455,6 +455,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 return
             case .notNative: break
             }
+            switch NativeJSUI.rename(w) {
+            case .handled: return
+            case .refused(let why):
+                if !LanguageServers.rename(in: tab, over: w.window) { unavailable(w, "Rename isn’t available here", why) }
+                return
+            case .notNative: break
+            }
             if !LanguageServers.rename(in: tab, over: w.window) {
                 unavailable(w, "Rename isn’t available", "The language server for this file doesn’t offer rename. Intelephense’s rename needs a premium licence.")
             }

@@ -110,6 +110,21 @@ final class LanguagesPane: SettingsPane {
         nativeJSDiag.setAccessibilityLabel("Native JavaScript and TypeScript diagnostics")
         onRefresh { nativeJSDiag.state = NativeJSDiag.enabled ? .on : .off }
         row(nil, nativeJSDiag, help: nil)
+        let nativeJSSyntax = NSButton(checkboxWithTitle: "Report unclosed brackets (syntax)", target: nil, action: nil)
+        nativeJSSyntax.target = action { c in
+            NativeJSDiag.syntaxEnabled = (c as? NSButton)?.state == .on
+            for ctl in NativeJSDiagController.controllers.values { ctl.schedule(initial: true) }
+        }
+        nativeJSSyntax.action = #selector(SettingsAction.fire(_:))
+        nativeJSSyntax.setAccessibilityLabel("Native syntax diagnostics for unclosed brackets")
+        onRefresh { nativeJSSyntax.state = NativeJSDiag.syntaxEnabled ? .on : .off }
+        row(nil, nativeJSSyntax, help: "Only the repairs tree-sitter is sure about (a missing ) ] or }); other parse errors are never reported because the grammar lacks some newer syntax.")
+        let nativeJSAuto = NSButton(checkboxWithTitle: "Auto-import suggestions while typing", target: nil, action: nil)
+        nativeJSAuto.target = action { c in NativeJSAutoImport.enabled = (c as? NSButton)?.state == .on }
+        nativeJSAuto.action = #selector(SettingsAction.fire(_:))
+        nativeJSAuto.setAccessibilityLabel("Auto-import suggestions")
+        onRefresh { nativeJSAuto.state = NativeJSAutoImport.enabled ? .on : .off }
+        row(nil, nativeJSAuto, help: "Exported names of other project files and dependencies appear in the completion list and add the import when accepted.")
         let nativeVue = NSButton(checkboxWithTitle: "Native Vue template service", target: nil, action: nil)
         nativeVue.target = action { c in NativeVue.enabled = (c as? NSButton)?.state == .on; NativeVue.trimMemory() }
         nativeVue.action = #selector(SettingsAction.fire(_:))

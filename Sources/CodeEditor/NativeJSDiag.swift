@@ -11,6 +11,12 @@ enum NativeJSDiag {
         get { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
     }
+    static let syntaxKey = "js.diag.syntax"
+    /// Syntax errors from tree-sitter ERROR / MISSING nodes. Silent unless the damage is small and local (see `syntaxErrors`).
+    static var syntaxEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: syntaxKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: syntaxKey) }
+    }
     static let maxBytes = 800_000
     static let maxResults = 100
 
@@ -57,6 +63,7 @@ enum NativeJSDiag {
                                   code: "unused-import", group: .imports))
             }
         }
+        if syntaxEnabled { out += syntaxErrors(doc) }
         return NativePHPDiag.finish(Array(out.prefix(maxResults * 2)))
     }
 
@@ -68,6 +75,35 @@ enum NativeJSDiag {
         guard env.proj.modules.resolve(spec, from: env.path) == nil else { return }
         out.append(NPDiag(range: frag.range, severity: isTS ? 1 : 2, message: "Cannot find module '\(spec)' or its corresponding type declarations.",
                           code: "module-not-found", group: .imports))
+    }
+
+    /// Unclosed `(` `[` `{` as tree-sitter repairs them (a MISSING closer), one per line, at most 5; nothing for declaration files, which
+    /// use syntax the grammar lacks, and nothing when more than 8 repairs were needed (the tree is too damaged to trust).
+    static func syntaxErrors(_ doc: NJSDoc) -> [NPDiag] {
+        guard doc.root.hasError, doc.text.length <= 400_000, !doc.path.hasSuffix(".d.ts"), !doc.path.hasSuffix(".d.mts"), !doc.path.hasSuffix(".d.cts") else { return [] }
+        var found: [(start: Int, len: Int, message: String)] = []
+        var stack = [doc.root]
+        var visited = 0
+        while let n = stack.popLast() {
+            visited += 1
+            if visited > 20_000 || found.count > 8 { return [] }
+            // Only tree-sitter's own repair of an unclosed bracket is trusted. ERROR nodes are NOT reported: scanning 30000 real files found
+            // grammar gaps (`export { a as function }`, variance `in/out`, `export type *`, `import("x").T` types) that parse as errors.
+            if n.isMissing { if [")", "]", "}"].contains(n.kind) { found.append((n.start, 1, "'\(n.kind)' expected.")) }; continue }
+            if n.kind == "ERROR" { continue }
+            guard n.hasError else { continue }
+            for c in n.allKids where c.hasError || c.isMissing || c.kind == "ERROR" { stack.append(c) }
+        }
+        guard !found.isEmpty, found.count <= 8 else { return [] }
+        var lines = Set<Int>()
+        var out: [NPDiag] = []
+        let table = NPLineStarts(doc.text)
+        for f in found.sorted(by: { $0.start < $1.start }) {
+            guard doc.inScript(f.start), lines.insert(table.position(of: f.start).line).inserted else { continue }
+            out.append(NPDiag(range: NSRange(location: f.start, length: min(f.len, doc.text.length - f.start)), severity: 1, message: f.message, code: "syntax", group: .syntax))
+            if out.count >= 5 { break }
+        }
+        return out
     }
 
     static func analyze(url: URL, text: NSString) -> [NPDiag] {

@@ -138,6 +138,38 @@ extension SelfTestNativeJS {
         put(root, "src/Shape2.vue", shadow)
         check("shape: reactive that is not Vue's is not trusted", NativeJS.lookup(url: root.appendingPathComponent("src/Shape2.vue"), text: shadow as NSString, offset: off(shadow, "count\nform", 0, plus: 1), root: root.path) == nil)
 
+        // document symbols (Go to Symbol / file symbols for TypeScript and Vue script)
+        let outline = SymbolExtractor.symbols(in: "export interface Opts { a: number }\nexport class Box { size = 1\n  grow(n: number) {} }\nexport const make = () => 1\nexport enum E { A }\nlet scratch = 1\n", fileExtension: "ts")
+        check("symbols: TypeScript outline has declarations and members, skips plain variables", Set(outline.map { "\($0.container ?? "").\($0.name)" }) == [".Opts", "Opts.a", ".Box", "Box.size", "Box.grow", ".make", ".E", "E.A"])
+
+        // auto-import: exported names of other files, with the import edit applied on accept
+        NativeJSAutoImport.enabled = true
+        put(root, "src/models/deep.ts", "const a = 1\n")
+        func accepted(_ file: String, _ code: String, _ label: String, from spec: String? = nil) -> String? {
+            let items = complete(root.appendingPathComponent(file), code, caretAfter: code.hasSuffix("Own") ? "Own" : code.hasSuffix("Wid") ? "Wid" : "libV")
+            guard let it = items.first(where: { $0.label == label && (spec == nil || $0.detail.hasSuffix(spec!)) }), let e = it.additionalEdits.first else { return nil }
+            return (code as NSString).replacingCharacters(in: e.range, with: e.text)
+        }
+        check("auto-import: joins the existing named import of the same module", accepted("src/ai.ts", "import { helper } from './util'\nconst x = new Own", "Owner") == "import { helper, Owner } from './util'\nconst x = new Own")
+        check("auto-import: a default export is offered under its declared name and imported as default", accepted("src/models/deep.ts", "import { User } from './user'\nconst w = new Wid", "Widget", from: "@/util")?.contains("import Widget from '@/util';") == true
+              || accepted("src/models/deep.ts", "import { User } from './user'\nconst w = new Wid", "Widget", from: "@/util")?.contains("import Widget from '@/util'") == true)
+        check("auto-import: the alias wins over a path that climbs out of the folder", accepted("src/models/deep.ts", "const w = new Wid", "Widget", from: "@/util")?.hasPrefix("import Widget from '@/util'") == true)
+        check("auto-import: quote and semicolon style follow the file", accepted("src/ai2.ts", "import { helper } from \"./util\";\nimport x from \"./cjs\";\nnew Own", "Owner")?.contains("import { helper, Owner } from \"./util\";") == true)
+        check("auto-import: names already in the file are not offered", complete(root.appendingPathComponent("src/ai.ts"), "import { Owner } from './util'\nconst x = new Own", caretAfter: "Own").allSatisfy { $0.additionalEdits.isEmpty || $0.label != "Owner" })
+        check("auto-import: not offered after a dot or inside a string", complete(root.appendingPathComponent("src/ai.ts"), "const x = y.Own", caretAfter: "Own").allSatisfy { $0.additionalEdits.isEmpty }
+              && complete(root.appendingPathComponent("src/ai.ts"), "const x = 'Own", caretAfter: "Own").allSatisfy { $0.additionalEdits.isEmpty })
+        let sc = NJSScanner.scan("export function a() {}\nexport const b = 1, c = 2\nexport class D {}\nexport { e, f as g }\nexport default function Foo() {}\nexport type T = 1\nexport async function h() {}\n" as NSString)
+        check("export scan: declared and listed names, default name", Set(sc.exportNames) == ["a", "b", "D", "e", "g", "T", "h"] && sc.hasDefault && sc.defaultName == "Foo")
+
+        // syntax: only an unclosed bracket tree-sitter repaired is reported
+        func syn(_ name: String, _ code: String) -> [NPDiag] { NativeJSDiag.analyze(url: root.appendingPathComponent(name), text: code as NSString).filter { $0.code == "syntax" } }
+        let unclosed = syn("src/s1.ts", "const a = 3\nif (a {\n  a\n}\nfunction f() {\n  return 1\n")
+        check("syntax: tree-sitter's repair of a missing ) or } is reported, one per line", !unclosed.isEmpty && unclosed.count <= 2 && unclosed.allSatisfy { $0.severity == 1 })
+        check("syntax: valid code is silent", syn("src/s2.ts", "export const a = 1\nfunction f<T>(x: T): T { return x }\nclass C { #p = 1; static { } }\n").isEmpty)
+        check("syntax: grammar gaps (keyword export names, variance, import types) stay silent", syn("src/s3.js", "const _function = 1\nexport { _function as function }\n").isEmpty
+              && syn("src/s4.ts", "interface I<in out T> { x: T }\nexport type * from './a'\n").isEmpty)
+        check("syntax: declaration files are never judged", syn("src/s5.d.ts", "declare const a: import('x').T<\n").isEmpty)
+
         // completion: specifiers
         let spec = "import a from './models/"
         let t1 = complete(root.appendingPathComponent("src/x.ts"), spec, caretAfter: "./models/")

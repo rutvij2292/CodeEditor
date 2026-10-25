@@ -227,6 +227,8 @@ struct NJSExtractor {
             sy.typeName = typeName(node.field("return_type"))
             if let t = sy.typeName, typeParams(node).contains(t) { sy.typeName = nil }
             if sy.typeName == nil { sy.returnMembers = returnShape(node) }
+            sy.sigText = fnSig(node)
+            sy.overload = node.kind == "function_signature"
             return [sy]
         case "class_declaration", "abstract_class_declaration", "class":
             guard let n = node.field("name") else { return [] }
@@ -328,7 +330,10 @@ struct NJSExtractor {
             sy.typeName = typeName(d.field("type")) ?? newName(value)
             if let q = d.field("type")?.kids.first, q.kind == "type_query", let id = q.kids.first, id.kind == "identifier" { sy.aliasOf = id.text(ns) }
             if let v = value, v.kind == "object" { sy.members = objectMembers(v) }
-            else if let v = value, v.kind == "arrow_function" || v.kind == "function_expression", v.field("return_type") == nil { sy.returnMembers = returnShape(v) }
+            else if let v = value, v.kind == "arrow_function" || v.kind == "function_expression" {
+                if v.field("return_type") == nil { sy.returnMembers = returnShape(v) }
+                sy.sigText = fnSig(v)
+            }
             else if let v = value, v.kind == "call_expression", let sh = shape(of: v, imported: { self.imports.map[$0].map { ($0.src, $0.name) } }) {
                 sy.members = sh.members
                 sy.valueMembers = sh.valueMembers
@@ -370,6 +375,7 @@ struct NJSExtractor {
                 mem.isStatic = isStatic
                 mem.typeName = typeName(m.field("return_type"))
                 if let t = mem.typeName, tps.contains(t) || typeParams(m).contains(t) { mem.typeName = nil }
+                mem.sigText = fnSig(m)
                 (mem.docStart, mem.docEnd) = docRange(before: m)
                 add(mem)
                 if nm == "constructor", let b = m.field("body") {
@@ -389,6 +395,7 @@ struct NJSExtractor {
                 mem.isStatic = m.allKids.contains { $0.kind == "static" && $0.start < nn.start }
                 mem.typeName = typeName(m.field("type")) ?? newName(m.field("value"))
                 if let t = mem.typeName, tps.contains(t) { mem.typeName = nil }
+                if let v = m.field("value"), v.kind == "arrow_function" || v.kind == "function_expression" { mem.sigText = fnSig(v) }
                 (mem.docStart, mem.docEnd) = docRange(before: m)
                 add(mem)
             default: break
@@ -420,6 +427,7 @@ struct NJSExtractor {
                 var mem = NJSMember(name: nm, kind: m.kind == "method_signature" ? .method : .property, loc: nn.start, len: nn.range.length, declStart: m.start, sigEnd: m.end)
                 mem.typeName = typeName(m.field(m.kind == "method_signature" ? "return_type" : "type"))
                 if let t = mem.typeName, tps.contains(t) || typeParams(m).contains(t) { mem.typeName = nil }
+                if m.kind == "method_signature" { mem.sigText = fnSig(m) }
                 (mem.docStart, mem.docEnd) = docRange(before: m)
                 out.append(mem)
             default: break
@@ -464,6 +472,7 @@ struct NJSExtractor {
             for sy in syms(for: decl, outer: outer, ambient: ambient) {
                 var m = NJSMember(name: sy.name, kind: sy.kind, loc: sy.loc, len: sy.len, declStart: sy.declStart, sigEnd: sy.sigEnd, docStart: sy.docStart, docEnd: sy.docEnd)
                 m.typeName = sy.typeName
+                m.sigText = sy.sigText
                 if !sy.members.isEmpty { m.sub = sy.members }
                 m.heritage = sy.heritage
                 out.append(m)
@@ -549,5 +558,21 @@ extension NJSExtractor {
         guard let o = obj, o.kids.allSatisfy({ ["pair", "method_definition", "shorthand_property_identifier"].contains($0.kind) }) else { return [] }
         let members = objectMembers(o)
         return members.count == o.kids.count ? members : []
+    }
+}
+
+
+extension NJSExtractor {
+    /// `<T>(a: number, b?: string): string` of a function-like node (parameters + type parameters + return annotation), whitespace collapsed.
+    func fnSig(_ fn: Node) -> String? {
+        guard let params = fn.field("parameters") ?? fn.field("parameter") else { return nil }
+        var start = params.start
+        if let tp = fn.field("type_parameters") { start = min(start, tp.start) }
+        var end = params.end
+        if let rt = fn.field("return_type") { end = max(end, rt.end) }
+        guard end > start, end - start < 600 else { return nil }
+        var t = ns.substring(with: NSRange(location: start, length: end - start)).replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        if params.kind == "identifier" { t = "(" + t + ")" }              // `x => ...`
+        return t
     }
 }

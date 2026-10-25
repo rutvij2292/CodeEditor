@@ -161,6 +161,8 @@ extension NJSEnv {
         sym.typeName = b.typeName
         if let body = d.field("body"), d.kind != "variable_declarator" { sym.sigEnd = body.start }
         let ex = NJSExtractor(doc: doc)
+        if d.kind == "function_declaration" || d.kind == "generator_function_declaration" { sym.sigText = ex.fnSig(d) }
+        else if d.kind == "variable_declarator", let v = d.field("value"), v.kind == "arrow_function" || v.kind == "function_expression" { sym.sigText = ex.fnSig(v) }
         if d.kind == "variable_declarator", let v = d.field("value"), v.kind == "object" { sym.members = ex.objectMembers(v) }
         else if d.kind == "variable_declarator", d.field("name")?.kind == "identifier", let v = d.field("value"), v.kind == "call_expression",
                 let sh = ex.shape(of: v, imported: { n in

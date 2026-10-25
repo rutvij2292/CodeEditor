@@ -17,6 +17,8 @@ struct NJSRes {
     var aliasOf: String?
     var valueMembers: [NJSMember] = []
     var returnMembers: [NJSMember] = []
+    var sigText: String?
+    var overload = false
     var members: [NJSMember] = []
     var heritage: [String] = []
     var siblings: [NJSMember]?          // members of the enclosing namespace (heritage names resolve there first)
@@ -26,11 +28,11 @@ struct NJSRes {
 
     init(path: String, sym s: NJSSym) {
         self.path = path; name = s.name; kind = s.kind; loc = s.loc; len = s.len; declStart = s.declStart; sigEnd = s.sigEnd
-        docStart = s.docStart; docEnd = s.docEnd; keyword = s.keyword; typeName = s.typeName; initCall = s.initCall; aliasOf = s.aliasOf; valueMembers = s.valueMembers; returnMembers = s.returnMembers; members = s.members; heritage = s.heritage
+        docStart = s.docStart; docEnd = s.docEnd; keyword = s.keyword; typeName = s.typeName; initCall = s.initCall; aliasOf = s.aliasOf; valueMembers = s.valueMembers; returnMembers = s.returnMembers; sigText = s.sigText; overload = s.overload; members = s.members; heritage = s.heritage
     }
     init(path: String, member m: NJSMember, owner: String?, siblings: [NJSMember]? = nil) {
         self.path = path; name = m.name; kind = m.kind; loc = m.loc; len = m.len; declStart = m.declStart; sigEnd = m.sigEnd
-        docStart = m.docStart; docEnd = m.docEnd; typeName = m.typeName; members = m.sub ?? []; heritage = m.heritage
+        docStart = m.docStart; docEnd = m.docEnd; typeName = m.typeName; members = m.sub ?? []; heritage = m.heritage; sigText = m.sigText
         self.owner = owner; self.siblings = siblings
     }
     init(fileTop path: String) {

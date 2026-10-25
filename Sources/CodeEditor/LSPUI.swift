@@ -404,7 +404,7 @@ extension LSPSession {
     func scheduleSignatureCheck() {
         signatureWork?.cancel()
         let inst = instance(supporting: "signatureHelpProvider")
-        guard let tv = textView, inst != nil || NativePHP.handles(url) else { return }
+        guard let tv = textView, inst != nil || NativePHP.handles(url) || NativeJS.handles(url) else { return }
         let ns = tv.string as NSString
         let caret = tv.selectedRange().location
         var trigger: String?
@@ -431,6 +431,22 @@ extension LSPSession {
     /// Native PHP answers first (Parameter Info / `(` / `,`); Intelephense is asked only when native cannot resolve the callee.
     func showSignature(manual: Bool, trigger: String?) {
         guard let tv = textView else { return }
+        if NativeJS.handles(url) {                       // native JS / TS first; the server only when native cannot resolve the callee
+            let caret = tv.selectedRange().location
+            NativeJS.signatureHelpAsync(url: url, text: tv.string as NSString, caret: caret) { [weak self] outcome in
+                guard let self, let tv = self.textView, tv.selectedRange().location == caret else { return }
+                switch outcome {
+                case .help(let payload):
+                    guard let attributed = LSPUIParse.signature(payload) else { LSPPopups.signature.hide(); return }
+                    let popup = LSPPopups.signature
+                    popup.setContent(attributed)
+                    popup.show(for: self, anchor: self.screenRect(forCharacterRange: NSRange(location: max(0, caret - 1), length: 1)))
+                case .notInCall: LSPPopups.signature.hide()
+                case .unknown: self.lspSignature(manual: manual, trigger: trigger)
+                }
+            }
+            return
+        }
         guard NativePHP.handles(url) else { lspSignature(manual: manual, trigger: trigger); return }
         let caret = tv.selectedRange().location
         NativePHP.signatureHelpAsync(url: url, text: tv.string as NSString, caret: caret) { [weak self] outcome in

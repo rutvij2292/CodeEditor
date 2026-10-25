@@ -15,6 +15,7 @@ enum NativeJS {
 
     static let nativeOnlyKey = "js.nativeOnly"
 
+
     /// OPT-IN (default off): do not start the TypeScript server for plain JS / TS projects. Native then answers go to definition, hover,
     /// find usages, import / member completion and the two diagnostics; not available: rename, type errors, completion of inferred
     /// members, lib / dependency hover with inferred types, signature help, code actions. Vue projects always keep their server (Volar
@@ -108,6 +109,7 @@ enum NativeJS {
         dropLastParse()
         NJSProject.trimAll()
         NJSRefs.dropMemos()
+        NJSAutoImport.dropCaches()
         NJSParsers.drop()
         NJSTexts.clear()
         NJSRefs.dropFileList()
@@ -134,5 +136,47 @@ enum NativeJS {
         nc.addObserver(forName: NSApplication.didHideNotification, object: nil, queue: .main) { _ in
             DispatchQueue.global(qos: .utility).async { trimMemory() }
         }
+    }
+}
+
+enum NativeJSAutoImport {
+    static let key = "js.autoImport"
+    /// Offer exported names of other files / dependencies with an `import` edit (Settings > Languages).
+    static var enabled: Bool {
+        get { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: key) }
+    }
+}
+
+
+extension NativeJS {
+    /// Outline for Go to Symbol / file symbols of TypeScript, TSX and Vue script (the JS grammar-only extractor covers .js / .jsx).
+    /// Declarations come from the same summary the rest of the engine uses: functions, classes (with their members), interfaces, type
+    /// aliases, enums, namespaces and top-level constants.
+    static func documentSymbols(path: String, text: String) -> [CodeSymbol] {
+        let ns = text as NSString
+        guard ns.length < 1_500_000, let d = NJSDoc(path: path, text: ns) else { return [] }
+        defer { withExtendedLifetime(d) {} }
+        let table = NPLineStarts(ns)
+        var out: [CodeSymbol] = []
+        for s in d.summary.order where s.kind != .import {
+            let kind: CodeSymbol.Kind
+            switch s.kind {
+            case .function: kind = .function
+            case .class: kind = .class
+            case .interface, .typeAlias: kind = .interface
+            case .enum: kind = .enum
+            case .namespace: kind = .namespace
+            case .constant: kind = .constant
+            default: kind = .variable
+            }
+            if kind == .variable, s.members.isEmpty { continue }                      // plain `let` / `var` data is noise in an outline
+            out.append(CodeSymbol(name: s.name, kind: kind, line: table.position(of: s.loc).line, container: nil))
+            for m in s.members where m.name != "constructor" {
+                let mk: CodeSymbol.Kind = m.kind == .method || m.kind == .getter || m.kind == .setter ? .method : m.kind == .enumMember ? .constant : .property
+                out.append(CodeSymbol(name: m.name, kind: mk, line: table.position(of: m.loc).line, container: s.name))
+            }
+        }
+        return out
     }
 }

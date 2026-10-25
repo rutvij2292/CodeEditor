@@ -209,6 +209,7 @@ struct NJSMember {
     var isStatic = false
     var typeName: String?            // property type / method return type (simple names only)
     var sub: [NJSMember]?            // namespace members that are themselves classes / interfaces
+    var sigText: String?             // `(a: number, b?: string): string` of a function-like member
     var heritage: [String] = []
 }
 
@@ -224,6 +225,8 @@ final class NJSSym {
     var typeName: String?               // variable annotation / `new X()`, function return type
     var valueMembers: [NJSMember] = []  // `ref({...})`: what `.value` holds
     var returnMembers: [NJSMember] = [] // a function whose only return is an object literal
+    var sigText: String?                // `<T>(a: number): string` of a function-like declaration (signature help)
+    var overload = false                // a body-less `function f(...)` overload signature
     var aliasOf: String?                // `declare const f: typeof g`: f has the type of g (same file)
     var initCall: String?               // `const x = callee(...)`: the callee as written (its declared return type is x's type)
     var heritage: [String] = []         // extends (class: one; interface: several)
