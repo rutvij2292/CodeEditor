@@ -23,7 +23,7 @@ enum SelfTestNativeJS {
             fputs(out, stderr); exit(0)
         }
         if let p = AppEnv.value("CE_NJS_BENCH") { NativeJSBench.run(p); exit(0) }
-        if AppEnv.value("CE_NJS_ONLY") != nil { run(); SelfTest.finish() }
+        if AppEnv.value("CE_NJS_ONLY") != nil { run(); runRefs(); SelfTest.finish() }
     }
 
     private static func check(_ name: String, _ ok: @autoclosure () -> Bool) { SelfTest.check(name, ok()) }

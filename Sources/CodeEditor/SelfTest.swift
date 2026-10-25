@@ -89,7 +89,7 @@ enum SelfTest {
                     SelfTestNativePHPSig.run()
                     SelfTestNativePHPMisses.run()
                     SelfTestModuleRoot.run()
-                    SelfTestNativeJS.run()
+                    SelfTestNativeJS.run(); SelfTestNativeJS.runRefs()
                     SelfTestNativePHPStubs.run()
                     SelfTestNativePHPRefs.run(w: w)
                     SelfTestNativePHPDiag.run()

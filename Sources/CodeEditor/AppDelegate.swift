@@ -437,6 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         findUsagesHandler = { w in
             guard let tab = w.current else { return }
             if NativePHPUI.findUsages(w) { return }
+            if NativeJSUI.findUsages(w) { return }
             if !LanguageServers.findUsages(in: tab) { unavailable(w, "Find Usages isn’t available", "No language server is running for this file type yet.") }
         }
         renameHandler = { w in
