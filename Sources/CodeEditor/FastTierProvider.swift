@@ -587,7 +587,7 @@ enum FastEngine {
     static func importEdit(_ fqn: String, short: String, cur: FTClass, text: NSString? = nil) -> (String, [(range: NSRange, text: String)]) {
         // the real planner (alias / same namespace / conflict aware, sorted among the existing imports, `declare(strict_types)` aware, CRLF)
         if let text {
-            switch PHPImports.plan(fqn: fqn, short: short, in: text) {
+            switch PHPImports.plan(fqn: fqn, short: short, in: text, cur: cur) {
             case .edit(let e): return (short, [(e.range, e.text)])
             case .sameNamespace: return (short, [])
             case .alreadyImported: return (cur.uses.first(where: { $0.value == fqn })?.key ?? short, [])

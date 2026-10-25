@@ -72,9 +72,9 @@ enum PHPImports {
     ]
 
     /// Where and how to write `use <fqn>;` into `text` (the whole PHP file).
-    static func plan(fqn rawFqn: String, short: String, in text: NSString) -> Plan {
+    static func plan(fqn rawFqn: String, short: String, in text: NSString, cur parsed: FTClass? = nil) -> Plan {
         let fqn = rawFqn.hasPrefix("\\") ? String(rawFqn.dropFirst()) : rawFqn
-        guard let cur = FTParser.parse(text) else { return .unsupported }
+        guard let cur = parsed ?? FTParser.parse(text) else { return .unsupported }
         let fqnNs = fqn.contains("\\") ? String(fqn[..<fqn.lastIndex(of: "\\")!]) : ""
         if fqnNs == cur.ns { return .sameNamespace }
         if cur.uses.values.contains(fqn) { return .alreadyImported }
