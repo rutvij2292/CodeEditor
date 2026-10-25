@@ -161,6 +161,8 @@ enum SettingsDefaults {
         for s in LanguageServers.serverIds { UserDefaults.standard.removeObject(forKey: LanguageServerPrefs.key(s.id)) }
         UserDefaults.standard.removeObject(forKey: NativePHP.nativeOnlyKey)
         NativePHPDiag.resetPrefs()
+        UserDefaults.standard.removeObject(forKey: NativePy.enabledKey)
+        PyDiagGroup.resetPrefs()
     }
 
     static func restoreTerminal() {

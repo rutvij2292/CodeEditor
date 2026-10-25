@@ -21,6 +21,7 @@ let package = Package(
         .package(path: "Vendor/tree-sitter-bash"),
         .package(path: "Vendor/tree-sitter-xml"),
         .package(path: "Vendor/tree-sitter-scss"),
+        .package(path: "Vendor/tree-sitter-python"),
     ],
     targets: [
         .executableTarget(
@@ -42,6 +43,7 @@ let package = Package(
                 .product(name: "TreeSitterBash", package: "tree-sitter-bash"),
                 .product(name: "TreeSitterXML", package: "tree-sitter-xml"),
                 .product(name: "TreeSitterSCSS", package: "tree-sitter-scss"),
+                .product(name: "TreeSitterPython", package: "tree-sitter-python"),
             ]
         ),
     ]

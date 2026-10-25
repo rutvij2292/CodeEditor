@@ -41,6 +41,28 @@ final class LanguagesPane: SettingsPane {
         onRefresh { severity.selectItem(at: NativePHPDiag.classSeverity == 1 ? 1 : 0) }
         row("Undefined class severity", severity)
 
+        section("Python")
+        let pyNative = NSButton(checkboxWithTitle: "Use native Python engine", target: nil, action: nil)
+        pyNative.target = action { c in
+            NativePy.enabled = (c as? NSButton)?.state == .on
+            NotificationCenter.default.post(name: NativePyDiagController.settingsDidChange, object: nil)
+        }
+        pyNative.action = #selector(SettingsAction.fire(_:))
+        pyNative.setAccessibilityLabel("Use native Python engine")
+        onRefresh { pyNative.state = NativePy.enabled ? .on : .off }
+        row(nil, pyNative, help: "Go to definition, hover with docstrings, find usages, completion and diagnostics for .py files from Kode's built-in Python index (no pyright / pylsp process, a few MB while idle). Imports resolve through the project, its virtualenv (.venv, venv, poetry, pipenv, pyenv, conda) and the standard library.")
+        for g in PyDiagGroup.allCases {
+            let box = NSButton(checkboxWithTitle: "Python: " + g.title, target: nil, action: nil)
+            box.target = action { c in
+                g.enabled = (c as? NSButton)?.state == .on
+                NotificationCenter.default.post(name: NativePyDiagController.settingsDidChange, object: nil)
+            }
+            box.action = #selector(SettingsAction.fire(_:))
+            box.setAccessibilityLabel("Python diagnostics: \(g.title)")
+            onRefresh { box.state = g.enabled ? .on : .off }
+            row(nil, box, help: g == .syntax ? "Checks run after edits settle, for the open file only, and stay silent when they cannot be certain (unresolved imports need a discovered virtualenv)." : nil)
+        }
+
         section("Language servers")
         for server in LanguageServers.serverIds {
             let status = infoLabel { [weak self] in self?.statusText(for: server.id) ?? "" }
