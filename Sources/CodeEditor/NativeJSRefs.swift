@@ -11,6 +11,7 @@ struct NJSRefSymbol {
     var isMember: Bool
     var root: String
     var declFile: String
+    var importLocal = false              // the token names a default / namespace / aliased import binding: rename changes this file only (TypeScript's rule)
     var display: String { name }
     var isLocal: Bool { decls.contains { $0.local } }
 }
@@ -48,8 +49,18 @@ enum NJSRefs {
             decls = env.resolveToken(node)
         }
         decls = decls.filter { !$0.fileTop && $0.name != "default" }
+        if decls.isEmpty, !isMember, env.localBinding(name, from: node) == nil, let imp = env.doc.summary.top[name]?.first(where: { $0.kind == .import }) {
+            // `import * as ns` / a binding of a non-code module: no declaration to point at, but the binding itself can be renamed in this file
+            var s = NJSRefSymbol(name: name, decls: [NJSRes(path: env.path, sym: imp)], isMember: false, root: env.proj.root, declFile: env.path)
+            s.importLocal = true
+            return s
+        }
         guard !decls.isEmpty else { return nil }
-        return NJSRefSymbol(name: decls[0].name, decls: decls, isMember: isMember || decls[0].owner != nil, root: env.proj.root, declFile: decls[0].path)
+        var sym = NJSRefSymbol(name: decls[0].name, decls: decls, isMember: isMember || decls[0].owner != nil, root: env.proj.root, declFile: decls[0].path)
+        // a use of `import X from`, `import * as X`, `import { a as X }`, `const X = require()`: the binding is local to this file
+        if !isMember, env.localBinding(name, from: node) == nil, let imp = env.doc.summary.top[name]?.first(where: { $0.kind == .import }),
+           imp.impName == "default" || imp.impName == "*" || imp.impName == "=" || imp.impName != name { sym.name = name; sym.importLocal = true }
+        return sym
     }
 
     // MARK: collect
@@ -106,6 +117,17 @@ enum NJSRefs {
             p = c.parent
         }
         return .usage
+    }
+
+    /// Declarations of member `name` read by a destructuring pattern: `const { name } = value` / `{ name: n } = value` / `function f({ name }: T)`.
+    static func patternMember(_ n: Node, _ name: String, _ env: NJSEnv, _ doc: NJSDoc) -> [NJSRes] {
+        var obj: Node? = n.parent
+        if n.kind == "property_identifier" { guard let pp = n.parent, pp.kind == "pair_pattern", let key = pp.field("key"), key == n else { return [] }; obj = pp.parent }
+        guard let o = obj, o.kind == "object_pattern", let holder = o.parent else { return [] }
+        if holder.kind == "variable_declarator", holder.field("name") == o, let v = holder.field("value"), let t = env.typeOf(v) { return env.memberOf(t, name) }
+        if holder.kind == "required_parameter" || holder.kind == "optional_parameter", holder.field("pattern") == o,
+           let tn = NJSExtractor(doc: doc).typeName(holder.field("type")), let t = env.instance(of: tn, in: doc.path) { return env.memberOf(t, name) }
+        return []
     }
 
     @inline(__always) private static func identChar(_ c: unichar) -> Bool { (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 || c == 36 || c > 127 }
@@ -245,7 +267,8 @@ enum NJSRefs {
                         if p == sym.declFile || p == doc.path, declKeys.contains("\(p):\(n.start)") { matched = true; isDecl = true }
                         if !matched {
                             let res: [NJSRes]
-                            if k == "shorthand_property_identifier_pattern" { res = env.localBinding(nm, from: n).map { [env.resolve($0)] } ?? [] }
+                            if sym.isMember, k == "shorthand_property_identifier_pattern" || (k == "property_identifier" && n.parent?.kind == "pair_pattern") { res = patternMember(n, nm, env, doc) }
+                            else if k == "shorthand_property_identifier_pattern" { res = env.localBinding(nm, from: n).map { [env.resolve($0)] } ?? [] }
                             else { res = env.resolveToken(n) }
                             matched = res.contains { declKeys.contains("\($0.path):\($0.loc)") }
                             if !matched, sym.isMember, res.isEmpty, k == "property_identifier", let par = n.parent, par.kind == "member_expression",
@@ -257,7 +280,11 @@ enum NJSRefs {
                         }
                         if matched {
                             let (line, col) = tbl().position(of: n.start)
-                            out.hits.append(NPRefHit(path: p, range: n.range, line: line, column: col, snippet: NPText.lineText(text, n.start), role: role(of: n, isDecl: isDecl)))
+                            var h = NPRefHit(path: p, range: n.range, line: line, column: col, snippet: NPText.lineText(text, n.start), role: role(of: n, isDecl: isDecl))
+                            // rename needs to know a shorthand: `{ a }` (object literal or pattern) of a variable becomes `{ a: b }`, of a member `{ b: a }`
+                            if k == "shorthand_property_identifier" { h.form = .scopeShort }
+                            else if k == "shorthand_property_identifier_pattern" { h.form = sym.isMember ? .dollar : .scopeShort }
+                            out.hits.append(h)
                         }
                     }
                 }
@@ -368,7 +395,7 @@ enum NativeJSUI {
     }
 
     static func present(_ sym: NJSRefSymbol, result: NPRefsResult, window: NSWindow?) {
-        let list = NativePHPUI.items(for: result.hits, root: sym.root)
+        let list = hitRows(for: result.hits, root: sym.root)
         let n = result.resolvedCount
         var title = "Usages of \(sym.display) (\(n) in \(Set(result.hits.filter { $0.role != .unresolved }.map(\.path)).count) files)"
         if result.truncated { title += " - capped, narrow the search" }

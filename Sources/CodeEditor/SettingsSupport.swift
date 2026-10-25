@@ -169,6 +169,8 @@ enum SettingsDefaults {
         UserDefaults.standard.removeObject(forKey: NativeWeb.tailwindNativeOnlyKey)
         UserDefaults.standard.removeObject(forKey: NativeJS.enabledKey)
         UserDefaults.standard.removeObject(forKey: NativeJS.nativeOnlyKey)
+        UserDefaults.standard.removeObject(forKey: NativeJSDiag.syntaxKey)
+        UserDefaults.standard.removeObject(forKey: NativeJSAutoImport.key)
         UserDefaults.standard.removeObject(forKey: NativeJSDiag.enabledKey)
         UserDefaults.standard.removeObject(forKey: NativeVue.enabledKey)
     }

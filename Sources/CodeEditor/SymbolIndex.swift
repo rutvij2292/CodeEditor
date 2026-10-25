@@ -6,7 +6,7 @@ final class SymbolIndex {
 
     static let maxFileSize = 1_000_000
     static let maxFiles = 30_000
-    private static let extensions: Set<String> = ["php", "phtml", "js", "jsx", "mjs", "cjs"]
+    private static let extensions: Set<String> = ["php", "phtml", "js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "vue"]
 
     private struct FileSymbols { let mtime: Date; let symbols: [CodeSymbol] }
 

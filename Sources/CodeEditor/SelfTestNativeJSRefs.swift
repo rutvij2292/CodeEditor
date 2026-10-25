@@ -73,7 +73,7 @@ extension SelfTestNativeJS {
             let sm = summary(r)
             check("refs: class from its declaration (default import with another name)", sm.contains("src/util.ts:9:declaration") && sm.contains("src/other.ts:2:import") && sm.contains("src/other.ts:4:usage") && sm.contains("src/main.ts:14:usage"))
         } else { check("refs: class identified from declaration", false) }
-        check("refs: unknown / global tokens are not native", usages(in: mainURL, text: main, "console") == nil)
+        check("refs: a lib global is declared in a dependency: usages are not native", usages(in: mainURL, text: main, "console")?.1.decls.allSatisfy { NJSLib.isLibPath($0.path) } != false)
 
         // many files: the scan runs on all cores and merges in path order
         for i in 0..<40 { put(root, "src/gen/g\(String(format: "%02d", i)).ts", "import { helper } from '../util'\nexport const v\(i) = helper(\(i))\n") }

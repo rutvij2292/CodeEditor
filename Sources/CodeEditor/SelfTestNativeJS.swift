@@ -90,7 +90,34 @@ enum SelfTestNativeJS {
             }
             exit(0)
         }
-        if AppEnv.value("CE_NJS_ONLY") != nil { run(); runRefs(); runExtras(); SelfTest.finish() }
+        if let dir = AppEnv.value("CE_NJS_SYNTAX") {            // false-positive scan of the syntax rule: every source file under a directory (node_modules included)
+            var files = 0, bad = 0, shown = 0, dts = 0
+            let cap = Int(AppEnv.value("CE_NJS_SCAN_CAP") ?? "") ?? 6000
+            let en = FileManager.default.enumerator(atPath: dir)
+            while let rel = en?.nextObject() as? String, files < cap {
+                let ext = (rel as NSString).pathExtension.lowercased()
+                guard NJSModules.codeExts.contains(ext), !rel.hasSuffix(".min.js") else { continue }
+                autoreleasepool {
+                    let path = dir + "/" + rel
+                    guard let t = FastProject.read(path), t.length < 400_000, let d = NJSDoc(path: path, text: t) else { return }
+                    files += 1
+                    let diags = NativeJSDiag.syntaxErrors(d)
+                    if rel.contains(".d.ts") || rel.contains(".d.mts") || rel.contains(".d.cts") { if !diags.isEmpty { dts += 1 }; return }
+                    if !diags.isEmpty {
+                        bad += 1
+                        if shown < 25 {
+                            shown += 1
+                            let r = diags[0].range
+                            let line = NPText.lineText(t, r.location, maxLen: 100)
+                            fputs("SYNTAX \(rel): \(diags[0].message) at `\(line)`\n", stderr)
+                        }
+                    }
+                }
+            }
+            fputs("SYNTAX scanned \(files) files, \(bad) non-declaration files with a syntax finding (+\(dts) declaration files)\n", stderr)
+            exit(0)
+        }
+        if AppEnv.value("CE_NJS_ONLY") != nil { run(); runRefs(); runExtras(); runRename(); runSig(); runLib(); runAmbient(); SelfTest.finish() }
     }
 
     private static func check(_ name: String, _ ok: @autoclosure () -> Bool) { SelfTest.check(name, ok()) }
@@ -288,8 +315,7 @@ enum SelfTestNativeJS {
         is_("this.baseMethod (two levels)", "baseMethod()", 1, "src/util.ts:16")
         // scope
         is_("shadowing parameter beats the import", "helper }", 0, "src/main.ts:29")
-        is_("builtin global stays with the server", "console", 0, "nil")
-        is_("Promise stays with the server", "Promise)", 0, "nil")
+        check("js: builtin globals resolve into the TypeScript libs", where_(hit("console")).contains("lib.dom.d.ts") && where_(hit("Promise)")).contains("lib.es"))
         is_("declaration itself resolves to itself", "use(u", 0, "src/main.ts:13")
         is_("export specifier", "helper as h2", 0, "src/util.ts:6")
 

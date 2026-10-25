@@ -46,6 +46,7 @@ enum SymbolExtractor {
         switch fileExtension.lowercased() {
         case "php", "phtml": isPHP = true
         case "js", "jsx", "mjs", "cjs": isPHP = false
+        case "ts", "tsx", "mts", "cts", "vue": return typesOnly ? [] : NativeJS.documentSymbols(path: "/symbols." + fileExtension.lowercased(), text: text)
         default: return []
         }
         guard let parser = parser(forKey: isPHP ? "php" : "js", ext: isPHP ? "php" : "js"),

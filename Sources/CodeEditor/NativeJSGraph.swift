@@ -13,10 +13,13 @@ final class NJSFileScan {
     var stamp: Int64 = 0
     var edges: [NJSEdge] = []
     var exportsList = false     // `export { a }` / `export default someIdentifier`: may re-export an imported binding
+    var exportNames: [String] = []     // names this file exports (declarations and `export { a as b }`), for auto-import
+    var hasDefault = false
+    var defaultName = ""        // `export default function Foo` -> Foo; empty when anonymous
     var cfgStamp: Int64 = 0
     var resolved: [String?] = []
     var rechecked = false       // loaded from disk: unresolved specifiers were looked up again in this process
-    var cost: Int { 120 + edges.reduce(0) { $0 + $1.spec.utf8.count + 40 } }
+    var cost: Int { 140 + edges.reduce(0) { $0 + $1.spec.utf8.count + 40 } + exportNames.reduce(0) { $0 + $1.utf8.count + 24 } }
 }
 
 enum NJSScanner {
@@ -72,13 +75,55 @@ enum NJSScanner {
             let c = b[i]
             if c == 101, i == 0 || !isIdent(b[i - 1]), has(b, at: i, "export") {          // export
                 var j = i + 6
-                while j < n, b[j] == 32 || b[j] == 9 || b[j] == 10 || b[j] == 13 { j += 1 }
-                if j < n, b[j] == 123 { out.exportsList = true }
-                else if has(b, at: j, "default") {
+                func skipSpace() { while j < n, b[j] == 32 || b[j] == 9 || b[j] == 10 || b[j] == 13 { j += 1 } }
+                func ident() -> String? {
+                    let st = j
+                    while j < n, isIdent(b[j]) { j += 1 }
+                    return j > st ? String(decoding: UnsafeBufferPointer(rebasing: b[st..<j]), as: UTF8.self) : nil
+                }
+                skipSpace()
+                if j < n, b[j] == 123 {                                                    // export { a, b as c } [from '...']
+                    out.exportsList = true
+                    j += 1
+                    var last: String?
+                    var guardN = 0
+                    while j < n, b[j] != 125, guardN < 2000 {
+                        guardN += 1
+                        skipSpace()
+                        if j >= n || b[j] == 125 { break }
+                        if let id = ident() { if id != "as" { last = id } }
+                        else if j < n, b[j] == 44 { if let l = last, l != "default", out.exportNames.count < 300 { out.exportNames.append(l) }; last = nil; j += 1 }
+                        else { j += 1 }
+                    }
+                    if let l = last, l != "default", out.exportNames.count < 300 { out.exportNames.append(l) }
+                } else if has(b, at: j, "default") {
                     j += 7
                     while j < n, b[j] == 32 || b[j] == 9 { j += 1 }
-                    if j < n, isIdent(b[j]), !(has(b, at: j, "function") || has(b, at: j, "class") || has(b, at: j, "async") || has(b, at: j, "abstract")
-                        || has(b, at: j, "interface") || has(b, at: j, "enum") || has(b, at: j, "await") || has(b, at: j, "new") || has(b, at: j, "typeof")) { out.exportsList = true }
+                    out.hasDefault = true
+                    var k = j
+                    func word(_ w: StaticString) -> Bool { if has(b, at: k, w) { k += w.utf8CodeUnitCount; return true }; return false }
+                    var named = false
+                    if word("async") { while k < n, b[k] == 32 { k += 1 } }
+                    if word("abstract") { while k < n, b[k] == 32 { k += 1 } }
+                    if word("function") { named = true; while k < n, b[k] == 32 || b[k] == 42 { k += 1 } } else if word("class") { named = true; while k < n, b[k] == 32 { k += 1 } }
+                    if named {
+                        j = k
+                        if let id = ident(), id != "extends", id != "implements" { out.defaultName = id }
+                    }
+                    if !named, j < n, isIdent(b[j]), !(has(b, at: j, "interface") || has(b, at: j, "enum") || has(b, at: j, "await") || has(b, at: j, "new") || has(b, at: j, "typeof")) { out.exportsList = true }
+                } else {
+                    // export [declare] [async|abstract] function|class|const|let|var|interface|type|enum|namespace Name
+                    var k = j
+                    func word(_ w: StaticString) -> Bool { if has(b, at: k, w) { k += w.utf8CodeUnitCount; return true }; return false }
+                    func space() { while k < n, b[k] == 32 || b[k] == 9 { k += 1 } }
+                    if word("declare") { space() }
+                    if word("async") { space() }
+                    if word("abstract") { space() }
+                    if word("function") || word("class") || word("const") || word("let") || word("var") || word("interface") || word("type") || word("enum") || word("namespace") {
+                        while k < n, b[k] == 32 || b[k] == 9 || b[k] == 42 { k += 1 }
+                        j = k
+                        if let id = ident(), out.exportNames.count < 300 { out.exportNames.append(id) }
+                    }
                 }
                 i += 6; continue
             }
@@ -140,6 +185,9 @@ final class NJSImportGraph {
     private var cost = 0
     var misses = 0
     static let maxCost = 3_000_000
+
+    /// Snapshot of every scan held in memory (auto-import reads the export names).
+    func snapshot() -> [String: NJSFileScan] { lock.lock(); defer { lock.unlock() }; return scans }
 
     func clear() { lock.lock(); scans.removeAll(); cost = 0; built = nil; lock.unlock() }
     var count: Int { lock.lock(); defer { lock.unlock() }; return scans.count }
@@ -270,7 +318,7 @@ final class NJSImportGraph {
 
     // MARK: on-disk scan cache (~/Library/Caches/CodeEditor/native-js/<project hash>.graph)
 
-    static let diskVersion: UInt32 = 1
+    static let diskVersion: UInt32 = 2
     static var cacheDirectory = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Caches/CodeEditor/native-js", isDirectory: true)
 
     static func cacheFile(_ root: String) -> URL {
@@ -299,6 +347,9 @@ final class NJSImportGraph {
                     str(e.spec); d.append((e.reexport ? 1 : 0) | (e.binding ? 2 : 0))
                     str(k < s.resolved.count ? (s.resolved[k] ?? "") : "")
                 }
+                u16(s.exportNames.count)
+                for nme in s.exportNames { str(nme) }
+                d.append(s.hasDefault ? 1 : 0); str(s.defaultName)
             }
             try? FileManager.default.createDirectory(at: NJSImportGraph.cacheDirectory, withIntermediateDirectories: true)
             try? d.write(to: NJSImportGraph.cacheFile(root), options: .atomic)
@@ -337,6 +388,12 @@ final class NJSImportGraph {
                     s.edges.append(NJSEdge(spec: spec, reexport: f & 1 != 0, binding: f & 2 != 0))
                     s.resolved.append(r.isEmpty ? nil : r)
                 }
+                guard let nc = u16() else { return }
+                for _ in 0..<nc { guard let nme = str() else { return }; s.exportNames.append(nme) }
+                guard i < b.count else { return }
+                s.hasDefault = b[i] == 1; i += 1
+                guard let dn = str() else { return }
+                s.defaultName = dn
                 // an edge that did not resolve may resolve today (a file was added): look those up again
                 loaded[path] = s
                 cost += s.cost

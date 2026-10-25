@@ -27,6 +27,7 @@ enum NativeJSBench {
         // sample tokens
         let t0 = Date()
         var rows: [Row] = []
+        var callSites: [Row] = []
         var texts: [String: String] = [:]
         var enough = false
         for f in files where !enough { autoreleasepool {
@@ -44,6 +45,9 @@ enum NativeJSBench {
                     }
                 } else if k == "property_identifier", let p = n.parent, p.kind == "member_expression", let pr = p.field("property"), pr == n {
                     cands.append(Row(file: f, offset: n.start, word: n.text(text), kind: "member"))
+                }
+                if (k == "call_expression" || k == "new_expression"), let a = n.field("arguments"), a.kind == "arguments", callSites.count < 4000 {
+                    callSites.append(Row(file: f, offset: a.start + 1, word: "", kind: k))
                 }
                 if n.namedChildCount > 0 { stack.append(contentsOf: n.kids) }
             }
@@ -170,8 +174,70 @@ enum NativeJSBench {
         if let hold = AppEnv.value("CE_NJS_HOLD").flatMap(Double.init) { fputs("BENCH holding pid \(getpid())\n", stderr); Thread.sleep(forTimeInterval: hold) }
         fputs("BENCH footprint after trimMemory: \(f1(NativePHPBench.footprintMB())) MB\n", stderr)
 
+        // signature help: a spread of call sites, native label / active parameter
+        var sigOut: [[String: Any]] = []
+        var sigTimes: [Double] = []
+        let sigStep = max(1, callSites.count / 300)
+        for (i, r) in callSites.enumerated() where i % sigStep == 0 { autoreleasepool {
+            guard let text = FastProject.read(r.file), r.offset <= text.length else { return }
+            let t = Date()
+            let out = NativeJS.signatureHelp(url: URL(fileURLWithPath: r.file), text: text, caret: r.offset)
+            sigTimes.append(ms(t))
+            let pos = NPLineStarts(text).position(of: r.offset)
+            var rec: [String: Any] = ["file": r.file, "line": pos.line - 1, "character": pos.col - 1]
+            switch out {
+            case .help(let payload):
+                let sigs = (payload["signatures"] as? [[String: Any]]) ?? []
+                rec["result"] = "help"; rec["labels"] = sigs.map { ($0["label"] as? String) ?? "" }
+                rec["active"] = payload["activeSignature"] ?? 0; rec["param"] = payload["activeParameter"] ?? 0
+            case .notInCall: rec["result"] = "none"
+            case .unknown: rec["result"] = "unknown"
+            }
+            sigOut.append(rec)
+        } }
+        sigTimes.sort()
+        let sigHelp = sigOut.filter { ($0["result"] as? String) == "help" }.count
+        fputs("BENCH signature help: \(sigHelp)/\(sigOut.count) call sites answered natively, p50=\(f1(pct(sigTimes, 0.5))) p95=\(f1(pct(sigTimes, 0.95))) ms\n", stderr)
+
+        // rename: the edit set native would apply for a sample of resolved symbols (nothing is written)
+        var renameOut: [[String: Any]] = []
+        var renameTimes: [Double] = []
+        let renameCandidates = answers.filter { ($0["native"] as? [[String: Any]])?.isEmpty == false && ($0["kind"] as? String) == "import-usage" }
+        let rStep = max(1, renameCandidates.count / 20)
+        for (i, a) in renameCandidates.enumerated() where i % rStep == 0 && renameOut.count < 20 { autoreleasepool {
+            guard let f = a["file"] as? String, let off = a["offset"] as? Int, let text = FastProject.read(f) else { return }
+            let url = URL(fileURLWithPath: f)
+            let proj = NJSProject.shared(root: root)
+            var doc: NJSDoc?
+            var sym: NJSRefSymbol?
+            var why: String?
+            proj.queue.sync {
+                guard let env = NativeJS.env(url: url, text: text, root: root), let sy = NJSRefs.identify(env: env, offset: off + 1) else { return }
+                doc = env.doc; sym = sy; why = NJSRename.refusal(sy, env: env)
+            }
+            guard let sy = sym else { return }
+            let t = Date()
+            var rec: [String: Any] = ["file": f, "line": (a["line"] as? Int) ?? 0, "character": (a["character"] as? Int) ?? 0, "name": sy.name]
+            if let why { rec["refused"] = why } else {
+                let plan = NJSRename.plan(sy, newName: "NjsRenamed", liveDoc: doc, liveTexts: [:])
+                renameTimes.append(ms(t))
+                if let c = plan.conflict { rec["refused"] = c } else {
+                    var edits: [[String: Any]] = []
+                    for (path, es) in plan.edits {
+                        guard let t = FastProject.read(path) else { continue }
+                        let table = NPLineStarts(t)
+                        for e in es { let p = table.position(of: e.range.location); edits.append(["path": path, "line": p.line - 1, "character": p.col - 1]) }
+                    }
+                    rec["edits"] = edits
+                }
+            }
+            renameOut.append(rec)
+        } }
+        renameTimes.sort()
+        fputs("BENCH rename: \(renameOut.filter { $0["edits"] != nil }.count)/\(renameOut.count) sampled symbols planned natively (rest refused), p50=\(f1(pct(renameTimes, 0.5))) p95=\(f1(pct(renameTimes, 0.95))) ms\n", stderr)
+
         if let out = AppEnv.value("CE_NJS_OUT") {
-            let obj: [String: Any] = ["root": root, "rows": answers, "texts": texts, "usages": usageOut]
+            let obj: [String: Any] = ["root": root, "rows": answers, "texts": texts, "usages": usageOut, "sigs": sigOut, "renames": renameOut]
             if let d = try? JSONSerialization.data(withJSONObject: obj) { try? d.write(to: URL(fileURLWithPath: out)) }
             fputs("BENCH wrote \(out)\n", stderr)
         }
