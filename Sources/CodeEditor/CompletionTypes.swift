@@ -12,6 +12,8 @@ struct CompletionItem {
     var detail: String = ""           // signature / type, shown right-aligned
     var documentation: String = ""    // plain or markdown, shown in the side panel
     var sortText: String?
+    /// Provider tier for ranking among equally good matches (lower = earlier); -1 = derive from `sortText` (see CompletionRanker.tier).
+    var priority = -1
     var filterText: String?
     var replaceRange: NSRange?        // UTF-16 range to replace; nil = the identifier prefix before the caret
     var additionalEdits: [(range: NSRange, text: String)] = []   // e.g. auto-added `use` imports (ranges in the ORIGINAL text)

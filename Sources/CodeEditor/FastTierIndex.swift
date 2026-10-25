@@ -167,11 +167,22 @@ final class FastProject {
 
     private let viewsSec = FTSection<[String]>([])
     func viewNames() -> [String] {
-        section(viewsSec, stamp: { Self.dirStamp(self.abs("resources/views")) }) {
+        section(viewsSec, stamp: { LaravelModules.dirs(self.lp).reduce(Self.dirStamp(self.abs("resources/views"))) { $0 &+ Self.dirStamp($1.path + "/resources/views") &* 7 } }) {
             var out: [String] = []
+            var seen = Set<String>()
             for f in Self.files(in: abs("resources/views"), ext: ".blade.php") {
                 let n = String(f.dropLast(10)).replacingOccurrences(of: "/", with: ".")
-                out.append(n)
+                if seen.insert(n).inserted { out.append(n) }
+            }
+            // modules: `items::reports.pdf` (namespaced, as registered by loadViewsFrom) and the plain name some modules publish
+            for m in LaravelModules.dirs(lp) {
+                for sub in ["resources/views", "Resources/views"] where LaravelFS.isDir(m.path + "/" + sub) {
+                    for f in Self.files(in: m.path + "/" + sub, ext: ".blade.php") {
+                        let n = String(f.dropLast(10)).replacingOccurrences(of: "/", with: ".")
+                        if seen.insert(m.lower + "::" + n).inserted { out.append(m.lower + "::" + n) }
+                        if seen.insert(n).inserted { out.append(n) }
+                    }
+                }
             }
             return out
         }
@@ -223,11 +234,23 @@ final class FastProject {
     private let configSec = FTSection<[String]>([])
     func configKeys() -> [String] {
         let dir = abs("config")
-        return section(configSec, stamp: { self.lp.stamp(LaravelFS.list(dir).sorted().map { dir + "/" + $0 }) &+ LaravelFS.mtime(dir) }) {
+        // (config key prefix, file): config/*.php, plus Modules/<Name>/config/config.php merged under the lower-case module name
+        func sources() -> [(base: String, path: String)] {
+            var r: [(String, String)] = LaravelFS.list(dir).sorted().filter { $0.hasSuffix(".php") }.map { (String($0.dropLast(4)), dir + "/" + $0) }
+            for m in LaravelModules.dirs(lp) {
+                let cdir = m.path + "/config"
+                for f in LaravelFS.list(cdir).sorted() where f.hasSuffix(".php") {
+                    let n = String(f.dropLast(4))
+                    r.append((n == "config" ? m.lower : m.lower + "." + n, cdir + "/" + f))
+                }
+            }
+            return r
+        }
+        return section(configSec, stamp: { self.lp.stamp(sources().map(\.path)) &+ LaravelFS.mtime(dir) &+ Int64(sources().count) }) {
             var out: [String] = []
-            for f in LaravelFS.list(dir).sorted() where f.hasSuffix(".php") {
-                guard let t = Self.read(dir + "/" + f) else { continue }
-                let base = String(f.dropLast(4))
+            var seenBase = Set<String>()
+            for (base, path) in sources() where seenBase.insert(base).inserted {
+                guard let t = Self.read(path) else { continue }
                 out.append(base)
                 let keys = PHPArrayKeys.parse(PHPLex(t))
                 for k in keys.keys.sorted() {
@@ -724,5 +747,24 @@ enum FTSchema {
             i += 1
         }
         tables[table] = cols
+    }
+}
+
+
+/// nwidart/laravel-modules style layout: `Modules/<Name>/{routes,config,resources/views,app,...}` (also lower-case `modules/`).
+enum LaravelModules {
+    struct Dir { var name: String; var lower: String; var path: String }
+
+    static func dirs(_ p: LaravelProject) -> [Dir] {
+        var out: [Dir] = []
+        for base in ["Modules", "modules"] {
+            let b = p.abs(base)
+            guard LaravelFS.isDir(b) else { continue }
+            for n in LaravelFS.list(b).sorted() where !n.hasPrefix(".") && LaravelFS.isDir(b + "/" + n) {
+                out.append(Dir(name: n, lower: n.lowercased(), path: b + "/" + n))
+                if out.count >= 200 { return out }
+            }
+        }
+        return out
     }
 }

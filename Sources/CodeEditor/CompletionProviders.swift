@@ -14,6 +14,24 @@ enum CI {
         return it
     }
 
+    /// Snippet for calling `name` with the REQUIRED parameters as named placeholders: `str_replace(${1:\$search}, ${2:\$replace}, ${3:\$subject})$0`.
+    /// `params` is the text between the parentheses (PHP `string $a, int $b = 0`, JS `a, b`, Python `a, b=1`). No required parameter: `name($0)`.
+    static func callInsert(_ name: String, params: String) -> String {
+        var stops: [String] = []
+        for raw in NPResolver.splitParams(params) {
+            let p = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if p.isEmpty || p.contains("=") || p.contains("...") || p.hasPrefix("?") || p.hasPrefix("[") || p.hasPrefix("{") || p.hasSuffix("?") || p.hasSuffix("]") || p.contains("?:") { continue }
+            var label = p
+            if let v = p.split(separator: " ").last(where: { $0.hasPrefix("$") }) { label = String(v) }       // PHP: the variable
+            else if let c = p.split(separator: ":").first, p.contains(":") { label = String(c).trimmingCharacters(in: .whitespaces) }   // TS: name: type
+            else if let l = p.split(separator: " ").last { label = String(l) }
+            label = label.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "$", with: "\\$").replacingOccurrences(of: "}", with: "\\}")
+            stops.append("${\(stops.count + 1):\(label)}")
+            if stops.count >= 6 { break }
+        }
+        return stops.isEmpty ? name + "($0)" : name + "(" + stops.joined(separator: ", ") + ")$0"
+    }
+
     /// "name(args)" or "name(args): ret" or "name(args)|ret" -> function-like item; bare names become properties.
     static func member(_ entry: Substring, kind: CompletionKind = .method, sort: String? = nil, range: NSRange? = nil) -> CompletionItem {
         guard let paren = entry.firstIndex(of: "(") else {
@@ -26,7 +44,8 @@ enum CI {
         else if let r = rest.range(of: "): ") { ret = String(rest[r.upperBound...]); rest = String(rest[..<rest.index(before: r.upperBound)]) .appending(")") }
         let noArgs = rest.hasPrefix("()")
         let detail = rest + (ret.isEmpty ? "" : ": " + ret)
-        return make(name, kind, detail: detail, insert: noArgs ? name + "()" : name + "($1)$0", snippet: !noArgs, sort: sort,
+        let inner = rest.hasPrefix("(") && rest.hasSuffix(")") ? String(rest.dropFirst().dropLast()) : ""
+        return make(name, kind, detail: detail, insert: noArgs ? name + "()" : callInsert(name, params: inner), snippet: !noArgs, sort: sort,
                     doc: "```\n\(name)\(detail)\n```", range: range)
     }
 

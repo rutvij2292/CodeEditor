@@ -2,12 +2,7 @@ import AppKit
 
 /// Per-tab completion controller: auto-trigger, provider merging/ranking, popup keyboard handling, accept + snippets.
 final class CompletionController: NSObject {
-    struct Ranked {
-        var item: CompletionItem
-        var score: Int
-        var order: Int
-        var query: String
-    }
+    typealias Ranked = CompletionRanker.Ranked
 
     struct SnippetSession {
         var stops: [(index: Int, range: NSRange)]
@@ -35,6 +30,8 @@ final class CompletionController: NSObject {
     private var lastCaret = 0
     private var applying = false
     private var lastRequestManual = false
+    private var rankContext = CompletionRanker.Context.empty
+    private lazy var projectKey: String = CompletionHistory.shared.projectKey(for: url)
     private var resolved: [String: CompletionItem] = [:]
     private var resolving: Set<String> = []
     private(set) var session: SnippetSession?
@@ -240,6 +237,10 @@ final class CompletionController: NSObject {
         let ctx = CompletionContext(text: text, caret: caret, fileURL: url, fileExtension: ext, triggerCharacter: trigger,
                                     isManual: manual, prefixRange: NSRange(location: start, length: caret - start))
         lastRequestManual = manual
+        let pkey = projectKey
+        rankContext = CompletionRanker.Context(docCounts: CompletionRanker.docCounts(ns, caret: caret),
+                                               history: { CompletionHistory.shared.level($0, project: pkey) },
+                                               popularity: CompletionPopularity.table(ext: ext, blade: url.lastPathComponent.hasSuffix(".blade.php")))
         providers = CompletionRegistry.providers(forExtension: ext)
         results = Array(repeating: nil, count: providers.count)
         resolved = [:]; resolving = []
@@ -266,68 +267,10 @@ final class CompletionController: NSObject {
 
     // MARK: - Ranking
 
-    private func score(_ item: CompletionItem, q: String, ql: String, qb: [UInt8], qchars: [Character]) -> Int? {
-        if q.isEmpty { return 0 }
-        let t = item.filterText ?? item.label
-        if !qb.isEmpty, !CompletionLex.subsequence(qb, in: t) { return nil }
-        let pen = min(t.utf16.count, 60) / 4
-        if t == q { return 1000 }
-        if t.hasPrefix(q) { return 900 - pen }
-        let tl = t.lowercased()
-        if tl == ql { return 950 }
-        if tl.hasPrefix(ql) { return 800 - pen }
-        guard let f = Fuzzy.score(qchars, in: t) else { return nil }
-        return 100 + max(0, min(f, 500)) / 2 - pen
-    }
-
     private func rank() -> [Ranked] {
-        let ns = textView.string as NSString
-        let caret = min(textView.selectedRange().location, ns.length)
-        let defaultStart = CompletionLex.runStart(ns, caret, CompletionLex.isIdent)
-        struct Q { var q: String; var ql: String; var qb: [UInt8]; var chars: [Character] }
-        var cache: [Int: Q] = [:]
-        var out: [Ranked] = []
-        var seen: [String: Int] = [:]
-        var order = 0
-        var minStart = defaultStart
-        for res in results {
-            guard let res else { continue }
-            for item in res.items {
-                let start = item.replaceRange?.location ?? defaultStart
-                guard start >= 0, start <= caret else { continue }
-                let q: Q
-                if let c = cache[start] { q = c } else {
-                    let s = ns.substring(with: NSRange(location: start, length: caret - start))
-                    let ql = s.lowercased().replacingOccurrences(of: " ", with: "")
-                    let ascii = ql.utf8.allSatisfy { $0 < 128 }
-                    q = Q(q: s, ql: ql, qb: ascii ? Array(ql.utf8) : [], chars: Array(ql))
-                    cache[start] = q
-                }
-                guard let sc = score(item, q: q.q, ql: q.ql, qb: q.qb, qchars: q.chars) else { continue }
-                minStart = min(minStart, start)
-                let key = item.label + "\u{1}" + item.kind.rawValue
-                let r = Ranked(item: item, score: sc, order: order, query: q.q)
-                if let idx = seen[key] {
-                    if sc >= out[idx].score { out[idx].item = item; out[idx].score = sc; out[idx].query = q.q }
-                    continue
-                }
-                seen[key] = out.count
-                out.append(r)
-                order += 1
-            }
-        }
-        var nonText = Set<String>()
-        for r in out where r.item.kind != .text { nonText.insert(r.item.label) }
-        if !nonText.isEmpty { out.removeAll { $0.item.kind == .text && nonText.contains($0.item.label) } }
-        out.sort { a, b in
-            if a.score != b.score { return a.score > b.score }
-            let sa = a.item.sortText ?? a.item.label.lowercased(), sb = b.item.sortText ?? b.item.label.lowercased()
-            if sa != sb { return sa < sb }
-            return a.order < b.order
-        }
-        if out.count > 300 { out.removeLast(out.count - 300) }
-        anchor = min(anchor, minStart)
-        return out
+        let o = CompletionRanker.rank(results: results, text: textView.string as NSString, caret: textView.selectedRange().location, anchor: anchor, context: rankContext)
+        anchor = o.anchor
+        return o.ranked
     }
 
     private func matches(_ label: String, _ query: String) -> [Int] {
@@ -437,6 +380,7 @@ final class CompletionController: NSObject {
         guard isOpen, ranked.indices.contains(selected) else { return }
         let item = currentItem(selected)
         close()
+        if item.kind != .text { CompletionHistory.shared.record(item.label.trimmingCharacters(in: CharacterSet(charactersIn: "$@:-")), project: projectKey) }
         insert(item)
     }
 
@@ -460,7 +404,8 @@ final class CompletionController: NSObject {
             while ws < r.location, ns.character(at: ws) == 32 || ns.character(at: ws) == 9 { ws += 1 }
             let indent = ns.substring(with: NSRange(location: ls, length: ws - ls))
             var raw = item.insertText
-            if raw.hasSuffix("($1)$0"), r.upperBound < ns.length, ns.character(at: r.upperBound) == 40 { raw = String(raw.dropLast(6)) }
+            // the user already typed the parentheses (renaming a call in place): insert the name alone
+            if raw.hasPrefix(item.label + "("), r.upperBound < ns.length, ns.character(at: r.upperBound) == 40 { raw = item.label }
             raw = raw.replacingOccurrences(of: "\n", with: "\n" + indent).replacingOccurrences(of: "\t", with: textView.indentUnit)
             let parsed = SnippetParser.parse(raw)
             text = parsed.text

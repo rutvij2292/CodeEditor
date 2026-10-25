@@ -718,7 +718,7 @@ final class FTEval {
     private func methodItem(_ m: FTMethod, sort: String, owner: String) -> CompletionItem {
         let noArgs = m.params.isEmpty
         let detail = "(" + m.params + ")" + (m.ret.isEmpty ? "" : ": " + m.ret)
-        var it = CI.make(m.name, .method, detail: detail, insert: noArgs ? m.name + "()" : m.name + "($1)$0", snippet: !noArgs, sort: sort + m.name.lowercased(),
+        var it = CI.make(m.name, .method, detail: detail, insert: noArgs ? m.name + "()" : CI.callInsert(m.name, params: m.params), snippet: !noArgs, sort: sort + m.name.lowercased(),
                          doc: "```php\n\(m.name)\(detail)\n```\n\(owner)")
         it.deprecated = false
         return it

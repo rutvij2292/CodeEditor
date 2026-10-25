@@ -15,6 +15,11 @@ enum LaravelRouteIndex {
     static func routeFiles(_ p: LaravelProject) -> [String] {
         let dir = p.abs("routes")
         var files = LaravelFS.list(dir).filter { $0.hasSuffix(".php") }.sorted().map { dir + "/" + $0 }
+        for m in LaravelModules.dirs(p) {                       // nwidart/laravel-modules: Modules/<Name>/routes/*.php
+            for sub in ["routes", "Routes"] where LaravelFS.isDir(m.path + "/" + sub) {
+                files += LaravelFS.list(m.path + "/" + sub).filter { $0.hasSuffix(".php") }.sorted().map { m.path + "/" + sub + "/" + $0 }
+            }
+        }
         files.append(p.abs("bootstrap/app.php"))
         files.append(p.abs("app/Providers/RouteServiceProvider.php"))
         return files
