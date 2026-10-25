@@ -13,6 +13,7 @@ struct NJSRes {
     var docStart = -1, docEnd = -1
     var keyword: String?
     var typeName: String?
+    var initCall: String?
     var members: [NJSMember] = []
     var heritage: [String] = []
     var siblings: [NJSMember]?          // members of the enclosing namespace (heritage names resolve there first)
@@ -22,7 +23,7 @@ struct NJSRes {
 
     init(path: String, sym s: NJSSym) {
         self.path = path; name = s.name; kind = s.kind; loc = s.loc; len = s.len; declStart = s.declStart; sigEnd = s.sigEnd
-        docStart = s.docStart; docEnd = s.docEnd; keyword = s.keyword; typeName = s.typeName; members = s.members; heritage = s.heritage
+        docStart = s.docStart; docEnd = s.docEnd; keyword = s.keyword; typeName = s.typeName; initCall = s.initCall; members = s.members; heritage = s.heritage
     }
     init(path: String, member m: NJSMember, owner: String?, siblings: [NJSMember]? = nil) {
         self.path = path; name = m.name; kind = m.kind; loc = m.loc; len = m.len; declStart = m.declStart; sigEnd = m.sigEnd
@@ -65,6 +66,7 @@ final class NJSProject {
     let root: String
     let queue: DispatchQueue
     let modules: NJSModules
+    let graph = NJSImportGraph()
     private let lock = NSLock()
     private var cache: [String: NJSSummary] = [:]
     private var lru: [String] = []
@@ -84,6 +86,7 @@ final class NJSProject {
     func trim() {
         lock.lock(); cache.removeAll(); lru.removeAll(); cost = 0; lock.unlock()
         modules.trim()
+        graph.clear()
     }
 
     func summary(path: String) -> NJSSummary? {
@@ -95,7 +98,7 @@ final class NJSProject {
             lock.unlock(); return s
         }
         lock.unlock()
-        guard let text = FastProject.read(path), let doc = NJSDoc(path: path, text: text, maxChars: 1_000_000) else { return nil }      // a tree costs ~26 bytes per character while it lives
+        guard let text = FastProject.read(path), let doc = NJSDoc(path: path, text: text, maxChars: 1_000_000, skipMinified: true) else { return nil }      // a tree costs ~26 bytes per character while it lives
         let s = doc.summary
         s.stamp = stamp
         lock.lock()
@@ -110,17 +113,53 @@ final class NJSProject {
     }
 }
 
+/// Texts of the few files whose lines a request has to show (definition targets, hover): at most 3 files / 600K characters, replaced
+/// least recently used first (NPFiles keeps up to 3M characters = 6 MB for the PHP engine).
+enum NJSTexts {
+    private static let lock = NSLock()
+    private static var entries: [(path: String, stamp: Int64, text: NSString)] = []
+
+    static func text(_ path: String) -> NSString? {
+        let st = LaravelFS.mtime(path)
+        lock.lock()
+        if let i = entries.firstIndex(where: { $0.path == path && $0.stamp == st }) { let e = entries.remove(at: i); entries.append(e); lock.unlock(); return e.text }
+        lock.unlock()
+        guard let t = FastProject.read(path) else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        entries.removeAll { $0.path == path }
+        entries.append((path, st, t))
+        var total = entries.reduce(0) { $0 + $1.text.length }
+        while entries.count > 3 || (total > 600_000 && entries.count > 1) { total -= entries.removeFirst().text.length }
+        return t
+    }
+
+    static func clear() { lock.lock(); entries.removeAll(); lock.unlock() }
+}
+
+/// Results of resolving names in files other than the document, shared by every environment of one find-usages search
+/// (the files do not change while it runs).
+final class NJSMemo {
+    private let lock = NSLock()
+    private var top: [String: [NJSRes]] = [:]
+    private var exports: [String: [NJSRes]] = [:]
+    func top(_ k: String) -> [NJSRes]? { lock.lock(); defer { lock.unlock() }; return top[k] }
+    func setTop(_ k: String, _ v: [NJSRes]) { lock.lock(); top[k] = v; lock.unlock() }
+    func exports(_ k: String) -> [NJSRes]? { lock.lock(); defer { lock.unlock() }; return exports[k] }
+    func setExports(_ k: String, _ v: [NJSRes]) { lock.lock(); exports[k] = v; lock.unlock() }
+}
+
 /// One request: the live document of the file being edited plus the project caches.
 final class NJSEnv {
     let proj: NJSProject
     let doc: NJSDoc
     let path: String
+    var memo: NJSMemo?
     var steps = 0                       // safety valve against pathological re-export / heritage cycles
 
     init(proj: NJSProject, doc: NJSDoc) { self.proj = proj; self.doc = doc; path = doc.path }
 
     func summary(_ p: String) -> NJSSummary? { p == path ? doc.summary : proj.summary(path: p) }
-    func text(_ p: String) -> NSString? { p == path ? doc.text : NPFiles.text(p) }
+    func text(_ p: String) -> NSString? { p == path ? doc.text : NJSTexts.text(p) }
 
     static func isCode(_ p: String) -> Bool { NJSModules.codeExts.contains((p as NSString).pathExtension.lowercased()) }
 
@@ -128,6 +167,11 @@ final class NJSEnv {
 
     /// Top-level symbols named `name` of `file`, following import bindings to their definitions.
     func resolveTop(_ file: String, _ name: String, depth: Int = 0) -> [NJSRes] {
+        if let m = memo, file != path { let k = file + "\u{0}" + name; if let r = m.top(k) { return r }; let r = resolveTopUncached(file, name, depth: depth); if steps < 400 { m.setTop(k, r) }; return r }
+        return resolveTopUncached(file, name, depth: depth)
+    }
+
+    private func resolveTopUncached(_ file: String, _ name: String, depth: Int) -> [NJSRes] {
         steps += 1
         guard depth < 8, steps < 400, let s = summary(file), let syms = s.top[name] else { return [] }
         var out: [NJSRes] = []
@@ -166,6 +210,11 @@ final class NJSEnv {
     }
 
     func exportOf(_ file: String, _ name: String, depth: Int = 0) -> [NJSRes] {
+        if let m = memo, file != path { let k = file + "\u{0}" + name; if let r = m.exports(k) { return r }; let r = exportOfUncached(file, name, depth: depth); if steps < 400 { m.setExports(k, r) }; return r }
+        return exportOfUncached(file, name, depth: depth)
+    }
+
+    private func exportOfUncached(_ file: String, _ name: String, depth: Int) -> [NJSRes] {
         steps += 1
         guard depth < 8, steps < 400, let s = summary(file) else { return [] }
         if let e = s.exports[name] {
@@ -254,6 +303,7 @@ final class NJSEnv {
             case .variable, .constant, .property, .parameter, .getter:
                 if let t = r.typeName { out += resolveTypeRef(t, in: r.path, siblings: r.siblings).filter { $0.kind != .function } }
                 else if !r.members.isEmpty { out.append(r) }
+                else if let c = r.initCall, let v = tvOfResult(resolveTypeRef(c, in: r.path)) { out += v.res }       // const x = f(): the declared return type of f
             case .function, .method:
                 break
             default: break
@@ -276,8 +326,12 @@ final class NJSEnv {
     }
 
     /// The type of the value a member / function result produces (declared return / property types only).
+    /// Vue's reactivity factories: whatever the overload, the result is a Ref family interface and `.value` is declared there.
+    private static let vueRefs: [String: String] = ["ref": "Ref", "shallowRef": "ShallowRef", "toRef": "Ref", "customRef": "Ref", "computed": "ComputedRef"]
+
     func tvOfResult(_ res: [NJSRes]) -> NJSTV? {
         for r in res {
+            if let iface = NJSEnv.vueRefs[r.name], r.path.contains("/@vue/reactivity/"), let v = instance(of: iface, in: r.path) { return v }
             if let t = r.typeName, let v = instance(of: t, in: r.path, siblings: r.siblings) { return v }
         }
         return nil
@@ -312,7 +366,9 @@ final class NJSEnv {
             let name = n.text(doc.text)
             if let b = localBinding(name, from: n) {
                 if let t = b.typeName, localBinding(t.split(separator: ".").first.map(String.init) ?? t, from: n) != nil { return nil }   // a local type (type parameter, local class)
-                return tv(of: [resolve(b)]) ?? bindingType(b)
+                if let v = tv(of: [resolve(b)]) ?? bindingType(b) { return v }
+                if b.keyword == "const", b.typeName == nil, b.declNode.kind == "variable_declarator", let init_ = b.declNode.field("value"), init_.kind == "call_expression" { return typeOf(init_, depth: depth + 1) }
+                return nil
             }
             return tv(of: resolveTop(path, name))
         case "member_expression":

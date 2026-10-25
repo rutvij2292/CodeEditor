@@ -5,6 +5,7 @@ import SwiftTreeSitter
 /// project's JS / TS / Vue files, times native go to definition (cold, then warm), writes positions + answers as JSON (replayable against the
 /// TypeScript server with scripts/bench-tsserver.py), and also times hover, diagnostics and find usages. Prints footprint and latency to stderr.
 enum NativeJSBench {
+    private static func inUseMB() -> Double { var st = malloc_statistics_t(); malloc_zone_statistics(nil, &st); return Double(st.size_in_use) / 1_048_576 }
     private static func pct(_ a: [Double], _ p: Double) -> Double { a.isEmpty ? 0 : a[min(a.count - 1, Int(Double(a.count) * p))] }
     private static func f1(_ v: Double) -> String { String(format: "%.1f", v) }
     private static func ms(_ since: Date) -> Double { Date().timeIntervalSince(since) * 1000 }
@@ -16,6 +17,7 @@ enum NativeJSBench {
         let nFiles = Int(AppEnv.value("CE_NJS_FILES") ?? "") ?? 60
         let perFile = Int(AppEnv.value("CE_NJS_PER_FILE") ?? "") ?? 14
         let base = NativePHPBench.footprintMB()
+        let baseInUse = inUseMB()
         var trunc = false
         var files = NJSRefs.filesForBench(root, truncated: &trunc)
         let total = files.count
@@ -26,8 +28,10 @@ enum NativeJSBench {
         let t0 = Date()
         var rows: [Row] = []
         var texts: [String: String] = [:]
-        for f in files {
-            guard let text = FastProject.read(f), let doc = NJSDoc(path: f, text: text) else { continue }
+        var enough = false
+        for f in files where !enough { autoreleasepool {
+            guard let text = FastProject.read(f), let doc = NJSDoc(path: f, text: text) else { return }
+            defer { withExtendedLifetime(doc) {} }      // nodes below must not outlive the document's tree zone
             let imports = Set(doc.summary.order.filter { $0.kind == .import }.map(\.name))
             var cands: [Row] = []
             var stack: [Node] = [doc.root]
@@ -47,8 +51,8 @@ enum NativeJSBench {
             if cands.count > perFile { let step = Double(cands.count) / Double(perFile); cands = (0..<perFile).map { cands[Int(Double($0) * step)] } }
             rows += cands
             if f.hasSuffix(".vue") { texts[f] = doc.isVue ? NJSDoc.maskVue(text).0 as String : text as String }
-            if rows.count >= 1500 { break }
-        }
+            if rows.count >= 1500 { enough = true }
+        } }
         fputs("BENCH sampled \(rows.count) tokens in \(f1(ms(t0))) ms\n", stderr)
         NativeJS.trimMemory()
         let afterSample = NativePHPBench.footprintMB()
@@ -64,7 +68,7 @@ enum NativeJSBench {
             if r.file != lastFile { lastFile = r.file; lastText = FastProject.read(r.file) }
             guard let text = lastText else { continue }
             let t = Date()
-            let hit = NativeJS.lookup(url: URL(fileURLWithPath: r.file), text: text, offset: r.offset + 1, root: root)
+            let hit = autoreleasepool { NativeJS.lookup(url: URL(fileURLWithPath: r.file), text: text, offset: r.offset + 1, root: root) }
             let el = ms(t)
             cold.append(el)
             if hit != nil { answered += 1 }
@@ -74,11 +78,12 @@ enum NativeJSBench {
                             "native": (hit?.targets ?? []).map { ["path": $0.path, "line": $0.line, "column": $0.column] }, "ms": el])
         }
         let afterCold = NativePHPBench.footprintMB()
+        let inUseCold = inUseMB()
         for r in rows {
             if r.file != lastFile { lastFile = r.file; lastText = FastProject.read(r.file) }
             guard let text = lastText else { continue }
             let t = Date()
-            _ = NativeJS.lookup(url: URL(fileURLWithPath: r.file), text: text, offset: r.offset + 1, root: root)
+            autoreleasepool { _ = NativeJS.lookup(url: URL(fileURLWithPath: r.file), text: text, offset: r.offset + 1, root: root) }
             warm.append(ms(t))
         }
         cold.sort(); warm.sort()
@@ -89,24 +94,24 @@ enum NativeJSBench {
         // hover
         var hov: [Double] = []
         var hovered = 0
-        for (i, r) in rows.enumerated() where i % 3 == 0 {
-            guard let text = FastProject.read(r.file) else { continue }
+        for (i, r) in rows.enumerated() where i % 3 == 0 { autoreleasepool {
+            guard let text = FastProject.read(r.file) else { return }
             let t = Date()
             if let h = NativeJS.lookup(url: URL(fileURLWithPath: r.file), text: text, offset: r.offset + 1, root: root), !h.markdown.isEmpty { hovered += 1 }
             hov.append(ms(t))
-        }
+        } }
         hov.sort()
         fputs("BENCH hover: \(hovered)/\(hov.count) with text, p50=\(f1(pct(hov, 0.5))) p95=\(f1(pct(hov, 0.95))) ms\n", stderr)
 
         // diagnostics
         var dtimes: [Double] = [], dn = 0, missing: [String] = []
-        for f in files {
-            guard let text = FastProject.read(f) else { continue }
+        for f in files { autoreleasepool {
+            guard let text = FastProject.read(f) else { return }
             let t = Date()
             let list = NativeJSDiag.analyze(url: URL(fileURLWithPath: f), text: text)
             dtimes.append(ms(t))
             for d in list where d.code == "module-not-found" { dn += 1; missing.append("\((f as NSString).lastPathComponent): \(text.substring(with: d.range))") }
-        }
+        } }
         dtimes.sort()
         fputs("BENCH diagnostics: \(files.count) files, p50=\(f1(pct(dtimes, 0.5))) p95=\(f1(pct(dtimes, 0.95))) max=\(f1(dtimes.last ?? 0)) ms; module-not-found=\(dn) \(missing.prefix(8))\n", stderr)
 
@@ -115,8 +120,9 @@ enum NativeJSBench {
         var usageOut: [String: Any] = [:]
         var picks: [(String, Int)] = []
         for r in rows where r.kind == "import-usage" && !picks.contains(where: { $0.0 == r.word }) { picks.append((r.file, r.offset)); if picks.count >= 5 { break } }
-        for (f, off) in picks {
-            guard let text = FastProject.read(f) else { continue }
+        for (f, off) in picks { autoreleasepool {
+            guard let text = FastProject.read(f) else { return }
+            NJSRefs.tList = 0; NJSRefs.tGraph = 0; NJSRefs.tParse = 0; NJSRefs.tWalk = 0
             let t = Date()
             var doc: NJSDoc?
             let sym: NJSRefSymbol? = proj.queue.sync {
@@ -124,15 +130,19 @@ enum NativeJSBench {
                 doc = env.doc
                 return NJSRefs.identify(env: env, offset: off + 1)
             }
-            guard let s = sym else { continue }
+            guard let s = sym else { return }
             let r = NJSRefs.collect(s, liveDoc: doc, liveTexts: [:])
             let el = ms(t)
+            fputs("BENCH   phases: list \(f1(Double(NJSRefs.tList) / 1e6)) graph \(f1(Double(NJSRefs.tGraph) / 1e6)) parse \(f1(Double(NJSRefs.tParse) / 1e6)) walk+resolve \(f1(Double(NJSRefs.tWalk) / 1e6)) ms\n", stderr)
+            let gd = proj.graph.dbg; fputs("BENCH   graph: project scan \(f1(gd.projectMs)) ms, externals in \(f1(gd.extMs)) ms, bfs \(f1(gd.bfsMs)) ms, entries \(gd.entries), cache misses \(proj.graph.misses)\n", stderr)
+            let t2 = Date(); _ = NJSRefs.collect(s, liveDoc: doc, liveTexts: [:]); let repeatMs = ms(t2)
+            let t3 = Date(); NJSRefs.dropMemos(); _ = NJSRefs.collect(s, liveDoc: doc, liveTexts: [:]); let warmNoMemo = ms(t3)
             usageTimes.append(el)
             let tb = NPLineStarts(text).position(of: off)
             usageOut[s.name] = ["file": f, "line": tb.line - 1, "character": tb.col - 1, "ms": el,
                                 "hits": r.hits.filter { $0.role != .unresolved }.map { ["path": $0.path, "line": $0.line - 1] }]
-            fputs("BENCH usages \(s.name): \(r.resolvedCount) hits (\(r.hits.count - r.resolvedCount) possible) in \(r.candidates) candidate files / \(r.filesScanned) parsed, \(f1(el)) ms\n", stderr)
-        }
+            fputs("BENCH usages \(s.name): \(r.resolvedCount) hits (\(r.hits.count - r.resolvedCount) possible) in \(r.candidates) candidate files / \(r.filesScanned) parsed, first \(f1(el)) ms, repeat(memo) \(f1(repeatMs)) ms, warm no-memo \(f1(warmNoMemo)) ms\n", stderr)
+        } }
         if AppEnv.value("CE_NJS_LEAK") != nil {
             for round in 1...4 {
                 for r in rows { autoreleasepool { if let text = FastProject.read(r.file) { _ = NativeJS.lookup(url: URL(fileURLWithPath: r.file), text: text, offset: r.offset + 1, root: root) } } }
@@ -146,8 +156,10 @@ enum NativeJSBench {
             }
         }
         let afterAll = NativePHPBench.footprintMB()
+        fputs("BENCH heap in use MB: start=\(f1(baseInUse)) afterLookups=\(f1(inUseCold)) afterAll=\(f1(inUseMB()))\n", stderr)
         fputs("BENCH footprint MB: start=\(f1(base)) afterSampling=\(f1(afterSample)) afterLookups=\(f1(afterCold)) afterAll=\(f1(afterAll)) (resident=\(f1(NativePHPBench.residentMB())))\n", stderr)
         NativeJS.trimMemory()
+        if let hold = AppEnv.value("CE_NJS_HOLD").flatMap(Double.init) { fputs("BENCH holding pid \(getpid())\n", stderr); Thread.sleep(forTimeInterval: hold) }
         fputs("BENCH footprint after trimMemory: \(f1(NativePHPBench.footprintMB())) MB\n", stderr)
 
         if let out = AppEnv.value("CE_NJS_OUT") {

@@ -47,6 +47,45 @@ extension SelfTestNativeJS {
         check("diag: rootDirs projects (virtual directories) are not judged", NativeJSDiag.analyze(url: root.appendingPathComponent("src/svelte/p.ts"), text: virt as NSString).filter { $0.code == "module-not-found" }.isEmpty)
         check("diag: query suffix and non-relative specifiers are skipped", NativeJSDiag.analyze(url: root.appendingPathComponent("src/c.ts"), text: "import i from './x.svg?react'\nimport k from 'nonexistent-pkg'\ni; k\n" as NSString).isEmpty)
 
+        // arena allocator: memory of a tree is committed while its document lives and handed back at once
+        let bigSrc = (0..<4000).map { "export function f\($0)(a: number, b: string): Promise<void> { return helper(a) + b.length }" }.joined(separator: "\n")
+        let before = NJSAlloc.committedBytes, zonesBefore = NJSAlloc.liveZones
+        var held: NJSDoc? = NJSDoc(path: root.path + "/src/big.ts", text: bigSrc as NSString)
+        let during = NJSAlloc.committedBytes
+        check("arena: a parse commits its tree memory (~26 bytes per character)", held != nil && during - before > 1_000_000 && NJSAlloc.liveZones >= 1)
+        check("arena: the tree is usable", held?.summary.order.count == 4000)
+        held = nil
+        check("arena: releasing the document returns all of it", NJSAlloc.committedBytes == before)
+        DispatchQueue.concurrentPerform(iterations: 12) { i in
+            for _ in 0..<5 { autoreleasepool { let d = NJSDoc(path: root.path + "/src/c\(i).ts", text: bigSrc as NSString); _ = d?.summary.top.count } }
+        }
+        check("arena: concurrent parses and releases leave nothing behind", NJSAlloc.committedBytes == before && NJSAlloc.liveZones == zonesBefore)
+        // a document released on another thread than the one that parsed it
+        var cross: NJSDoc? = NJSDoc(path: root.path + "/src/x.ts", text: bigSrc as NSString)
+        let sem = DispatchSemaphore(value: 0)
+        let box = cross; cross = nil
+        DispatchQueue.global().async { _ = box?.summary.order.count; sem.signal() }
+        sem.wait()
+        check("arena: cross-thread use is safe", true)
+
+        // inference from declared return types: const x = f() / Vue refs
+        put(root, "node_modules/@vue/reactivity/package.json", "{\"name\":\"@vue/reactivity\",\"types\":\"dist/reactivity.d.ts\"}")
+        put(root, "node_modules/@vue/reactivity/dist/reactivity.d.ts", "export interface Ref<T = any> { value: T }\nexport interface ComputedRef<T = any> extends Ref<T> { readonly value: T }\nexport declare function ref<T>(v: T): [T] extends [Ref] ? T : Ref<T>;\nexport declare const computed: { <T>(g: () => T): ComputedRef<T> };\n")
+        put(root, "node_modules/vue/package.json", "{\"name\":\"vue\",\"types\":\"dist/vue.d.ts\"}")
+        put(root, "node_modules/vue/dist/vue.d.ts", "export * from '@vue/reactivity'\n")
+        let inf = "import { ref, computed } from 'vue'\nimport { Owner } from '@/util'\nfunction mk(): Owner { return new Owner() }\nconst n = ref(0)\nn.value\nconst c = computed(() => 1)\nc.value\nconst o = mk()\no.ping()\nconst top = mk()\nfunction f() { return top.email }\n"
+        put(root, "src/inf.ts", inf)
+        let iu = root.appendingPathComponent("src/inf.ts")
+        func ihit(_ needle: String, _ nth: Int = 0, plus: Int = 1) -> String {
+            let h = NativeJS.lookup(url: iu, text: inf as NSString, offset: off(inf, needle, nth, plus: plus), root: root.path)
+            guard let t = h?.targets.first else { return "nil" }
+            return "\(t.path.hasPrefix(root.path + "/") ? String(t.path.dropFirst(root.path.count + 1)) : t.path):\(t.line)"
+        }
+        check("infer: ref().value is the Ref interface's value", ihit("value\nconst c") == "node_modules/@vue/reactivity/dist/reactivity.d.ts:1")
+        check("infer: computed().value is ComputedRef's value", ihit("value\nconst o") == "node_modules/@vue/reactivity/dist/reactivity.d.ts:2")
+        check("infer: const x = f() takes f's declared return type", ihit("ping()") == "src/util.ts:17")
+        check("infer: top-level const x = f()", ihit("email }") == "src/util.ts:17")
+
         // completion: specifiers
         let spec = "import a from './models/"
         let t1 = complete(root.appendingPathComponent("src/x.ts"), spec, caretAfter: "./models/")

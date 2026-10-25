@@ -23,18 +23,60 @@ enum SelfTestNativeJS {
             fputs(out, stderr); exit(0)
         }
         if let p = AppEnv.value("CE_NJS_BENCH") { NativeJSBench.run(p); exit(0) }
+        if AppEnv.value("CE_NJS_ZONETEST") != nil {
+            func mb() -> String { String(format: "%.1f", NativePHPBench.footprintMB()) }
+            fputs("ZONE start \(mb())\n", stderr)
+            let z = malloc_create_zone(0, 0)!
+            var ptrs: [UnsafeMutableRawPointer] = []
+            for i in 0..<160_000 { ptrs.append(malloc_zone_malloc(z, 32 + (i % 5) * 16)!) }
+            for p in ptrs { memset(p, 1, 32) }
+            fputs("ZONE after 160k small blocks -> \(mb())\n", stderr)
+            for p in ptrs { free(p) }
+            fputs("ZONE after free -> \(mb())\n", stderr)
+            malloc_zone_pressure_relief(z, 0)
+            fputs("ZONE after relief -> \(mb())\n", stderr)
+            malloc_destroy_zone(z)
+            fputs("ZONE after destroy -> \(mb())\n", stderr)
+            exit(0)
+        }
+        if let proj = AppEnv.value("CE_NJS_MEM2") {            // which phase leaves the heap high-water: read / parse / summary / lookup over a project sample
+            func mb() -> String { String(format: "%.1f", NativePHPBench.footprintMB()) }
+            var tr = false
+            let all = NJSRefs.filesForBench((proj as NSString).standardizingPath, truncated: &tr)
+            let sample = all.enumerated().filter { $0.offset % max(1, all.count / 100) == 0 }.map(\.element)
+            fputs("MEM2 start \(mb()) files=\(sample.count)\n", stderr)
+            for f in sample { autoreleasepool { _ = FastProject.read(f) } }
+            fputs("MEM2 after read -> \(mb())\n", stderr)
+            var prev = NativePHPBench.footprintMB()
+            for f in sample { autoreleasepool { if let t = FastProject.read(f) { _ = NJSDoc(path: f, text: t); let now = NativePHPBench.footprintMB(); if now - prev > 0.5 { fputs("MEM2   +\(String(format: "%.1f", now - prev)) MB at \((f as NSString).lastPathComponent) (\(t.length) chars)\n", stderr) }; prev = now } } }
+            fputs("MEM2 after parse -> \(mb())\n", stderr)
+            for f in sample { autoreleasepool { if let t = FastProject.read(f) { _ = NJSDoc(path: f, text: t) } } }
+            fputs("MEM2 after 2nd parse pass -> \(mb())\n", stderr)
+            for f in sample where f.hasSuffix(".vue") { autoreleasepool { if let t = FastProject.read(f) { _ = NJSDoc.maskVue(t) } } }
+            fputs("MEM2 after maskVue only -> \(mb())\n", stderr)
+            for f in sample { autoreleasepool { if let t = FastProject.read(f), let d = NJSDoc(path: f, text: t) { _ = d.summary } } }
+            fputs("MEM2 after summary -> \(mb())\n", stderr)
+            for f in sample { autoreleasepool { if let t = FastProject.read(f) { _ = NJSScanner.scan(t) } } }
+            fputs("MEM2 after scan -> \(mb())\n", stderr)
+            for f in sample { autoreleasepool { if let t = FastProject.read(f) { _ = NativeJS.lookup(url: URL(fileURLWithPath: f), text: t, offset: 5, root: proj) } } }
+            fputs("MEM2 after lookups -> \(mb())\n", stderr)
+            exit(0)
+        }
         if let f = AppEnv.value("CE_NJS_MEM") {                 // footprint of reading / parsing / summarising one file
             func mb() -> String { String(format: "%.1f", NativePHPBench.footprintMB()) }
             fputs("MEM start \(mb())\n", stderr)
             var text: NSString? = FastProject.read(f)
+            for i in 1...3 { autoreleasepool { let d = NJSDoc(path: f, text: text!); _ = d?.summary }; fputs("MEM warmup parse \(i) released -> \(mb())\n", stderr) }
             fputs("MEM read \(text?.length ?? 0) chars -> \(mb())\n", stderr)
             var doc: NJSDoc? = NJSDoc(path: f, text: text!)
             fputs("MEM parsed -> \(mb())\n", stderr)
             let sm = doc!.summary
+            fputs("MEM arena committed \(NJSAlloc.committedBytes / 1024) KB for \(text!.length) chars\n", stderr)
             fputs("MEM summary (\(sm.order.count) syms, cost \(sm.cost / 1024) KB) -> \(mb())\n", stderr)
             doc = nil; text = nil
             fputs("MEM released -> \(mb())\n", stderr)
-            malloc_zone_pressure_relief(nil, 0)
+            fputs("MEM arena committed after release \(NJSAlloc.committedBytes / 1024) KB\n", stderr)
+            fputs("MEM live zones \(NJSAlloc.liveZones)\n", stderr)
             fputs("MEM relief -> \(mb())\n", stderr)
             exit(0)
         }

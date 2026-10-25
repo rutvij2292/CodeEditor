@@ -75,6 +75,32 @@ extension SelfTestNativeJS {
         } else { check("refs: class identified from declaration", false) }
         check("refs: unknown / global tokens are not native", usages(in: mainURL, text: main, "console") == nil)
 
+        // many files: the scan runs on all cores and merges in path order
+        for i in 0..<40 { put(root, "src/gen/g\(String(format: "%02d", i)).ts", "import { helper } from '../util'\nexport const v\(i) = helper(\(i))\n") }
+        NJSRefs.dropFileList(); NJSRefs.dropMemos()
+        if let (rg, _) = usages(in: mainURL, text: main, "helper(V)") {
+            let gen = rg.hits.filter { $0.path.contains("/src/gen/") }
+            check("refs: 40 files scanned in parallel give 80 hits, in path order, no duplicates", gen.count == 80 && gen.map { $0.path } == gen.map { $0.path }.sorted() && Set(gen.map { "\($0.path):\($0.line)\($0.column)" }).count == 80)
+        } else { check("refs: parallel search ran", false) }
+
+        // import graph: scanner flags, pruning, memo
+        let sc = NJSScanner.scan("import a, { b } from './x'\nimport * as ns from \"./n\"\nimport { c } from './c'\nexport * from './y'\nexport { a as q } from './r'\nconst z = require('./z')\nmodule.exports = require('./m')\nimport('./d')\nimport './side.css'\nexport { a }\nconst s = 'from ./not-a-spec'\n" as NSString)
+        func edge(_ spec: String) -> NJSEdge? { sc.edges.first { $0.spec == spec } }
+        check("graph scan: specifiers of every import form", Set(sc.edges.map(\.spec)) == ["./x", "./n", "./c", "./y", "./r", "./z", "./m", "./d", "./side.css"])
+        check("graph scan: default / namespace / require bindings vs named", edge("./x")?.binding == true && edge("./n")?.binding == true && edge("./z")?.binding == true && edge("./c")?.binding == false)
+        check("graph scan: re-exports and export lists", edge("./y")?.reexport == true && edge("./r")?.reexport == true && edge("./m")?.reexport == true && edge("./x")?.reexport == false && sc.exportsList)
+        put(root, "src/lonely.ts", "const helper = 1\nexport function other() { return helper }\n")      // contains the word, imports nothing
+        if let (r1, _) = usages(in: mainURL, text: main, "helper(V)") {
+            let files1 = Set(r1.hits.map(\.path))
+            check("graph: a file that cannot reach the declaration is not even parsed", !files1.contains(root.path + "/src/lonely.ts") && r1.candidates <= 50)
+            let t0 = Date()
+            let again = usages(in: mainURL, text: main, "helper(V)")
+            let dt = Date().timeIntervalSince(t0)
+            check("graph: a repeated search is answered from the memo", again?.0.hits.count == r1.hits.count && dt < 0.05)
+            put(root, "src/other.ts", "import { helper } from './util'\nhelper(1)\n")
+            if let (r3, _) = usages(in: mainURL, text: main, "helper(V)") { check("graph: editing a file invalidates the memo", r3.hits.count != r1.hits.count) } else { check("graph: re-run", false) }
+        } else { check("graph: search ran", false) }
+
         var picked: (String, Int)?
         NativeJSUI.presentHook = { t, items in picked = (t, items.count) }
         if let (r, s) = usages(in: mainURL, text: main, "VALUE as V") { NativeJSUI.present(s, result: r, window: nil) }

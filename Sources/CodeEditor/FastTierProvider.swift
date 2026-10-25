@@ -17,6 +17,7 @@ enum FastTier {
     /// FSEvents batch handler hook: forces the next request to re-validate its sections.
     static func invalidate(root: URL) {
         FastProject.existing(root: root)?.markDirty()
+        NJSRefs.dropFileList()                          // native JS find usages: the project's file listing is stale
         rootCache = rootCache.filter { $0.value == "" ? false : true }
     }
 

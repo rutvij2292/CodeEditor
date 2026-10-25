@@ -34,9 +34,8 @@ extension NJSModules {
         lock.unlock()
         var list: [NJSAlias] = []
         if let text = FastProject.read(path), text.length < 400_000 {
-            let ext = (path as NSString).pathExtension
-            if let tree = NJSParsers.parse(text, lang: ext.hasSuffix("ts") ? .ts : .js), let root = tree.rootNode {
-                list = NJSAliasParser(ns: text, cfgDir: (path as NSString).deletingLastPathComponent, root: root).parse()
+            if let doc = NJSDoc(path: path, text: text) {
+                list = withExtendedLifetime(doc) { NJSAliasParser(ns: text, cfgDir: (path as NSString).deletingLastPathComponent, root: doc.root).parse() }
             }
         }
         lock.lock()

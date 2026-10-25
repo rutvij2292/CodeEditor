@@ -9,9 +9,6 @@ import TreeSitterTSX
 enum NJSLang: Int { case js, ts, tsx }
 
 enum NJSParsers {
-    private static let lock = NSLock()
-    private static var parsers: [Int: Parser] = [:]
-
     static func lang(forExtension e: String, vueScriptIsTS: Bool = false) -> NJSLang? {
         switch e {
         case "ts", "mts", "cts": return .ts
@@ -22,11 +19,10 @@ enum NJSParsers {
         }
     }
 
-    static func parse(_ ns: NSString, lang: NJSLang) -> MutableTree? {
-        lock.lock(); defer { lock.unlock() }
-        let p: Parser
-        if let q = parsers[lang.rawValue] { p = q } else {
-            p = Parser()
+    /// Parses `ns` with a throwaway parser inside a private malloc zone (see NJSAlloc); the zone belongs to the returned tree.
+    static func parse(_ ns: NSString, lang: NJSLang) -> (MutableTree, NJSZone)? {
+        let (tree, zone): (MutableTree?, NJSZone) = NJSAlloc.parse {
+            let p = Parser()
             let l: OpaquePointer
             switch lang {
             case .js: l = tree_sitter_javascript()
@@ -34,24 +30,24 @@ enum NJSParsers {
             case .tsx: l = tree_sitter_tsx()
             }
             try? p.setLanguage(l)
-            parsers[lang.rawValue] = p
+            return p.parse(tree: nil as MutableTree?, readBlock: { byteOffset, _ in
+                let index = byteOffset / 2
+                let length = ns.length
+                guard index < length else { return nil }
+                var n = min(8192, length - index)
+                if index + n < length, UTF16.isLeadSurrogate(ns.character(at: index + n - 1)) { n += 1 }
+                var data = Data(count: n * 2)
+                data.withUnsafeMutableBytes { raw in
+                    if let base = raw.baseAddress?.assumingMemoryBound(to: unichar.self) { ns.getCharacters(base, range: NSRange(location: index, length: n)) }
+                }
+                return data
+            })
         }
-        p.includedRanges = []
-        return p.parse(tree: nil as MutableTree?, readBlock: { byteOffset, _ in
-            let index = byteOffset / 2
-            let length = ns.length
-            guard index < length else { return nil }
-            var n = min(8192, length - index)
-            if index + n < length, UTF16.isLeadSurrogate(ns.character(at: index + n - 1)) { n += 1 }
-            var data = Data(count: n * 2)
-            data.withUnsafeMutableBytes { raw in
-                if let base = raw.baseAddress?.assumingMemoryBound(to: unichar.self) { ns.getCharacters(base, range: NSRange(location: index, length: n)) }
-            }
-            return data
-        })
+        guard let t = tree else { NJSAlloc.destroy(zone); return nil }
+        return (t, zone)
     }
 
-    static func drop() { lock.lock(); parsers.removeAll(); lock.unlock() }
+    static func drop() {}
 }
 
 extension Node {
@@ -83,8 +79,11 @@ extension Node {
 final class NJSDoc {
     let path: String
     let text: NSString
-    let tree: MutableTree
-    let root: Node
+    private var _tree: MutableTree?
+    private var _root: Node?
+    private let zone: NJSZone               // every block of the tree lives here; destroyed with the document
+    var tree: MutableTree { _tree! }
+    var root: Node { _root! }
     let lang: NJSLang
     let isVue: Bool
     let scriptRanges: [NSRange]          // vue: ranges of script content
@@ -98,7 +97,19 @@ final class NJSDoc {
         return s
     }
 
-    init?(path: String, text: NSString, maxChars: Int = 3_000_000) {
+    /// Bundled / minified code (very long lines): a tree of it costs megabytes and navigating in it is pointless.
+    static func looksMinified(_ t: NSString) -> Bool {
+        let n = min(t.length, 100_000)
+        guard n >= 20_000 else { return false }
+        var buf = [unichar](repeating: 0, count: n)
+        t.getCharacters(&buf, range: NSRange(location: 0, length: n))
+        var lines = 1
+        for c in buf where c == 10 { lines += 1 }
+        return n / lines > 400
+    }
+
+    init?(path: String, text: NSString, maxChars: Int = 3_000_000, skipMinified: Bool = false) {
+        if skipMinified, NJSDoc.looksMinified(text) { return nil }
         let ext = (path as NSString).pathExtension.lowercased()
         var parseText = text
         var ranges: [NSRange] = []
@@ -109,9 +120,15 @@ final class NJSDoc {
             parseText = masked; ranges = rs
             lang = NJSParsers.lang(forExtension: "vue", vueScriptIsTS: ts)
         }
-        guard let l = lang, text.length < maxChars, let t = NJSParsers.parse(parseText, lang: l), let r = t.rootNode else { return nil }
-        self.path = path; self.text = text; self.tree = t; self.root = r; self.lang = l
+        guard let l = lang, text.length < maxChars, let (t, z) = NJSParsers.parse(parseText, lang: l) else { return nil }
+        guard let r = t.rootNode else { NJSAlloc.destroy(z); return nil }
+        self.path = path; self.text = text; self._tree = t; self._root = r; self.zone = z; self.lang = l
         self.isVue = ext == "vue"; self.scriptRanges = ranges
+    }
+
+    deinit {
+        _root = nil; _tree = nil            // the last references to the tree: its blocks are freed before the zone goes
+        NJSAlloc.destroy(zone)
     }
 
     /// Blanks everything outside `<script ...> ... </script>` blocks.
@@ -205,6 +222,7 @@ final class NJSSym {
     var docStart = -1, docEnd = -1
     var keyword: String?                // const / let / var for variables
     var typeName: String?               // variable annotation / `new X()`, function return type
+    var initCall: String?               // `const x = callee(...)`: the callee as written (its declared return type is x's type)
     var heritage: [String] = []         // extends (class: one; interface: several)
     var members: [NJSMember] = []
     var impSource: String?              // import bindings

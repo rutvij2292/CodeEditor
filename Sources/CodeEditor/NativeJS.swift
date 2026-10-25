@@ -94,7 +94,10 @@ enum NativeJS {
     static func trimMemory() {
         dropLastParse()
         NJSProject.trimAll()
+        NJSRefs.dropMemos()
         NJSParsers.drop()
+        NJSTexts.clear()
+        NJSRefs.dropFileList()
         NPFiles.clear()
         NPText.dropTables()
         malloc_zone_pressure_relief(nil, 0)
@@ -106,6 +109,7 @@ enum NativeJS {
     static func installMemoryHooks() {
         guard !hooksInstalled else { return }
         hooksInstalled = true
+        NJSAlloc.install()                       // before the first parse anywhere
         let src = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .global(qos: .utility))
         src.setEventHandler { trimMemory() }
         src.resume()

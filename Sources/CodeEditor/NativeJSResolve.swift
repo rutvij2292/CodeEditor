@@ -287,7 +287,7 @@ final class NJSModules {
         let key = dir + "|" + spec
         lock.lock(); if let m = resolveMemo[key] { lock.unlock(); return m.isEmpty ? nil : m }; lock.unlock()
         let r = resolveUncached(spec, dir: dir, file: file).map { NJSModules.canonicalCase($0) }
-        lock.lock(); if resolveMemo.count > 600 { resolveMemo.removeAll() }; resolveMemo[key] = r ?? ""; lock.unlock()
+        lock.lock(); if resolveMemo.count > 6000 { resolveMemo.removeAll() }; resolveMemo[key] = r ?? ""; lock.unlock()
         return r
     }
 

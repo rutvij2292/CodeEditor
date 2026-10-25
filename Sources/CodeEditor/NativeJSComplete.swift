@@ -245,6 +245,7 @@ enum NativeJSProviderSupport {
         let placeholder = "__ce_x__"
         let masked = text.replacingCharacters(in: prefix, with: placeholder) as NSString
         guard let doc = NJSDoc(path: file, text: masked), doc.inScript(prefix.location) else { return [] }
+        defer { withExtendedLifetime(doc) {} }
         let env = NJSEnv(proj: proj, doc: doc)
         guard let leaf = doc.leaf(at: prefix.location), leaf.kind == "property_identifier", let p = leaf.parent, p.kind == "member_expression",
               let o = p.field("object"), let t = env.typeOf(o) else { return [] }
