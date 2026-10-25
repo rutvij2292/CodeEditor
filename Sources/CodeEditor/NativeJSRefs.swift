@@ -122,6 +122,19 @@ enum NJSRefs {
     private static var memos: [Memo] = []
     private static let memoLock = NSLock()
     static var tList: UInt64 = 0, tGraph: UInt64 = 0, tParse: UInt64 = 0, tWalk: UInt64 = 0, tFound: UInt64 = 0      // diagnostics (bench)
+    /// `body(0..<count)` on at most 4 threads (every thread keeps its own malloc magazines: more of them means more resident high-water).
+    static func parallel(_ count: Int, _ body: @escaping (Int) -> Void) {
+        let workers = max(1, min(4, ProcessInfo.processInfo.activeProcessorCount, count))
+        let next = NJSCounter()
+        DispatchQueue.concurrentPerform(iterations: workers) { _ in
+            while true {
+                let c = next.take()
+                if c >= count { break }
+                body(c)
+            }
+        }
+    }
+
     static func dropMemos() { memoLock.lock(); memos.removeAll(); memoLock.unlock() }
 
     static func collect(_ sym: NJSRefSymbol, liveDoc: NJSDoc?, liveTexts: [String: NSString], cancel: CancelToken? = nil) -> NPRefsResult {
@@ -251,7 +264,7 @@ enum NJSRefs {
             }
             slots.set(c, mine)
         }
-        if chunkCount > 1 && list.count > 12 { DispatchQueue.concurrentPerform(iterations: chunkCount, execute: work) } else { for c in 0..<chunkCount { work(c) } }
+        if chunkCount > 1 && list.count > 12 { NJSRefs.parallel(chunkCount, work) } else { for c in 0..<chunkCount { work(c) } }
         if cancel?.isCancelled == true { result.cancelled = true }
         var scanned = 0
         var capped = false
@@ -354,6 +367,7 @@ final class NJSSlots<T> {
 final class NJSCounter {
     private let lock = NSLock()
     private var n = 0
+    func take() -> Int { lock.lock(); defer { lock.unlock() }; n += 1; return n - 1 }
     func add(_ k: Int) { lock.lock(); n += k; lock.unlock() }
     var value: Int { lock.lock(); defer { lock.unlock() }; return n }
 }

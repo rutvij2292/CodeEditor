@@ -207,7 +207,7 @@ final class NJSImportGraph {
             }
             slots.set(c, mine)
         }
-        if chunks > 1 && files.count > 24 { DispatchQueue.concurrentPerform(iterations: chunks, execute: body) } else { for c in 0..<chunks { body(c) } }
+        if chunks > 1 && files.count > 24 { NJSRefs.parallel(chunks, body) } else { for c in 0..<chunks { body(c) } }
         for part in slots.values {
             for (f, s) in part ?? [] {
                 guard let s else { continue }
