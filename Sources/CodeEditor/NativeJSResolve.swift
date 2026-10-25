@@ -165,7 +165,7 @@ final class NJSModules {
         return d
     }
 
-    private func rawConfig(_ path: String, depth: Int = 0) -> (dict: [String: Any], stamp: Int64)? {
+    func rawConfig(_ path: String, depth: Int = 0) -> (dict: [String: Any], stamp: Int64)? {
         guard depth < 6, let data = readFile(path), let obj = NJSJSON.parse(data) as? [String: Any] else { return nil }
         return (obj, LaravelFS.mtime(path))
     }

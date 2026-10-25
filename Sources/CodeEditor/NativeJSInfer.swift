@@ -157,7 +157,7 @@ final class NJSInfer {
         if let p = f.field("parameters") ?? f.field("parameter") {
             if p.kind == "identifier" { params.append(NJSTParam(name: p.text(ns), ty: paramType(p, fn: f, index: 0))) }
             else {
-                for (i, c) in p.kids.enumerated() {
+                for (i, c) in p.kids.filter({ $0.kind != "comment" }).enumerated() {
                     let idNode: Node? = c.field("pattern") ?? c
                     var name = "arg\(i)"
                     var rest = false

@@ -122,4 +122,52 @@ extension SelfTestNativeJS {
         check("infer: completion on an instance", cls.contains("go") && cls.contains("v"))
         check("infer: nothing on unknown", complete("const u = mystery()\nu.").isEmpty)
     }
+
+    static func runDiagTypes() {
+        guard let bundled = NJSLib.bundledDirectory() else { SelfTest.check("diag types: bundled TsLib/ directory found", false); return }
+        NJSLib.directoryOverride = bundled
+        let was = NativeJSDiag.typesEnabled
+        NativeJSDiag.typesEnabled = true
+        defer { NativeJSDiag.typesEnabled = was; NJSLib.directoryOverride = nil; NJSLib.trim() }
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("ce-njsdt-\(getpid())").standardizedFileURL
+        try? fm.removeItem(at: root)
+        defer { try? fm.removeItem(at: root) }
+        put(root, "package.json", "{}")
+        put(root, "other.ts", "export const x = 1\n")
+        func check(_ name: String, _ ok: @autoclosure () -> Bool) { SelfTest.check(name, ok()) }
+        var n = 0
+        func codes(_ code: String, ext: String = "ts") -> [String] {
+            n += 1
+            let url = root.appendingPathComponent("d\(n).\(ext)")
+            return NativeJSDiag.analyze(url: url, text: code as NSString).map { $0.code + ":" + $0.message }
+        }
+        check("diag types: an unknown name is TS2304", codes("const a = missingName + 1\n") == ["TS2304:Cannot find name 'missingName'."])
+        check("diag types: locals, parameters, lib globals, imports are known", codes("import { x } from './other'\nfunction f(p: number) { const q = Math.max(p, 1); return [q, x, console, JSON, Promise, setTimeout, document] }\nclass C { m() { return f(1) } }\nexport default C\n").isEmpty)
+        check("diag types: hoisted functions, enums, namespaces and class names are known", codes("g()\nfunction g() { return E.A }\nenum E { A }\nnamespace N { export const k = 1 }\nconsole.log(N.k, new K())\nclass K {}\n").isEmpty)
+        check("diag types: type names, property keys and member names are not values", codes("interface I { foo: number }\nconst o = { bar: 1 }\nconst z: I = { foo: o.bar }\nz.foo\n").isEmpty)
+        check("diag types: typeof of an undeclared name is allowed", codes("const t = typeof maybeGlobal === 'undefined'\n").isEmpty)
+        check("diag types: JavaScript files are not checked", codes("const a = missingName + 1\n", ext: "js").isEmpty)
+        check("diag types: a destructured / catch / for-of binding is known", codes("const { a, b: [c] } = { a: 1, b: [2] }\ntry { a } catch (err) { err }\nfor (const w of [c]) { w }\n").isEmpty)
+        check("diag types: argument count of a function declaration", codes("function f(a: number, b: number) { return a + b }\nf(1)\n") == ["TS2554:Expected 2 arguments, but got 1."])
+        check("diag types: too many arguments", codes("function f(a: number) { return a }\nf(1, 2)\n") == ["TS2554:Expected 1 argument, but got 2."])
+        check("diag types: optional, default and rest parameters", codes("function f(a: number, b?: number, c = 1, ...d: number[]) { return a }\nf(1)\nf(1, 2, 3, 4, 5)\n").isEmpty)
+        check("diag types: spread arguments and overloaded functions are not judged", codes("function f(a: number, b: number) { return a + b }\nf(...[1, 2])\nfunction h(a: string): void\nfunction h(a: number, b: number): void\nfunction h(a: any, b?: any) {}\nh('x')\n").isEmpty)
+        check("diag types: off by default and by preference", { NativeJSDiag.typesEnabled = false; defer { NativeJSDiag.typesEnabled = true }; return codes("const a = missingName\n").isEmpty }())
+        // a project with a script-style declaration file cannot be judged
+        let r2 = fm.temporaryDirectory.appendingPathComponent("ce-njsdt2-\(getpid())").standardizedFileURL
+        let r3 = fm.temporaryDirectory.appendingPathComponent("ce-njsdt3-\(getpid())").standardizedFileURL
+        defer { try? fm.removeItem(at: r2); try? fm.removeItem(at: r3) }
+        put(r2, "package.json", "{}")
+        put(r2, "globals.d.ts", "declare const __APP_VERSION__: string\n")
+        let u2 = r2.appendingPathComponent("a.ts")
+        check("diag types: silent when the project has global declaration files", NativeJSDiag.analyze(url: u2, text: "const v = __APP_VERSION__ + notDeclared\n" as NSString).filter { $0.code == "TS2304" }.isEmpty)
+        // a tsconfig that does not include the file
+        put(r3, "package.json", "{}")
+        put(r3, "tsconfig.json", "{\"include\": [\"src\"]}")
+        let u3 = r3.appendingPathComponent("other/a.ts")
+        check("diag types: silent for files outside the tsconfig include", NativeJSDiag.analyze(url: u3, text: "const v = notDeclared\n" as NSString).filter { $0.code == "TS2304" }.isEmpty)
+        let u4 = r3.appendingPathComponent("src/a.ts")
+        check("diag types: judged inside the include", NativeJSDiag.analyze(url: u4, text: "const v = notDeclared\n" as NSString).filter { $0.code == "TS2304" }.count == 1)
+    }
 }
