@@ -339,11 +339,20 @@ extension LSPSession {
         if docs, NativePHP.handles(url) {          // native PHP first, Intelephense only when it has no answer
             NativePHP.lookupAsync(url: url, text: text as NSString, offset: offset) { [weak self] hit in
                 guard let self, token == self.hoverToken else { return }
-                if let md = hit?.markdown { present(md) } else { self.lspHover(at: offset, docs: docs, present: present) }
+                if let md = hit?.markdown { present(md) } else { self.webOrLSPHover(at: offset, docs: docs, token: token, present: present) }
             }
             return
         }
-        lspHover(at: offset, docs: docs, present: present)
+        webOrLSPHover(at: offset, docs: docs, token: token, present: present)
+    }
+
+    /// Native CSS / HTML / Tailwind answer first (NativeWeb*.swift), the external servers only when it has none.
+    private func webOrLSPHover(at offset: Int, docs: Bool, token: Int, present: @escaping (String?) -> Void) {
+        guard docs, NativeWeb.handles(url) else { lspHover(at: offset, docs: docs, present: present); return }
+        NativeWeb.lookupAsync(url: url, text: text as NSString, offset: offset) { [weak self] hit in
+            guard let self, token == self.hoverToken else { return }
+            if let md = hit?.markdown, !md.isEmpty { present(md) } else { self.lspHover(at: offset, docs: docs, present: present) }
+        }
     }
 
     private func lspHover(at offset: Int, docs: Bool, present: @escaping (String?) -> Void) {

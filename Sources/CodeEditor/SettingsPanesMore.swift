@@ -41,6 +41,20 @@ final class LanguagesPane: SettingsPane {
         onRefresh { severity.selectItem(at: NativePHPDiag.classSeverity == 1 ? 1 : 0) }
         row("Undefined class severity", severity)
 
+        section("HTML / CSS / Tailwind")
+        let webOn = NSButton(checkboxWithTitle: "Native HTML, CSS and Tailwind services", target: nil, action: nil)
+        webOn.target = action { c in NativeWeb.enabled = (c as? NSButton)?.state == .on }
+        webOn.action = #selector(SettingsAction.fire(_:))
+        webOn.setAccessibilityLabel("Native HTML, CSS and Tailwind services")
+        onRefresh { webOn.state = NativeWeb.enabled ? .on : .off }
+        row(nil, webOn, help: "Completion, hover and go to definition for CSS, HTML and Tailwind classes come from Kode itself (the Tailwind theme is read from tailwind.config.* or @theme, no node process).")
+        let webOnly = NSButton(checkboxWithTitle: "Use native HTML / CSS / Tailwind only (stop the external servers)", target: nil, action: nil)
+        webOnly.target = action { c in NativeWeb.setNativeOnly((c as? NSButton)?.state == .on) }
+        webOnly.action = #selector(SettingsAction.fire(_:))
+        webOnly.setAccessibilityLabel("Use native HTML CSS Tailwind only")
+        onRefresh { webOnly.state = NativeWeb.nativeOnly ? .on : .off }
+        row(nil, webOnly, help: "Does not start the HTML, CSS and Tailwind language servers (the Tailwind server alone is about 200 MB). Diagnostics and formatting from those servers are unavailable meanwhile.")
+
         section("Language servers")
         for server in LanguageServers.serverIds {
             let status = infoLabel { [weak self] in self?.statusText(for: server.id) ?? "" }
