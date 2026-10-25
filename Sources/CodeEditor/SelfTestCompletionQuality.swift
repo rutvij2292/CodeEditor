@@ -36,9 +36,20 @@ enum SelfTestCompletionQuality {
         return FastTier.items(for: ctx)
     }
 
+    /// Same as `fast` but ordered by the real ranker (what the popup shows).
+    private static func fastRanked(_ root: URL, _ rel: String, _ text: String) -> [CompletionItem] {
+        let items = fast(root, rel, text)
+        let clean = text.replacingOccurrences(of: "§", with: "") as NSString
+        let caret = (text as NSString).range(of: "§").location
+        let ctx = CompletionRanker.Context(docCounts: CompletionRanker.docCounts(clean, caret: caret), history: nil, popularity: [:])
+        return CompletionRanker.rank(results: [(items, false)], text: clean, caret: caret, anchor: caret, context: ctx).ranked.map(\.item)
+    }
+
     static func run(w: ProjectWindow) {
         rankingChecks()
         snippetChecks(w: w)
+        variableChecks()
+        tagChecks()
         laravelChecks()
     }
 
@@ -83,6 +94,11 @@ enum SelfTestCompletionQuality {
         c("rank: deterministic for the same input", rank(a, "f|") == rank(a, "f|") && rank(a, "f|") == rank(a.reversed(), "f|"))
         let dup = CompletionRanker.rank(results: [([item("same", .method, priority: 9)], false), ([item("same", .method, priority: 1)], false)], text: "sa" as NSString, caret: 2, anchor: 0)
         c("rank: the same symbol from two providers appears once, with the better tier", dup.ranked.count == 1 && dup.ranked[0].item.priority == 1)
+        // the same class name offered as a class and as a value (stylesheet scan + Tailwind theme) is one row
+        let kinds = CompletionRanker.rank(results: [([item("btn", .class)], false), ([item("btn", .value), item("btn-sm", .value)], false)], text: "btn" as NSString, caret: 3, anchor: 0)
+        c("rank: same label from different `name-like` kinds is shown once", kinds.ranked.filter { $0.item.label == "btn" }.count == 1)
+        let memberWords = rank([item("function", .text, sort: "~function"), item("fetch", .text, sort: "~fetch")], "$x->f|")
+        c("rank: language keywords from the file are not offered after ->", !memberWords.contains("function") && memberWords.contains("fetch"))
         // doc stats
         let docText = "use App\\Models\\Invoice;\n$a = new Invoice();\n$b = new Invoice(); Inv" as NSString
         let counts = CompletionRanker.docCounts(docText, caret: docText.length)
@@ -150,6 +166,34 @@ enum SelfTestCompletionQuality {
         tv.string = ""
     }
 
+    // MARK: Pipeline details
+
+    private static func variableChecks() {
+        let c = SelfTest.check
+        let code = "<?php\nclass A {\n    function m($request) {\n        $subQuery = 1;\n        $rows->map(function ($row) { return $row; });\n        return $su"
+        let ns = code as NSString
+        let ctx = CompletionContext(text: code, caret: ns.length, fileURL: URL(fileURLWithPath: "/tmp/ce-var.php"), fileExtension: "php", triggerCharacter: nil, isManual: false,
+                                    prefixRange: NSRange(location: ns.length - 2, length: 2))
+        let names = PHPCompletion.generate(ctx).map(\.label)
+        c("php vars: a variable of the method is still offered after a closed closure", names.contains("$subQuery") && names.contains("$request"))
+        c("php vars: closure parameters of a closed closure are not preferred over method variables", names.contains("$subQuery"))
+    }
+
+    private static func tagChecks() {
+        let c = SelfTest.check
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("ce-cq-web-\(getpid())")
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("a.html")
+        let text = "<div>\n  <"
+        try? text.write(to: url, atomically: true, encoding: .utf8)
+        let ns = text as NSString
+        let ctx = CompletionContext(text: text, caret: ns.length, fileURL: url, fileExtension: "html", triggerCharacter: "<", isManual: false, prefixRange: NSRange(location: ns.length, length: 0))
+        let got = NativeWeb.items(for: ctx)
+        c("html: typing `<` lists the tags right away", got.contains { $0.label == "div" } && got.contains { $0.label == "span" })
+    }
+
     // MARK: Laravel
 
     private static func laravelChecks() {
@@ -177,7 +221,17 @@ enum SelfTestCompletionQuality {
             }
         };
         """)
-        put(root, "vendor/composer/autoload_psr4.php", "<?php\n$vendorDir = dirname(__DIR__);\n$baseDir = dirname($vendorDir);\nreturn array(\n    'App\\\\' => array($baseDir . '/app'),\n);\n")
+        put(root, "vendor/composer/autoload_psr4.php", "<?php\n$vendorDir = dirname(__DIR__);\n$baseDir = dirname($vendorDir);\nreturn array(\n    'Illuminate\\\\' => array($vendorDir . '/laravel/framework/src/Illuminate'),\n    'App\\\\' => array($baseDir . '/app'),\n);\n")
+        let il = "vendor/laravel/framework/src/Illuminate/"
+        put(root, il + "Support/Facades/Facade.php", "<?php\nnamespace Illuminate\\Support\\Facades;\nabstract class Facade {\n    public static function shouldReceive() {}\n    public static function swap($instance) {}\n}\n")
+        put(root, il + "Support/Facades/Cache.php", "<?php\nnamespace Illuminate\\Support\\Facades;\n/**\n * @method static mixed get(string $key, mixed $default = null)\n * @method static \\Illuminate\\Cache\\Repository store(string|null $name = null)\n * @see \\Illuminate\\Cache\\CacheManager\n */\nclass Cache extends Facade {\n    protected static function getFacadeAccessor() { return 'cache'; }\n}\n")
+        put(root, il + "Cache/CacheManager.php", "<?php\nnamespace Illuminate\\Cache;\nclass CacheManager {\n    public function driver($driver = null) {}\n    public function forgetDriver($name = null) {}\n}\n")
+        put(root, "app/Support/Dt.php", "<?php\nnamespace App\\Support;\n/**\n * @method static Dt now()\n * @method Dt subDay($value = 1)\n * @method Dt addDays(int $n)\n * @property-read int $year\n */\nclass Dt {}\n")
+        put(root, "app/Support/Legacy.php", "<?php\nnamespace App\\Support;\nclass Legacy {\n    /**\n     * Old way of doing foo.\n     *\n     * @param string $name The name\n     * @deprecated use fresh()\n     */\n    public function oldFoo(string $name) {}\n    /** Fresh way. */\n    public function fresh() {}\n}\n")
+        put(root, "app/Models/Zed.php", "<?php\nnamespace App\\Models;\nclass Zed {}\n")
+        put(root, "app/Other/Zed.php", "<?php\nnamespace App\\Other;\nclass Zed {}\n")
+        put(root, "app/Http/Zebra.php", "<?php\nnamespace App\\Http;\nclass Zebra {}\n")
+        put(root, "app/Models/Zebu.php", "<?php\nnamespace App\\Models;\nclass Zebu {}\n")
         put(root, "routes/web.php", "<?php\nRoute::get('/', fn () => 1)->name('home');\n")
         put(root, "Modules/Blog/routes/web.php", "<?php\nRoute::get('/blog', fn () => 1)->name('blog.index');\nRoute::post('/blog', fn () => 1)->name('blog.store');\n")
         put(root, "Modules/Blog/resources/views/post/show.blade.php", "x")
@@ -243,5 +297,40 @@ enum SelfTestCompletionQuality {
         c("columns: unknown receiver offers every schema column", labels(col).contains("email") && labels(col).contains("title"))
         let colId = fast(root, "app/Services/Q.php", "<?php\nclass Q {\n    function go($q) {\n        return $q->where('§")
         c("columns: most widespread columns first (id before title)", labels(colId).first.map { ["id", "created_at", "updated_at"].contains($0) } ?? false)
+
+        // facades: @method static tags + the real class behind getFacadeAccessor
+        let fHead = "<?php\nnamespace App\\Http;\nuse Illuminate\\Support\\Facades\\Cache;\nclass K {\n    function go() {\n        "
+        let f1 = fast(root, "app/Http/K.php", fHead + "Cache::st§")
+        c("facade: @method static tag of the facade (Cache::store)", labels(f1).contains("store"))
+        let f2 = fast(root, "app/Http/K.php", fHead + "Cache::dr§")
+        c("facade: public methods of the real class behind the facade (Cache::driver)", labels(f2).contains("driver"))
+        let f3 = fast(root, "app/Http/K.php", fHead + "Cache::§", manual: true)
+        c("facade: tagged methods rank before facade base statics", (labels(f3).firstIndex(of: "get") ?? 99) < (labels(f3).firstIndex(of: "shouldReceive") ?? 98))
+
+        // docblock members (Carbon style)
+        let dHead = "<?php\nnamespace App\\Http;\nuse App\\Support\\Dt;\nclass K {\n    function go(Dt $d) {\n        "
+        c("docblock: @method on an instance (`$d->su`)", labels(fast(root, "app/Http/K.php", dHead + "$d->su§")).contains("subDay"))
+        c("docblock: @property-read (`$d->ye`)", labels(fast(root, "app/Http/K.php", dHead + "$d->ye§")).contains("year"))
+        c("docblock: @method static on the class (`Dt::no`), not the instance-only ones", labels(fast(root, "app/Http/K.php", dHead + "Dt::no§")).contains("now") && !labels(fast(root, "app/Http/K.php", dHead + "Dt::su§")).contains("subDay"))
+        let sd = fast(root, "app/Http/K.php", dHead + "$d->add§").first { $0.label == "addDays" }
+        c("docblock: @method parameters become placeholders", sd.map { SnippetParser.parse($0.insertText).text == "addDays($n)" } ?? false)
+
+        // deprecated + lazily loaded documentation
+        let lHead = "<?php\nnamespace App\\Http;\nuse App\\Support\\Legacy;\nclass K {\n    function go(Legacy $l) {\n        "
+        let lg = fast(root, "app/Http/K.php", lHead + "$l->§", manual: true)
+        c("deprecated: @deprecated methods are flagged for strike-through", lg.first { $0.label == "oldFoo" }?.deprecated == true && lg.first { $0.label == "fresh" }?.deprecated == false)
+        if let old = lg.first(where: { $0.label == "oldFoo" }), let resolve = old.resolve {
+            let sem = DispatchSemaphore(value: 0)
+            var got: CompletionItem?
+            resolve { got = $0; sem.signal() }
+            _ = sem.wait(timeout: .now() + 5)
+            c("lazy docs: docblock summary and @param arrive on selection", got?.documentation.contains("Old way of doing foo") == true && got?.documentation.contains("@param") == true)
+        } else { c("lazy docs: member items carry a resolver", false) }
+
+        // class names: imported / same namespace before other project classes
+        let cHead = "<?php\nnamespace App\\Http;\nuse App\\Other\\Zed;\nclass K {\n    function go() {\n        return new "
+        let z = fastRanked(root, "app/Http/K.php", cHead + "Ze§")
+        c("classes: the imported class and same-namespace classes come first", z.first.map { $0.detail == "App\\Other\\Zed" } ?? false)
+        c("classes: same-namespace sibling before a class of another namespace", (z.firstIndex { $0.label == "Zebra" } ?? 99) < (z.firstIndex { $0.label == "Zebu" } ?? 98))
     }
 }

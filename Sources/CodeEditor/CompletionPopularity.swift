@@ -22,7 +22,11 @@ enum CompletionPopularity {
         config route view auth request response redirect session cache collect now today optional tap value abort abort_if abort_unless back bcrypt \
         csrf_token old url asset app env event dispatch logger info report rescue resolve retry throw_if throw_unless trans __ validator data_get \
         data_set head last blank filled str e class_basename storage_path base_path public_path resource_path app_path database_path config_path \
-        method_field csrf_field to_route policy broadcast cookie literal fake precognitive
+        method_field csrf_field to_route policy broadcast cookie literal fake precognitive \
+        Exception InvalidArgumentException RuntimeException DateTime DateTimeImmutable Carbon Collection Request Response Model Builder Validator Log Cache DB Auth Storage \
+        Str Arr Http Route Schema Config Session Cookie Hash Mail Queue Event Gate URL Redirect View File Lang Blade Artisan Password Process Pipeline Bus Notification \
+        Crypt Date Redis Number Sleep Context TypeError ValueError JsonException Throwable Closure ArrayObject ArrayIterator Countable Stringable JsonSerializable \
+        Traversable Iterator Generator SplFileInfo PDO PDOException DOMDocument ReflectionClass LogicException DomainException OutOfBoundsException UnexpectedValueException
         """,
         "eloquent": """
         where get first find findOrFail firstOrFail create update delete save with orderBy latest oldest paginate count exists pluck select whereIn whereNull \
@@ -85,7 +89,12 @@ enum CompletionPopularity {
         dataclass field asdict astuple namedtuple defaultdict Counter OrderedDict deque ChainMap partial wraps lru_cache cache reduce cached_property \
         Path glob mkdir exists is_file is_dir read_text write_text read_bytes write_bytes iterdir resolve parent stem suffix name parts \
         self cls __init__ __str__ __repr__ __name__ __main__ __file__ __all__ __dict__ __class__ __doc__ __enter__ __exit__ __call__ __len__ __iter__ \
-        __getitem__ __setitem__ __eq__ __hash__ __lt__ __contains__ __post_init__ __slots__ __version__ __new__ __del__ __bool__ __add__
+        __getitem__ __setitem__ __eq__ __hash__ __lt__ __contains__ __post_init__ __slots__ __version__ __new__ __del__ __bool__ __add__ \
+        requests numpy pandas fastapi pydantic sqlalchemy uvicorn pytest flask django httpx aiohttp scipy matplotlib torch transformers sklearn openai dotenv yaml \
+        jinja2 click typer rich tqdm redis celery boto3 psycopg2 pymongo qdrant_client sentence_transformers \
+        getenv environ path exists makedirs listdir getcwd now isoformat strftime strptime timedelta timezone utc fromisoformat today dumps loads dump load compile \
+        match search sub findall argv exit stdout stderr status_code text headers raise_for_status getLogger debug warning exception randint choice sample uniform \
+        sleep perf_counter monotonic sqrt floor ceil pi run gather create_task
         """,
         "css": """
         display margin padding width height color background border position font-size font-weight text-align flex justify-content align-items border-radius \
@@ -101,6 +110,17 @@ enum CompletionPopularity {
         flex block none inline-block inline grid inline-flex absolute relative fixed sticky static center space-between space-around space-evenly flex-start \
         flex-end nowrap wrap hidden auto pointer bold normal uppercase lowercase capitalize solid dashed dotted transparent inherit initial unset column row \
         stretch baseline cover contain no-repeat repeat scroll visible collapse underline italic ellipsis break-word pre pre-wrap not-allowed
+        """,
+        "tw": """
+        flex items-center justify-between w-full h-full p-4 px-4 py-2 mb-4 mt-4 text-sm font-bold font-semibold font-medium bg-white text-gray-500 text-gray-700 \
+        text-gray-900 rounded rounded-lg border shadow hidden block relative absolute grid gap-2 gap-4 space-x-2 space-y-2 min-h-screen container mx-auto \
+        overflow-hidden cursor-pointer transition text-center text-white text-lg text-xl text-2xl px-2 py-1 py-4 px-6 py-3 mt-2 mb-2 ml-2 mr-2 mt-1 mb-1 p-2 p-6 \
+        flex-col flex-1 flex-wrap justify-center justify-end items-start items-end w-1/2 w-auto h-screen h-auto max-w-md max-w-xl max-w-7xl truncate uppercase \
+        font-normal font-light text-xs text-base text-black text-gray-600 text-gray-800 text-gray-400 text-red-500 text-blue-600 text-green-600 bg-gray-50 bg-gray-100 \
+        bg-gray-200 bg-blue-500 bg-blue-600 bg-red-500 bg-green-500 border-gray-200 border-gray-300 border-b border-t rounded-md rounded-full shadow-sm shadow-md \
+        hover:bg-gray-100 hover:text-blue-600 focus:outline-none focus:ring-2 sm:px-6 md:flex md:w-1/2 lg:px-8 dark:bg-gray-800 dark:text-white fixed sticky inset-0 \
+        top-0 left-0 right-0 bottom-0 z-10 z-50 opacity-50 pointer-events-none select-none whitespace-nowrap leading-tight tracking-wide underline line-through \
+        object-cover aspect-square animate-spin ring-1 divide-y sr-only col-span-2 grid-cols-2 grid-cols-3 order-1 self-center place-items-center
         """,
         "html": """
         class id style href src type name value placeholder alt title for action method target rel disabled required checked selected readonly width height \
@@ -118,12 +138,12 @@ enum CompletionPopularity {
     /// Which lists apply to a file.
     private static func groups(ext: String, blade: Bool) -> [String] {
         switch ext {
-        case "php", "phtml": return blade ? ["blade", "php", "eloquent", "html", "css", "js"] : ["php", "eloquent"]
-        case "vue": return ["js", "vue", "html", "css"]
-        case "js", "jsx", "ts", "tsx", "mjs", "cjs": return ["js"]
+        case "php", "phtml": return blade ? ["blade", "php", "eloquent", "html", "tw", "css", "js"] : ["php", "eloquent"]
+        case "vue": return ["js", "vue", "html", "tw", "css"]
+        case "js", "jsx", "ts", "tsx", "mjs", "cjs": return ["js", "tw"]
         case "py", "pyi", "pyw": return ["py"]
         case "css", "scss", "less", "sass", "pcss": return ["css"]
-        case "html", "htm": return ["html", "vue", "css", "js"]
+        case "html", "htm": return ["html", "vue", "tw", "css", "js"]
         default: return []
         }
     }

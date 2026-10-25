@@ -325,7 +325,11 @@ enum FastEngine {
             guard opTok >= 1, opTok < lex.count, lex.toks[opTok].loc == opLoc else { return Result(items: []) }
             let lo = ev.chainStart(before: opTok)
             guard let t = ev.eval(lo, opTok) else { return Result(items: []) }
-            if case .staticRef(let f) = t, f.hasPrefix("Illuminate\\Support\\Facades\\") { return Result(items: []) }
+            if case .staticRef(let f) = t, f.hasPrefix("Illuminate\\Support\\Facades\\") {
+                var items = ev.facadeItems(f, prefix: prefix)
+                if staticDollar { items = [] }
+                return Result(items: items, incomplete: !prefix.isEmpty)
+            }
             var via: String?
             if lo < opTok, lex.toks[lo].kind == .ident { via = lex.text(lo) }
             var seen = Set<String>()
@@ -335,8 +339,14 @@ enum FastEngine {
             default: same = false
             }
             var items = ev.members(of: t, via: via, fromSameClass: same, staticDollar: staticDollar, onlyNames: &seen)
+            var docFiltered = false
+            switch t {                                                      // @method / @property tags (Carbon, IDE-helper annotated models)
+            case .instance(let f): items += ev.docMemberItems(f, prefix: prefix, instance: true, seen: &seen); docFiltered = true
+            case .staticRef(let f) where !staticDollar: items += ev.docMemberItems(f, prefix: prefix, instance: false, seen: &seen); docFiltered = true
+            default: break
+            }
             if staticDollar { let r = NSRange(location: pStart, length: caret - pStart); for i in items.indices { items[i].replaceRange = r } }
-            return Result(items: items)
+            return Result(items: items, incomplete: docFiltered && !prefix.isEmpty)
         }
         // named arguments of the call being typed: `foo(me|` -> `message: `
         if !prefix.isEmpty || ctx.isManual, let named = FastRules.namedArgs(ctx, ns, caret: caret, fp: fp) {
@@ -431,6 +441,9 @@ enum FastEngine {
                              detail: c.fqn, insert: insert, sort: (c.project ? "1" : "2") + c.short.lowercased(), doc: "`\(c.fqn)`\n\nAdds `use \(c.fqn);` when accepted.", range: range)
             if ambiguous { it.filterText = c.short }
             it.additionalEdits = edits
+            // imported or same namespace: what the file already talks about; then the project, PHP built-ins, vendor packages
+            let local = cur.map { namespaceOf(c.fqn) == ($0.ns.isEmpty ? "global" : $0.ns) || $0.uses.values.contains(c.fqn) } ?? false
+            it.priority = local ? 0 : (c.project ? 1 : (c.builtin ? 2 : 3))
             items.append(it)
         }
         return Result(items: items, incomplete: true)

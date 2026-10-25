@@ -152,6 +152,14 @@ enum CompletionRanker {
         return (1, 100 + max(0, min(f, 500)) / 2 - pen)
     }
 
+    /// Same label + same group = the same suggestion offered twice (a CSS class from the stylesheet scan and from the Tailwind theme, ...).
+    private static func kindGroup(_ k: CompletionKind) -> String {
+        switch k {
+        case .value, .constant, .color, .class, .module, .keyword, .file, .folder: return "v"
+        default: return k.rawValue
+        }
+    }
+
     private static func strip(_ s: String) -> String {
         guard let f = s.utf8.first, f == 36 || f == 64 || f == 58 || f == 45 else { return s }
         var t = Substring(s)
@@ -161,7 +169,7 @@ enum CompletionRanker {
 
     static func familiarity(_ item: CompletionItem, _ ctx: Context) -> Int {
         var lvl = 0
-        let key = strip(item.label)
+        let key = strip(item.filterText ?? item.label)
         if let n = ctx.docCounts[key] { lvl = n >= 4 ? 3 : (n >= 2 ? 2 : 1) }
         if let h = ctx.history { lvl += h(key) }
         return min(lvl, 4)
@@ -193,7 +201,7 @@ enum CompletionRanker {
                 }
                 guard let m = match(item, q) else { continue }
                 minStart = min(minStart, start)
-                let key = item.label + "\u{1}" + item.kind.rawValue
+                let key = item.label + "\u{1}" + kindGroup(item.kind)
                 var r = Ranked(item: item, score: m.score, order: order, query: q.q, cls: m.cls)
                 r.tier = tier(item)
                 r.boost = familiarity(item, context)

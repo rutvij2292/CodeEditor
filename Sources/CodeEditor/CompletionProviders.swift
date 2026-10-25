@@ -258,8 +258,17 @@ enum PHPCompletion {
     private static func variables(_ ctx: CompletionContext, _ ns: NSString, _ inf: CompletionLex.Info, dollar: NSRange) -> [CompletionItem] {
         let end = dollar.location
         var start = inf.region == .bladeExpr ? 0 : inf.start
-        let r = ns.range(of: "function", options: [.backwards, .literal], range: NSRange(location: start, length: max(0, end - start)))
-        if r.location != NSNotFound { start = r.location }
+        // the nearest enclosing NAMED function (`function name(`): a closed closure before the caret must not hide the method's variables
+        var limit = end
+        for _ in 0..<60 {
+            let r = ns.range(of: "function", options: [.backwards, .literal], range: NSRange(location: start, length: max(0, limit - start)))
+            if r.location == NSNotFound { break }
+            var q = r.location + r.length
+            while q < end, ns.character(at: q) == 32 || ns.character(at: q) == 10 || ns.character(at: q) == 9 || ns.character(at: q) == 38 { q += 1 }
+            if q < end, CompletionLex.isIdent(ns.character(at: q)) { start = r.location; break }   // named function
+            limit = r.location
+            if limit <= start { break }
+        }
         var names = Set<String>(["this"])
         if end > start {
             var buf = [unichar](repeating: 0, count: end - start)

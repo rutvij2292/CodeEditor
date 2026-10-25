@@ -262,7 +262,7 @@ enum CompletionBench {
     private static func norms(_ s: String) -> [String] {
         var a = [s]
         var t = s
-        while let f = t.unicodeScalars.first, "$@:<".unicodeScalars.contains(f) { t.removeFirst() }
+        while let f = t.unicodeScalars.first, "$@:<!".unicodeScalars.contains(f) { t.removeFirst() }
         a.append(t)
         if let i = t.firstIndex(where: { "(=:\" ".contains($0) }) { a.append(String(t[..<i])) }
         return a
