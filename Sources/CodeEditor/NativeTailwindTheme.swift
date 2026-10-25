@@ -16,6 +16,8 @@ final class NWTailwind {
     var extraNames: Set<String> = []        // plugin classes known by name only (typography ...)
     var inputs: [String] = []               // config / css files this was built from (definition targets)
     var unresolved = 0
+    /// The config uses `presets` or a wrapper function (konsta, primevue, ...): its real theme needs JavaScript. Unknown classes then stay with the external server.
+    var incomplete = false
 
     func map(_ key: String) -> [String: String] { maps[key] ?? [:] }
     func value(_ key: String, _ name: String) -> String? { maps[key]?[name] }
@@ -167,7 +169,7 @@ final class NWTailwind {
         out["fontFamily"] = Dictionary(uniqueKeysWithValues: fontFamilies)
         var gc = [String: String](), gr = [String: String](), colm = [String: String](), rowm = [String: String]()
         for i in 1...12 { gc[String(i)] = "repeat(\(i), minmax(0, 1fr))"; colm["span-\(i)"] = "span \(i) / span \(i)"; colm[String(i)] = String(i) }
-        for i in 1...6 { gr[String(i)] = "repeat(\(i), minmax(0, 1fr))"; rowm["span-\(i)"] = "span \(i) / span \(i)"; rowm[String(i)] = String(i) }
+        for i in 1...12 { gr[String(i)] = "repeat(\(i), minmax(0, 1fr))"; rowm["span-\(i)"] = "span \(i) / span \(i)"; rowm[String(i)] = String(i) }
         gc["none"] = "none"; gc["subgrid"] = "subgrid"; gr["none"] = "none"; gr["subgrid"] = "subgrid"
         colm["auto"] = "auto"; colm["span-full"] = "1 / -1"; rowm["auto"] = "auto"; rowm["span-full"] = "1 / -1"
         out["gridTemplateColumns"] = gc; out["gridTemplateRows"] = gr; out["gridColumn"] = colm; out["gridRow"] = rowm

@@ -97,6 +97,9 @@ enum SelfTestNativeWeb {
         return CompletionContext(text: text, caret: off, fileURL: url, fileExtension: url.pathExtension, triggerCharacter: nil, isManual: manual, prefixRange: NSRange(location: s, length: off - s))
     }
 
+    /// CSS text without the server-style `/*4px*/` / `/*#22c55e*/` annotations.
+    static func strip(_ s: String?) -> String { (s ?? "").replacingOccurrences(of: "/\\*[^*]*\\*/", with: "", options: .regularExpression) }
+
     static func labels(_ url: URL, _ snippet: String) -> [String] { NativeWeb.items(for: ctx(url, snippet)).map(\.label) }
 
     static func hit(_ url: URL, _ snippet: String, usages: Bool = true) -> NPHit? {
@@ -104,7 +107,20 @@ enum SelfTestNativeWeb {
         return NativeWeb.lookup(url: url, text: snippet.replacingOccurrences(of: "§", with: "") as NSString, offset: off, usages: usages)
     }
 
+    /// Dev aid: `CE_WEB_LOCATE=<file>:<line>:<col>` (1-based line, 0-based column in UTF-16) prints how the HTML scanner classifies a position.
+    static func locateDebug(_ spec: String) {
+        let p = spec.split(separator: ":").map(String.init)
+        guard p.count == 3, let t = FastProject.readRaw(p[0]), let line = Int(p[1]), let col = Int(p[2]) else { return }
+        let starts = NPLineStarts(t).starts
+        let off = starts[line - 1] + col
+        let b = NWBuf(t)
+        let loc = NWHtml.locate(b, at: off, wantStack: true)
+        let site = NWService.htmlClassSite(b, loc: loc, offset: off)
+        fputs("LOCATE kind=\(loc.kind) tag=\(loc.tag) attr=\(loc.attrName) value=\(String(describing: loc.valueRange)) tagStart=\(loc.tagStart) classSite=\(String(describing: site)) scriptSite=\(String(describing: NWService.scriptClassSite(b, off))) around=\(b.str(max(0, off - 40), off + 10).replacingOccurrences(of: "\n", with: "\\n"))\n", stderr)
+    }
+
     static func run() {
+        if let spec = AppEnv.value("CE_WEB_LOCATE") { locateDebug(spec); exit(0) }
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent("ce-selftest-web-\(getpid())").standardizedFileURL
         try? fm.removeItem(at: root)
@@ -155,6 +171,14 @@ enum SelfTestNativeWeb {
         check("pos: nested scss selector &:", pos("a { &:ho§", lang: .scss).kind == .selector)
         check("pos: inside @media is selector territory", pos("@media (min-width: 1px) { .a§").kind == .selector)
         check("pos: declaration inside @media inside rule", pos("a { @media print { col§").kind == .property)
+        // diagnostics
+        func diag(_ s: String) -> [String] { NWCssDiag.analyze(NWBuf(s as NSString)).map(\.message) }
+        check("diag: clean stylesheet has no issues", diag("a { color: red } @media print { b { margin: 0 } } /* } */ c::after { content: \"}\" } d { background: url(data:image/svg+xml;utf8,<svg>{}</svg>) }").isEmpty)
+        check("diag: unclosed block", diag("a { color: red;\nb { margin: 0 }").first?.contains("Unclosed block") == true)
+        check("diag: stray closing brace", diag("a { } }").first?.contains("Unexpected") == true)
+        check("diag: unterminated comment", diag("a { } /* open").first?.contains("Unterminated comment") == true)
+        check("diag: unterminated string", diag("a { content: \"x\n}").first?.contains("Unterminated string") == true)
+        check("diag: only .css files are checked", NWCssDiag.handles(URL(fileURLWithPath: "/x/a.css")) && !NWCssDiag.handles(URL(fileURLWithPath: "/x/a.scss")) && !NWCssDiag.handles(URL(fileURLWithPath: "/x/a.less")))
         // html tokenizer
         let h = "<!-- c --><div class=\"a {{ $x ? \"b\" : 'c' }} d\" id=x>t<?php echo \"<b>\"; ?><br/><style>p{}</style><script>var a = '<i>'</script></div>"
         var tags: [String] = []
@@ -174,7 +198,7 @@ enum SelfTestNativeWeb {
     private static func cssChecks(_ root: URL, _ css: URL) {
         let scratch = root.appendingPathComponent("resources/css/scratch.css")      // a buffer that is not one of the project's files
         let props = labels(css, ".x { col§ }")
-        check("css: property names", props.contains("color") && props.contains("column-gap") && props.contains("display"))
+        check("css: property names", props.contains("color") && props.contains("column-gap") && !props.contains("display"))
         check("css: values for display", { let l = labels(css, ".x { display: §"); return l.contains("flex") && l.contains("grid") && l.contains("inherit") }())
         check("css: named colors for color", { let l = labels(scratch, ".x { color: §"); return l.contains("rebeccapurple") && l.contains("var(--brand-color)") }())
         check("css: units after a number", labels(css, ".x { width: 10§").contains("10px"))
@@ -194,14 +218,14 @@ enum SelfTestNativeWeb {
         check("scss: nested property completion", labels(scssURL, ".a { .b { marg§").contains("margin"))
         // hover
         let hp = hit(css, ".x { dis§play: flex }")
-        check("css hover: property doc", hp?.markdown.contains("display") == true && hp?.markdown.contains("display type") == true)
+        check("css hover: property doc", hp?.markdown.contains("**display**") == true && hp?.markdown.contains("box") == true)
         check("css hover: hex color", hit(css, ".x { color: #ff0§000 }")?.markdown.contains("rgb 255, 0, 0") == true)
         check("css hover: named color", hit(css, ".x { color: rebecca§purple }")?.markdown.contains("#663399") == true)
         check("css hover: custom property value", hit(scratch, ".x { color: var(--brand-§color) }")?.markdown.contains("#ff0000") == true)
         check("css hover: pseudo class", hit(css, "a:ho§ver { }")?.markdown.contains("hover") == true)
-        check("css hover: at-rule", hit(css, "@me§dia print { }")?.markdown.contains("media query") == true)
+        check("css hover: at-rule", hit(css, "@me§dia print { }")?.markdown.contains("media") == true)
         check("css hover: @apply shows the generated rule", hit(scratch, ".x { @apply hover:bg-pri§mary }")?.markdown.contains(":hover") == true)
-        check("css hover: tag", hit(css, "bu§tton { }")?.markdown.contains("clickable button") == true)
+        check("css hover: tag", hit(css, "bu§tton { }")?.markdown.contains("button element represents a button") == true)
         // definition
         let dv = hit(scratch, ".x { color: var(--gap§) }")
         check("css def: var() -> declaration", dv?.targets.first?.path == css.path && dv?.targets.first?.line == 4)
@@ -241,16 +265,18 @@ enum SelfTestNativeWeb {
         check("html: class inside {{ }} string literal", labels(blade, "<div class=\"a {{ $x ? 'bg-pri§' : '' }}\">").contains("bg-primary"))
         check("html: :class binding string", labels(root.appendingPathComponent("a.vue"), "<template><div :class=\"{ 'bg-pri§': ok }\"></div></template>").contains("bg-primary"))
         // hover
-        check("html hover: tag", hit(html, "<bu§tton>x</button>")?.markdown.contains("clickable button") == true)
-        check("html hover: attribute", hit(html, "<a hr§ef=\"x\">")?.markdown.contains("URL of the link") == true)
+        check("html hover: tag", hit(html, "<bu§tton>x</button>")?.markdown.contains("button element represents a button") == true)
+        check("html hover: attribute", hit(html, "<a hr§ef=\"x\">")?.markdown.contains("URL") == true)
         check("html hover: data attribute", hit(html, "<a data-fo§o-bar=\"x\">")?.markdown.contains("dataset.fooBar") == true)
-        check("html hover: tailwind class shows generated css", hit(blade, "<div class=\"p§-4\">")?.markdown.contains("padding: 1rem;") == true)
+        check("html hover: tailwind class shows generated css", strip(hit(blade, "<div class=\"p§-4\">")?.markdown).contains("padding: 1rem;"))
         check("html hover: project class shows its rule", hit(blade, "<div class=\"btn-pri§mary\">")?.markdown.contains("color: var(--brand-color)") == true)
         // definition
         let dc = hit(blade, "<div class=\"btn btn-pri§mary\">")
         check("html def: class -> css rule", dc?.targets.contains { $0.path.hasSuffix("app.css") } == true)
         check("html def: class declared in <style> of the same file", hit(html, "<style>.local { color: red }</style><i class=\"loc§al\">")?.targets.first?.path == html.path)
         check("html def: href -> file under public/", hit(blade, "<a href=\"/css/si§te.css\">")?.targets.first?.path.hasSuffix("public/css/site.css") == true)
+        check("html: class in a template literal inside <script>", labels(html, "<script>\nconst t = `<td class=\"bg-pri§\">`\n</script>").contains("bg-primary"))
+        check("html: <script> text that is not a class list stays quiet", labels(html, "<script>\nconst t = `plain bg-pri§`\n</script>").isEmpty)
         check("html def: label for -> element id", hit(html, "<input id=\"em\"><label for=\"e§m\">")?.targets.first?.path == html.path)
         check("html def: href=#id -> element", hit(html, "<h1 id=\"top\"></h1><a href=\"#to§p\">")?.targets.count == 1)
         check("html def: id -> css #id rule", hit(blade, "<div id=\"main-§nav\">")?.targets.first?.path.hasSuffix("app.css") == true)
@@ -263,7 +289,8 @@ enum SelfTestNativeWeb {
         guard let tw = p.queue.sync(execute: { p.tailwind(near: root.path) }) else { check("tailwind: project detected", false); return }
         if AppEnv.value("CE_WEB_ONLY") != nil { fputs("DBG tw v\(tw.version) dm=\(tw.darkMode) inputs=\(tw.inputs) primary=\(tw.colors["primary"] ?? "nil") emerald=\(tw.colors["brand-500"] ?? "nil") screens=\(tw.maps["screens"] ?? [:]) unresolved=\(tw.unresolved)\n", stderr) }
         check("tailwind: v3 detected from config", tw.version == 3 && tw.darkMode == "class")
-        func css(_ t: String) -> String { tw.css(for: t) ?? "<nil>" }
+        func css(_ t: String) -> String { strip(tw.css(for: t) ?? "<nil>") }
+        check("tailwind: pixel and hex annotations like the Tailwind server", (tw.css(for: "p-4") ?? "").contains("padding: 1rem/*16px*/;") && (tw.css(for: "bg-red-500") ?? "").contains("/*#ef4444*/"))
         check("tailwind: p-4", css("p-4") == ".p-4 {\n  padding: 1rem;\n}")
         check("tailwind: negative margin", css("-mt-2").contains("margin-top: -0.5rem;") && css("-mt-2").hasPrefix(".-mt-2 {"))
         check("tailwind: fraction width", css("w-1/2").contains("width: 50%;") && css("w-1/2").hasPrefix(".w-1\\/2 {"))
@@ -298,6 +325,8 @@ enum SelfTestNativeWeb {
         check("tailwind: arbitrary variant", css("[&>*]:p-4").contains(".\\[\\&\\>\\*\\]\\:p-4>*") || css("[&>*]:p-4").contains("> *"))
         check("tailwind: data-[...] variant", css("data-[state=open]:block").contains("[data-state=\"open\"]"))
         check("tailwind: unknown classes are not guessed", tw.css(for: "btn") == nil && tw.css(for: "p-4x") == nil && tw.css(for: "hovr:p-4") == nil && tw.css(for: "text-nope-500") == nil)
+        check("tailwind: v4-only names are not offered or resolved in v3", tw.css(for: "bg-linear-to-r") == nil && !labels(blade, "<div class=\"bg-linear§\">").contains("bg-linear-to-r") && css("bg-gradient-to-r").contains("linear-gradient(to right"))
+        check("tailwind: v3 opacity utilities", css("bg-opacity-50").contains("--tw-bg-opacity: 0.5;") && labels(blade, "<div class=\"text-opac§\">").contains("text-opacity-50"))
         check("tailwind: plugin names known (typography)", tw.extraNames.contains("prose"))
         // completion
         let p4 = labels(blade, "<div class=\"p-§\">")
@@ -316,10 +345,10 @@ enum SelfTestNativeWeb {
             let it = NativeWeb.items(for: ctx(blade, "<div class=\"p-§\">")).first { $0.label == "p-4" }
             var doc = ""
             it?.resolve?({ doc = $0.documentation })
-            return doc.contains("padding: 1rem;")
+            return strip(doc).contains("padding: 1rem;")
         }())
         check("tailwind: JSX hover", hit(jsx, "const a = <div className=\"fl§ex items-center\">")?.markdown.contains("display: flex;") == true)
-        check("tailwind: hover inside {{ }} literal", hit(blade, "<div class=\"a {{ $x ? 'text-l§g' : '' }}\">")?.markdown.contains("font-size: 1.125rem;") == true)
+        check("tailwind: hover inside {{ }} literal", strip(hit(blade, "<div class=\"a {{ $x ? 'text-l§g' : '' }}\">")?.markdown).contains("font-size: 1.125rem;"))
         // memory: the whole resolved setup is small
         check("tailwind: resolved theme is small (< 400 KB)", tw.approxBytes < 400_000)
     }
@@ -370,7 +399,7 @@ enum SelfTestNativeWeb {
         defer { try? fm.removeItem(at: root) }
         let p = NWProject.shared(root: root.path)
         guard let tw = p.queue.sync(execute: { p.tailwind(near: root.appendingPathComponent("src").path) }) else { check("v4: project detected", false); return }
-        func css(_ t: String) -> String { tw.css(for: t) ?? "<nil>" }
+        func css(_ t: String) -> String { strip(tw.css(for: t) ?? "<nil>") }
         check("v4: detected from @import \"tailwindcss\"", tw.version == 4)
         check("v4: @theme color", css("bg-brand") == ".bg-brand {\n  background-color: var(--color-brand);\n}")
         check("v4: color opacity uses color-mix", css("bg-brand/50").contains("color-mix(in oklab, var(--color-brand) 50%, transparent)"))

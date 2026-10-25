@@ -2,6 +2,9 @@ import Foundation
 
 /// class token -> generated CSS (variants, important, negatives, arbitrary values, opacity modifiers) and class-name enumeration.
 extension NWTailwind {
+    /// Static names that only exist in Tailwind v4.
+    static let v4Only: Set<String> = ["bg-linear-to-t", "bg-linear-to-tr", "bg-linear-to-r", "bg-linear-to-br", "bg-linear-to-b", "bg-linear-to-bl", "bg-linear-to-l", "bg-linear-to-tl", "outline-hidden"]
+
     // MARK: tokens
 
     /// Splits `sm:hover:!p-4` into variants and the utility, honouring `[...]` and `(...)` groups.
@@ -52,7 +55,7 @@ extension NWTailwind {
             guard !prop.isEmpty, prop.allSatisfy({ $0.isLetter || $0 == "-" }) else { return nil }
             return (NWUtil(decls: [(prop, val)]), important)
         }
-        if !neg, let d = NWTailwindStatic.map[u] { return (NWUtil(decls: d), important) }
+        if !neg, let d = NWTailwindStatic.map[u], version >= 4 || !NWTailwind.v4Only.contains(u) { return (NWUtil(decls: d), important) }
         if !neg, let body = customUtilities[u] {
             let decls: NWDecls = body.split(separator: ";").compactMap { p in
                 guard let c = p.firstIndex(of: ":") else { return nil }
@@ -163,10 +166,23 @@ extension NWTailwind {
 
     // MARK: CSS text
 
+    /// `0.25rem` -> `0.25rem/*4px*/` (the Tailwind server's pixel equivalents) and `rgb(34 197 94 / ...)` -> `.../*#22c55e*/` (hex of the color).
+    static func annotate(_ v: String) -> String {
+        if v.hasSuffix("rem"), let n = Double(v.dropLast(3)) {
+            let px = n * 16
+            return v + "/*" + (px == px.rounded() ? String(Int(px)) : String(format: "%g", px)) + "px*/"
+        }
+        if v.hasPrefix("rgb("), let sp = v.firstIndex(of: "/") {
+            let nums = v[v.index(v.startIndex, offsetBy: 4)..<sp].split(separator: " ").compactMap { Int($0) }
+            if nums.count == 3, nums.allSatisfy({ $0 >= 0 && $0 <= 255 }) { return v + String(format: "/*#%02x%02x%02x*/", nums[0], nums[1], nums[2]) }
+        }
+        return v
+    }
+
     private func format(selector: String, decls: NWDecls, important: Bool, indent: Int) -> String {
         let pad = String(repeating: " ", count: indent)
         var s = pad + selector + " {\n"
-        for (p, v) in decls { s += pad + "  \(p): \(v)\(important && !p.hasPrefix("--") ? " !important" : "");\n" }
+        for (p, v) in decls { s += pad + "  \(p): \(NWTailwind.annotate(v))\(important && !p.hasPrefix("--") ? " !important" : "");\n" }
         return s + pad + "}"
     }
 
@@ -220,12 +236,12 @@ extension NWTailwind {
         let query = String(decoding: q, as: UTF8.self)
         func add(_ s: String) {
             let full = pre + s
-            if q.isEmpty { if starts.count < limit { starts.append(full) }; return }
+            if q.isEmpty { if starts.count < 6000 { starts.append(full) }; return }
             let l = full.lowercased()
-            if l.hasPrefix(query) || l.hasPrefix("-" + query) { if starts.count < limit { starts.append(full) } }
-            else if subs.count < limit, CompletionLex.subsequence(q, in: full) { subs.append(full) }
+            if l.hasPrefix(query) || l.hasPrefix("-" + query) { if starts.count < 6000 { starts.append(full) } }
+            else if subs.count < 3000, CompletionLex.subsequence(q, in: full) { subs.append(full) }
         }
-        for n in NWTailwindStatic.names { add(n) }
+        for n in NWTailwindStatic.names where version >= 4 || !NWTailwind.v4Only.contains(n) { add(n) }
         for n in customUtilities.keys { add(n) }
         for n in extraNames { add(n) }
         for fam in NWFamilies.all {
@@ -236,7 +252,12 @@ extension NWTailwind {
                 if fam.negatable { add("-" + fam.prefix + "-" + k) }
             }
         }
-        return starts + subs
+        // the shortest (most likely intended) names first, then the loose subsequence matches
+        let order: (String, String) -> Bool = { $0.count != $1.count ? $0.count < $1.count : $0 < $1 }
+        starts.sort(by: order)
+        if starts.count >= limit { return Array(starts.prefix(limit)) }
+        subs.sort(by: order)
+        return starts + subs.prefix(limit - starts.count)
     }
 
     func variantNames() -> [String] {

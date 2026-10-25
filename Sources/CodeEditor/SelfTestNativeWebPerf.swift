@@ -64,10 +64,22 @@ enum SelfTestNativeWebPerf {
         NativeWeb.trimMemory()
         let p = NWProject.shared(root: root.path)
         check("index cache is capped", p.queue.sync { p.cachedIndexCount } <= NWProject.maxCSSIndexes)
-        // lazy: opening a project / typing in a non-web file creates nothing
+        // lazy: opening a project / typing in a non-web file creates nothing, and answers that do not need the project never walk it
         let idle = fm.temporaryDirectory.appendingPathComponent("ce-selftest-webidle-\(getpid())").standardizedFileURL
         SelfTestNativeWeb.put(idle, "a.php", "<?php echo 1;\n")
+        SelfTestNativeWeb.put(idle, "package.json", #"{"name":"idle"}"#)
+        SelfTestNativeWeb.put(idle, "src/big.js", String(repeating: "const value = compute(1, 2) // comment\n", count: 20_000))
         defer { try? fm.removeItem(at: idle) }
         check("no state for projects that were never asked", NWProject.existing(root: idle.path) == nil)
+        let js = idle.appendingPathComponent("src/big.js")
+        let ip = NWProject.shared(root: idle.path)
+        t = Date()
+        for _ in 0..<20 { _ = SelfTestNativeWeb.labels(js, "const x = foo(§") }
+        check("plain JS completion requests are cheap and never walk the project (\(Int(ms(t) / 20)) ms each)", ms(t) / 20 < 25 && !ip.queue.sync { ip.isListed })
+        _ = SelfTestNativeWeb.labels(idle.appendingPathComponent("x.html"), "<di§")
+        _ = SelfTestNativeWeb.labels(idle.appendingPathComponent("x.html"), "<div cl§")
+        check("tag and attribute completion never walk the project", !ip.queue.sync { ip.isListed })
+        _ = SelfTestNativeWeb.labels(idle.appendingPathComponent("x.html"), "<div class=\"§\">")
+        check("class list completion does", ip.queue.sync { ip.isListed })
     }
 }

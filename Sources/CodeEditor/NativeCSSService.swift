@@ -125,11 +125,16 @@ enum NWCssService {
             guard prefixLen > 0 || manual else { return [] }
             let nextIsColon = caret < b.count && b[caret] == 58
             var items: [CompletionItem] = []
-            items.reserveCapacity(NWCssData.sortedPropNames.count)
-            for name in NWCssData.sortedPropNames {
-                guard let pr = NWCssData.props[name] else { continue }
+            let typed = b.str(pos.prefixStart, caret).lowercased()
+            let q: [UInt8] = typed.utf8.allSatisfy { $0 < 128 } ? Array(typed.utf8) : []
+            for name in NWCssData.sortedPropNames where CompletionLex.subsequence(q, in: name) {
                 let sort = name.hasPrefix("-") ? "~" + name : name
-                items.append(CI.make(name, .property, detail: "property", insert: nextIsColon ? name : name + ": $0;", snippet: !nextIsColon, sort: sort, doc: pr.doc, range: range))
+                var item = CI.make(name, .property, detail: "property", insert: nextIsColon ? name : name + ": $0;", snippet: !nextIsColon, sort: sort, range: range)
+                if let pr = NWCssData.props[name] {
+                    let base = item
+                    item.resolve = { done in var u = base; u.resolve = nil; u.documentation = pr.doc; done(u) }
+                }
+                items.append(item)
             }
             return items
         case .value:
@@ -194,10 +199,15 @@ enum NWCssService {
             else { add(v, .value, detail: prop) }
         }
         for g in NWCssData.globalValues { add(g, .keyword, detail: "global", sort: "~" + g) }
-        let colorProp = NWCssData.colorProps.contains(prop) || prop.hasPrefix("--") && !prop.contains("spacing") || prop.hasPrefix("$") || prop.hasPrefix("@")
+        let colorProp = (pr?.hasColor ?? false) || NWCssData.colorProps.contains(prop) || prop.hasPrefix("--") && !prop.contains("spacing") || prop.hasPrefix("$") || prop.hasPrefix("@")
+        if pr?.hasImage == true {
+            for f in ["linear-gradient()", "radial-gradient()", "conic-gradient()", "repeating-linear-gradient()", "url()", "image-set()"] { add(f, .function, detail: "image", insert: String(f.dropLast()) + "$1)", snippet: true, sort: "4" + f) }
+        }
         if colorProp {
+            for hex in documentColors(b) { add(hex, .color, detail: "used in this file", sort: "3" + hex) }
             for (name, hex) in NWCssData.namedColors.sorted(by: { $0.key < $1.key }) { add(name, .color, detail: hex, sort: "5" + name) }
-            for f in ["rgb()", "rgba()", "hsl()", "hsla()", "oklch()", "oklab()", "color-mix()", "light-dark()"] { add(f, .function, detail: "color function", insert: String(f.dropLast()) + "$1)", snippet: true, sort: "4" + f) }
+            add("transparent", .color, detail: "rgba(0, 0, 0, 0)", sort: "5transparent"); add("currentColor", .color, detail: "the current text color", sort: "5currentColor")
+            for f in ["rgb()", "rgba()", "hsl()", "hsla()", "hwb()", "lab()", "lch()", "color()", "oklch()", "oklab()", "color-mix()", "light-dark()"] { add(f, .function, detail: "color function", insert: String(f.dropLast()) + "$1)", snippet: true, sort: "4" + f) }
             if let tw, tw.version < 4, !prop.hasPrefix("--") { add("theme()", .function, detail: "tailwind", insert: "theme($1)", snippet: true) }
         }
         if ["transition", "transition-property", "will-change"].contains(prop) {
@@ -211,6 +221,27 @@ enum NWCssService {
             }
         }
         return items
+    }
+
+    /// `#rgb` / `#rrggbb` / `#rrggbbaa` literals in the buffer (first 150 distinct), offered again for color properties.
+    static func documentColors(_ b: NWBuf) -> [String] {
+        var out: [String] = []
+        var seen = Set<String>()
+        var i = 0
+        let n = b.count
+        while i < n, out.count < 150 {
+            if b[i] == 35 {
+                var j = i + 1
+                while j < n, (b[j] >= 48 && b[j] <= 57) || (b[j] >= 97 && b[j] <= 102) || (b[j] >= 65 && b[j] <= 70) { j += 1 }
+                let len = j - i - 1
+                if [3, 4, 6, 8].contains(len), j >= n || !NWChar.isIdent(b[j]) {
+                    let s = b.str(i, j)
+                    if seen.insert(s.lowercased()).inserted { out.append(s) }
+                }
+                i = max(j, i + 1)
+            } else { i += 1 }
+        }
+        return out
     }
 
     private static func v4ThemeVars(_ tw: NWTailwind, range: NSRange, have: Set<String>) -> [CompletionItem] {
@@ -283,7 +314,10 @@ enum NWCssService {
             if !pr.values.isEmpty { md += "\n\nValues: " + pr.values.prefix(14).map { "`\($0)`" }.joined(separator: " ") }
             return NPHit(range: range, targets: [], markdown: md, kind: "css-property")
         case .paren:
-            if pos.prop == "var", word.hasPrefix("--") { return customPropHit(p, b, name: word, range: range, lang: lang, url: url, from: from) }
+            if pos.prop == "var", word.hasPrefix("--") {
+                if let h = customPropHit(p, b, name: word, range: range, lang: lang, url: url, from: from) { return h }
+                return enclosingProperty(b, pos: pos, from: from).flatMap { valueDoc($0, word) }.map { NPHit(range: range, targets: [], markdown: $0, kind: "css-property") }
+            }
             if pos.prop == "theme", let tw, tw.version < 4 {
                 let full = b.str(pos.prefixStart, hi)
                 let path = full.prefix { $0 != ")" && $0 != "," }.trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
@@ -331,6 +365,16 @@ enum NWCssService {
         }
     }
 
+    /// The property of the declaration that contains a `var(` / `calc(` call (text before the statement's first colon).
+    private static func enclosingProperty(_ b: NWBuf, pos: NWCss.Pos, from: Int) -> String? {
+        var s = pos.stmtStart
+        while s < b.count, NWChar.isSpace(b[s]) { s += 1 }
+        var k = s
+        while k < b.count, b[k] != 58, b[k] != 59, b[k] != 123, b[k] != 125 { k += 1 }
+        guard k < b.count, b[k] == 58 else { return nil }
+        return b.str(s, k).trimmingCharacters(in: .whitespaces).lowercased()
+    }
+
     private static func atRuleDoc(_ name: String, _ tw: NWTailwind?) -> String? {
         let docs: [String: String] = ["tailwind": "Inserts Tailwind's `base`, `components`, `utilities` or `variants` layer.", "apply": "Inlines existing utility classes into your own CSS.",
                                       "theme": "Defines Tailwind design tokens (theme variables).", "utility": "Registers a custom utility class.", "variant": "Applies a Tailwind variant inside CSS.",
@@ -340,7 +384,13 @@ enum NWCssService {
         return "**@\(name)**\n\n\(d)"
     }
 
-    private static func valueDoc(_ prop: String, _ word: String) -> String? { nil }
+    /// Hovering a value (or an undeclared var()) shows the declaration's property, like the CSS language server does.
+    private static func valueDoc(_ prop: String, _ word: String) -> String? {
+        guard let pr = NWCssData.props[prop.lowercased()] else { return nil }
+        var md = "**\(pr.name)**"
+        if !pr.doc.isEmpty { md += "\n\n" + pr.doc }
+        return md
+    }
 
     // MARK: definitions
 
@@ -385,7 +435,8 @@ enum NWCssService {
             if n.hasPrefix("color-"), let v = tw.colors[String(n.dropFirst(6))] { return NPHit(range: range, targets: [], markdown: "```css\n\(name): \(v);\n```\n*Tailwind theme*", kind: "css-var") }
         }
         guard !targets.isEmpty else { return nil }
-        return NPHit(range: range, targets: targets, markdown: md.prefix(3).joined(separator: "\n\n"), kind: "css-var")
+        var seenMD = Set<String>()
+        return NPHit(range: range, targets: targets, markdown: md.filter { seenMD.insert($0).inserted }.prefix(3).joined(separator: "\n\n"), kind: "css-var")
     }
 
     static func classDefinitions(_ p: NWProject, name: String, b: NWBuf?, lang: NWCssLang, url: URL?, from: Int, ids: Bool = false) -> [NPTarget] {

@@ -21,7 +21,7 @@ enum SelfTest {
     }
 
     private static func runChecks(app: AppDelegate) {
-        if AppEnv.value("CE_WEB_ONLY") != nil { SelfTestNativeWeb.run(); SelfTestNativeWebPerf.run(); finish() }   // dev aid: just the native web checks
+        if AppEnv.value("CE_WEB_ONLY") != nil || AppEnv.value("CE_WEB_BENCH") != nil || AppEnv.value("CE_WEB_LOCATE") != nil { if let p = AppEnv.value("CE_WEB_BENCH") { NativeWebBench.run(p); exit(0) }; SelfTestNativeWeb.run(); SelfTestNativeWebPerf.run(); finish() }   // dev aid: just the native web checks
         // Hermetic: the host's battery / Low Power Mode must not switch the saver features these checks exercise.
         Prefs.powerSaver = "off"
         PowerState.shared.recompute()

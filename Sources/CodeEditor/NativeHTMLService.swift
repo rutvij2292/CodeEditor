@@ -27,7 +27,7 @@ enum NWHtmlService {
             var items: [CompletionItem] = []
             var seen = Set<String>()
             for (i, name) in loc.stack.reversed().enumerated() where seen.insert(name).inserted {
-                items.append(CI.make(name, .keyword, detail: "close", insert: nextIsGT ? name : name + ">", sort: String(format: "%03d", i), range: range))
+                items.append(CI.make(name, .property, detail: "close", insert: nextIsGT ? name : name + ">", sort: String(format: "%03d", i), range: range))
             }
             return items
         }
@@ -37,7 +37,7 @@ enum NWHtmlService {
             let insert: String
             if nextIsGT || t.isVoid { insert = t.name }
             else { insert = t.name + ">$0</" + t.name + ">" }
-            items.append(CI.make(t.name, .keyword, detail: t.isVoid ? "void element" : "element", insert: insert, snippet: insert.contains("$"), sort: sortKey(t.name), doc: t.doc, range: range))
+            items.append(CI.make(t.name, .property, detail: t.isVoid ? "void element" : "element", insert: insert, snippet: insert.contains("$"), sort: sortKey(t.name), doc: t.doc, range: range))
         }
         return items
     }
@@ -60,7 +60,7 @@ enum NWHtmlService {
             guard seen.insert(name.lowercased()).inserted else { return }
             let isBool = booleanAttrs.contains(name)
             let insert = nextIsEq || isBool ? name : name + "=\"$1\"$0"
-            items.append(CI.make(name, .property, detail: kind, insert: insert, snippet: insert.contains("$"), sort: sort, doc: doc, range: range))
+            items.append(CI.make(name, .value, detail: kind, insert: insert, snippet: insert.contains("$"), sort: sort, doc: doc, range: range))
         }
         for a in NWHtmlData.attrs(for: tag) { add(a.name, doc: a.doc, kind: "<\(tag)>", sort: "0" + a.name) }
         for a in NWHtmlData.globalAttrs { add(a.name, doc: a.doc, kind: "global", sort: "1" + a.name) }

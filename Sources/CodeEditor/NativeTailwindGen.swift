@@ -184,11 +184,11 @@ enum NWFamilies {
     static let all: [NWFamily] = {
         var f: [NWFamily] = []
 
-        func spacingFam(_ prefix: String, _ props: [String], key: String = "spacing", neg: Bool = false, extras: [String: String] = [:], fractions: Bool = false, bare: Bool = false) {
+        func spacingFam(_ prefix: String, _ props: [String], key: String = "spacing", neg: Bool = false, extras: [String: String] = [:], fractions: Bool = false, twelfths: Bool = true, bare: Bool = false) {
             f.append(NWFamily(prefix: prefix, resolve: { tw, v, n in
                 guard let val = tw.spacing(v, key: key, neg: n, extras: extras, fractions: fractions) else { return nil }
                 return NWUtil(decls: props.map { ($0, val) })
-            }, keys: { tw in Array(tw.spacingMap(key).keys) + Array(extras.keys) + (fractions ? ["1/2", "1/3", "2/3", "1/4", "3/4"] : []) },
+            }, keys: { tw in Array(tw.spacingMap(key).keys) + Array(extras.keys) + (fractions ? (twelfths ? NWFamilies.fractionKeys : NWFamilies.fractionKeys.filter { !$0.hasSuffix("/12") }) : []) },
             bare: bare, negatable: neg))
         }
         let auto = ["auto": "auto"]
@@ -221,7 +221,7 @@ enum NWFamilies {
         let wExtras = ["auto": "auto", "full": "100%", "screen": "100vw", "svw": "100svw", "lvw": "100lvw", "dvw": "100dvw", "min": "min-content", "max": "max-content", "fit": "fit-content"]
         let hExtras = ["auto": "auto", "full": "100%", "screen": "100vh", "svh": "100svh", "lvh": "100lvh", "dvh": "100dvh", "min": "min-content", "max": "max-content", "fit": "fit-content", "lh": "1lh"]
         spacingFam("w", ["width"], key: "width", extras: wExtras, fractions: true)
-        spacingFam("h", ["height"], key: "height", extras: hExtras, fractions: true)
+        spacingFam("h", ["height"], key: "height", extras: hExtras, fractions: true, twelfths: false)
         spacingFam("size", ["width", "height"], key: "size", extras: ["auto": "auto", "full": "100%", "min": "min-content", "max": "max-content", "fit": "fit-content"], fractions: true)
         spacingFam("min-w", ["min-width"], key: "minWidth", extras: ["full": "100%", "min": "min-content", "max": "max-content", "fit": "fit-content", "screen": "100vw", "auto": "auto"])
         spacingFam("min-h", ["min-height"], key: "minHeight", extras: ["full": "100%", "screen": "100vh", "min": "min-content", "max": "max-content", "fit": "fit-content", "svh": "100svh", "dvh": "100dvh", "auto": "auto"])
@@ -467,6 +467,13 @@ enum NWFamilies {
             let colored = r.replacingOccurrences(of: "(rgb\\([^)]*\\)|#[0-9a-fA-F]{3,8})", with: "var(--tw-shadow-color)", options: .regularExpression)
             return NWUtil(decls: [("--tw-shadow", value), ("--tw-shadow-colored", colored), ("box-shadow", "var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow)")])
         }, keys: { tw in Array(tw.map("boxShadow").keys.filter { $0 != "DEFAULT" }) + Array(tw.colors.keys) }, bare: true))
+        // v3 opacity utilities (deprecated in v3.4, removed in v4)
+        for (p, v) in [("bg", "bg"), ("text", "text"), ("border", "border"), ("divide", "divide"), ("placeholder", "placeholder"), ("ring", "ring"), ("ring-offset", "ring-offset")] where p != "ring-offset" {
+            f.append(NWFamily(prefix: p + "-opacity", resolve: { tw, val, _ in
+                guard tw.version < 4, let o = tw.themed("opacity", val) else { return nil }
+                return NWUtil(decls: [("--tw-\(v)-opacity", o)], selSuffix: p == "divide" ? " > :not([hidden]) ~ :not([hidden])" : (p == "placeholder" ? "::placeholder" : ""))
+            }, keys: { tw in tw.version < 4 ? Array(tw.map("opacity").keys) : [] }, bare: false))
+        }
         // gradient stops
         for (p, key) in [("from", "from"), ("via", "via"), ("to", "to")] {
             f.append(NWFamily(prefix: p, resolve: { tw, v, _ in
@@ -523,6 +530,12 @@ enum NWFamilies {
         }, keys: nil, bare: false))
         f.append(NWFamily(prefix: "grow", resolve: { tw, v, _ in tw.arbitrary(v).map { NWUtil(decls: [("flex-grow", $0.value)]) } }, keys: nil, bare: false))
         f.append(NWFamily(prefix: "shrink", resolve: { tw, v, _ in tw.arbitrary(v).map { NWUtil(decls: [("flex-shrink", $0.value)]) } }, keys: nil, bare: false))
+        for (axis, other) in [("x", "y"), ("y", "x")] {
+            f.append(NWFamily(prefix: "border-spacing-" + axis, resolve: { tw, v, _ in
+                tw.spacing(v).map { NWUtil(decls: [("--tw-border-spacing-\(axis)", $0), ("border-spacing", "var(--tw-border-spacing-x) var(--tw-border-spacing-y)")]) }
+            }, keys: { tw in Array(tw.spacingMap("spacing").keys) }, bare: false))
+            _ = other
+        }
         f.append(NWFamily(prefix: "border-spacing", resolve: { tw, v, _ in
             tw.spacing(v).map { NWUtil(decls: [("--tw-border-spacing-x", $0), ("--tw-border-spacing-y", $0), ("border-spacing", "var(--tw-border-spacing-x) var(--tw-border-spacing-y)")]) }
         }, keys: { tw in Array(tw.spacingMap("spacing").keys) }, bare: false))
@@ -530,6 +543,13 @@ enum NWFamilies {
             if a.element.prefix.count != b.element.prefix.count { return a.element.prefix.count > b.element.prefix.count }
             return a.offset < b.offset
         }.map(\.element)
+    }()
+
+    /// Fractions Tailwind generates for widths, insets and the like: halves .. twelfths.
+    static let fractionKeys: [String] = {
+        var out: [String] = []
+        for d in [2, 3, 4, 5, 6, 12] { for n in 1..<d { out.append("\(n)/\(d)") } }
+        return out
     }()
 
     static let keyframes: [String: String] = [

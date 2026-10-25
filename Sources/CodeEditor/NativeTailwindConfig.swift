@@ -461,7 +461,9 @@ enum NWTailwindLoader {
     static func applyConfig(_ tw: NWTailwind, text: NSString) {
         var parser = NWJSParser(NWBuf(text))
         parser.parseModule()
-        guard let root = parser.rootObject(), root.entries != nil else { return }
+        guard let root = parser.rootObject(), root.entries != nil else { tw.incomplete = true; return }
+        if case .some(.call(let callee, _)) = parser.root, callee != "defineConfig", callee != "satisfies" { tw.incomplete = true }
+        if let presets = root.get("presets") { if case .arr(let a) = presets, a.isEmpty {} else { tw.incomplete = true } }
         if let pre = root.get("prefix")?.string { tw.prefix = pre }
         if let imp = root.get("important") { tw.important = imp.string == "true" ? "true" : imp.string }
         if let dm = root.get("darkMode") {

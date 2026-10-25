@@ -222,7 +222,7 @@ final class NWProject {
     static let cssExts: Set<String> = ["css", "scss", "less", "pcss", "postcss"]
     static let markupExts: Set<String> = ["html", "htm", "vue", "phtml", "svelte", "astro", "twig", "jsx", "tsx", "js", "ts", "mjs"]
     static let maxListed = 6000
-    private static let listTTL: TimeInterval = 20
+    private static let listTTL: TimeInterval = 600     // safety net only: FSEvents batches call markDirty()
 
     private(set) var cssFiles: [String] = []        // absolute paths
     private(set) var markupFiles: [String] = []     // absolute paths (blade.php included)
@@ -262,6 +262,8 @@ final class NWProject {
         walkNs = NPStats.now() &- t0
     }
 
+    /// True once the project tree has been walked (tests: ordinary JS / tag completions must not trigger it).
+    var isListed: Bool { listed }
     var allCSSFiles: [String] { ensureLists(); return cssFiles }
     var allMarkupFiles: [String] { ensureLists(); return markupFiles }
 

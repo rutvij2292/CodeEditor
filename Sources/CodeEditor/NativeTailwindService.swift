@@ -2,6 +2,8 @@ import AppKit
 
 /// Tailwind class completion and hover (generated CSS) over a class list token.
 enum NWTailwindService {
+    /// Most class names returned for one request (the editor shows 300 at most); the benchmark raises it to compare whole sets.
+    static var maxItems = 450
     static let opacitySteps = ["0", "5", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55", "60", "65", "70", "75", "80", "85", "90", "95", "100"]
 
     static func cssDoc(_ css: String) -> String { "```css\n" + css + "\n```" }
@@ -39,7 +41,7 @@ enum NWTailwindService {
         let ascii = tail.utf8.allSatisfy { $0 < 128 }
         let q: [UInt8] = ascii ? Array(tail.lowercased().utf8) : []
         let wantsNeg = tail.hasPrefix("-")
-        var names = tw.utilityNames(matching: q, limit: 450)
+        var names = tw.utilityNames(matching: q, limit: maxItems)
         if !wantsNeg && !tail.isEmpty { names.removeAll { $0.hasPrefix("-") } }
         names.sort { a, c in
             let ap = a.hasPrefix(tail), cp = c.hasPrefix(tail)
@@ -47,11 +49,11 @@ enum NWTailwindService {
             if a.count != c.count { return a.count < c.count }
             return a < c
         }
-        if names.count > 450 { names.removeLast(names.count - 450) }
+        if names.count > maxItems { names.removeLast(names.count - maxItems) }
         for n in names {
             let label = variantPrefix + bang + n
             let colorName = colorKey(of: n, tw)
-            var item = CI.make(label, colorName != nil ? .color : .value, detail: colorName.flatMap { tw.colors[$0] }.map { colorDetail($0) } ?? "tailwind", sort: n, range: range)
+            var item = CI.make(label, colorName != nil ? .color : .constant, detail: colorName.flatMap { tw.colors[$0] }.map { colorDetail($0) } ?? "tailwind", sort: n, range: range)
             let full = variantPrefix + bang + n
             let base = item
             item.resolve = { done in
@@ -65,7 +67,7 @@ enum NWTailwindService {
         // variants (only before the utility)
         for v in tw.variantNames() where q.isEmpty || CompletionLex.subsequence(q, in: v) {
             let text = variantPrefix + v + (v.hasSuffix("[") ? "" : ":")
-            out.append(CI.make(text, .keyword, detail: "variant", sort: "~" + v, range: range))
+            out.append(CI.make(text, .module, detail: "variant", sort: "~" + v, range: range))
         }
         // project classes defined in CSS (also usable next to utilities)
         let ql = tail.lowercased()

@@ -8,7 +8,7 @@ final class NativeWebProvider: CompletionProvider {
     func complete(_ context: CompletionContext, deliver: @escaping ([CompletionItem], Bool) -> Void) {
         token += 1
         let mine = token
-        guard NativeWeb.handles(context.fileURL), context.text.utf16.count < 2_000_000 else { deliver([], false); return }
+        guard NativeWeb.handles(context.fileURL), context.text.utf8.count < 2_000_000 else { deliver([], false); return }
         let p = NWProject.shared(root: NativeWeb.root(for: context.fileURL))
         p.queue.async { [weak self] in
             guard let self, self.token == mine else { return }
@@ -31,14 +31,18 @@ enum NWService {
 
     static func complete(_ p: NWProject, _ ctx: CompletionContext) -> [CompletionItem] {
         p.beginRequest()
-        let ns = NSString(string: ctx.text)
-        let b = NWBuf(ns)
-        let caret = min(ctx.caret, b.count)
         let url = ctx.fileURL
         guard let kind = NativeWeb.kind(of: url) else { return [] }
-        let tw = p.tailwind(near: url.deletingLastPathComponent().path)
+        let dir = url.deletingLastPathComponent().path
+        let ns = NSString(string: ctx.text)
+        if kind == .script { return scriptComplete(p, ns, caret: min(ctx.caret, ns.length), url: url) }
+        let b = NWBuf(ns)
+        let caret = min(ctx.caret, b.count)
+        // the project (Tailwind theme, stylesheets) is only consulted where an answer needs it
+        func theme() -> NWTailwind? { p.tailwind(near: dir) }
         switch kind {
         case .css:
+            let tw = theme()
             let lang = NWCss.lang(path: url.path)
             let pos = NWCss.position(b, from: 0, caret: caret, lang: lang)
             return NWCssService.complete(p, b, pos, caret: caret, lang: lang, url: url, tw: tw, manual: ctx.isManual, from: 0)
@@ -48,15 +52,32 @@ enum NWService {
             switch loc.kind {
             case .style:
                 let pos = NWCss.position(b, from: loc.contentRange.location, caret: caret, lang: .css)
-                return NWCssService.complete(p, b, pos, caret: caret, lang: .css, url: url, tw: tw, manual: ctx.isManual, from: loc.contentRange.location)
-            case .tagName, .attrName, .attrValue:
-                return NWHtmlService.complete(p, b, loc, caret: caret, url: url, tw: tw, manual: ctx.isManual)
+                return NWCssService.complete(p, b, pos, caret: caret, lang: .css, url: url, tw: theme(), manual: ctx.isManual, from: loc.contentRange.location)
+            case .tagName, .attrName:
+                return NWHtmlService.complete(p, b, loc, caret: caret, url: url, tw: nil, manual: ctx.isManual)
+            case .attrValue:
+                return NWHtmlService.complete(p, b, loc, caret: caret, url: url, tw: theme(), manual: ctx.isManual)
+            case .script:                         // class strings inside <script> (template literals with markup, className=, cn(...))
+                guard let site = scriptClassSite(b, caret), let tw = theme() else { return [] }
+                return NWTailwindService.complete(tw, p, b, site: site, caret: caret, url: url, extraClasses: NWHtmlService.projectClasses(p, limit: 600))
             default: return []
             }
-        case .script:
-            guard let tw, let site = scriptClassSite(b, caret) else { return [] }
-            return NWTailwindService.complete(tw, p, b, site: site, caret: caret, url: url, extraClasses: NWHtmlService.projectClasses(p, limit: 600))
+        case .script: return []
         }
+    }
+
+    /// JS / TS / JSX: only class strings (className=, cn(...), clsx(...), tw``) matter, so only a window around the caret is looked at
+    /// (a large source file is never copied per keystroke) and the project is not touched unless such a string is found.
+    private static func scriptComplete(_ p: NWProject, _ ns: NSString, caret: Int, url: URL) -> [CompletionItem] {
+        let base = max(0, caret - 4000)
+        let end = min(ns.length, caret + 1500)
+        let window = ns.substring(with: NSRange(location: base, length: end - base))
+        let b = NWBuf(NSString(string: window))
+        let c = caret - base
+        guard let site = scriptClassSite(b, c), let tw = p.tailwind(near: url.deletingLastPathComponent().path) else { return [] }
+        var items = NWTailwindService.complete(tw, p, b, site: site, caret: c, url: url, extraClasses: NWHtmlService.projectClasses(p, limit: 600))
+        for i in items.indices { if let r = items[i].replaceRange { items[i].replaceRange = NSRange(location: r.location + base, length: r.length) } }
+        return items
     }
 
     /// `<` / `</` followed only by name characters before the caret, in text position: a tag name being typed.
@@ -81,27 +102,44 @@ enum NWService {
 
     static func lookup(_ p: NWProject, url: URL, text: NSString, offset: Int, usages: Bool) -> NPHit? {
         p.beginRequest()
+        guard let kind = NativeWeb.kind(of: url) else { return nil }
+        let dir = url.deletingLastPathComponent().path
+        if kind == .script { return scriptLookup(p, text, offset: min(offset, text.length), url: url) }
         let b = NWBuf(text)
         let off = min(offset, b.count)
-        guard let kind = NativeWeb.kind(of: url) else { return nil }
-        let tw = p.tailwind(near: url.deletingLastPathComponent().path)
+        func theme() -> NWTailwind? { p.tailwind(near: dir) }
         switch kind {
         case .css:
+            let tw = theme()
             let lang = NWCss.lang(path: url.path)
             return NWCssService.lookup(p, b, offset: off, from: 0, lang: lang, url: url, tw: tw, usages: usages)
         case .html:
             let loc = NWHtml.locate(b, at: off)
             switch loc.kind {
             case .style:
-                return NWCssService.lookup(p, b, offset: off, from: loc.contentRange.location, lang: .css, url: url, tw: tw, limit: NSMaxRange(loc.contentRange), usages: usages)
-            case .tagName, .attrName, .attrValue:
-                return NWHtmlService.lookup(p, b, loc, offset: off, url: url, tw: tw, usages: usages)
+                return NWCssService.lookup(p, b, offset: off, from: loc.contentRange.location, lang: .css, url: url, tw: theme(), limit: NSMaxRange(loc.contentRange), usages: usages)
+            case .tagName, .attrName:
+                return NWHtmlService.lookup(p, b, loc, offset: off, url: url, tw: nil, usages: usages)
+            case .attrValue:
+                return NWHtmlService.lookup(p, b, loc, offset: off, url: url, tw: theme(), usages: usages)
+            case .script:
+                guard let site = scriptClassSite(b, off), let tw = theme() else { return nil }
+                return NWTailwindService.lookup(tw, p, b, site: site, offset: off, url: url)
             default: return nil
             }
-        case .script:
-            guard let tw, let site = scriptClassSite(b, off) else { return nil }
-            return NWTailwindService.lookup(tw, p, b, site: site, offset: off, url: url)
+        case .script: return nil
         }
+    }
+
+    private static func scriptLookup(_ p: NWProject, _ ns: NSString, offset: Int, url: URL) -> NPHit? {
+        let base = max(0, offset - 4000)
+        let end = min(ns.length, offset + 1500)
+        let b = NWBuf(NSString(string: ns.substring(with: NSRange(location: base, length: end - base))))
+        let o = offset - base
+        guard let site = scriptClassSite(b, o), let tw = p.tailwind(near: url.deletingLastPathComponent().path),
+              var hit = NWTailwindService.lookup(tw, p, b, site: site, offset: o, url: url) else { return nil }
+        hit.range = NSRange(location: hit.range.location + base, length: hit.range.length)
+        return hit
     }
 
     // MARK: class lists
@@ -190,6 +228,20 @@ enum NWService {
             i += 1
         }
         guard quote != 0, qStart >= 0 else { return nil }
+        // markup inside a template literal: `<td class="border|`
+        if quote == 96 {
+            var q = caret - 1
+            while q > qStart, b[q] != 34, b[q] != 39 { q -= 1 }
+            if q > qStart {
+                let attr = b.str(max(qStart + 1, q - 24), q)
+                if attr.range(of: #"(?:class|className)\s*=\s*$"#, options: .regularExpression) != nil {
+                    var e = caret
+                    while e < b.count, b[e] != b[q], b[e] != 10, b[e] != 96 { e += 1 }
+                    let list = NSRange(location: q + 1, length: max(0, e - (q + 1)))
+                    return NWClassSite(tokenRange: tokenRange(b, in: list, offset: caret), listRange: list)
+                }
+            }
+        }
         var e = caret
         while e < b.count, b[e] != quote, b[e] != 10 { if b[e] == 92 { e += 1 }; e += 1 }
         e = min(e, b.count)

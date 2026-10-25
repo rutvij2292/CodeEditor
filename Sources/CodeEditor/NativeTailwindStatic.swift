@@ -119,6 +119,15 @@ enum NWTailwindStatic {
     S snap-mandatory|--tw-scroll-snap-strictness: mandatory
     S snap-proximity|--tw-scroll-snap-strictness: proximity
     S text-ellipsis|text-overflow: ellipsis
+    S overflow-ellipsis|text-overflow: ellipsis
+    S flex-grow|flex-grow: 1
+    S flex-grow-0|flex-grow: 0
+    S flex-shrink|flex-shrink: 1
+    S flex-shrink-0|flex-shrink: 0
+    S decoration-auto|text-decoration-thickness: auto
+    S bg-origin-border|background-origin: border-box
+    S bg-origin-padding|background-origin: padding-box
+    S bg-origin-content|background-origin: content-box
     S text-clip|text-overflow: clip
     S text-wrap|text-wrap: wrap
     S text-nowrap|text-wrap: nowrap
