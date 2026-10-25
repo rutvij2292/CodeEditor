@@ -1,6 +1,6 @@
 import AppKit
 
-/// "Complete Current Statement" (Cmd-Shift-Return, PhpStorm style) for C-like languages: closes the brackets that are still open on the
+/// "Complete Current Statement" (Ctrl-Shift-Return; Cmd-Shift-Return is Write Claude Prompt) for C-like languages: closes the brackets that are still open on the
 /// caret line, adds the `;`, or opens a `{ }` block for `if (...)` / `foreach (...)` / `function ...()` / `class X` headers, and moves the
 /// caret to where the next thing is typed. Pure text transformation (`compute`) so it is testable without a window; one undo step.
 enum CompleteStatement {

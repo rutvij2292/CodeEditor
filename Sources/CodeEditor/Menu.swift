@@ -131,7 +131,7 @@ enum MainMenu {
             sep,
             item("Basic Completion", Selector(("triggerCompletion:")), " ", [.control]),
             item("Smart Completion", Selector(("triggerSmartCompletion:")), " ", [.control, .shift]),
-            item("Complete Current Statement", Selector(("completeCurrentStatement:")), "\r", [.command, .shift]),
+            item("Complete Current Statement", Selector(("completeCurrentStatement:")), "\r", [.control, .shift]),   // Cmd-Shift-Return is Write Claude Prompt
             item("Parameter Info", Selector(("showParameterInfo:")), "p"),
             item("Quick Documentation", Selector(("showQuickDocumentation:")), "j", [.control]),
             item("Go to Declaration", Selector(("goToDefinition:")), "b"),
