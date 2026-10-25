@@ -6,6 +6,15 @@ import AppKit
 /// Nothing answers unless it is provable; every miss falls through to the previous chain (native JS / web, then the Vue language server).
 enum NativeVue {
     static let enabledKey = "vue.native"
+    static let nativeOnlyKey = "vue.nativeOnly"
+
+    /// DEFAULT ON: Volar and the TypeScript server are not started for Vue projects (Settings > Languages turns them back on).
+    /// You keep native template navigation, hover, usages and completion; you lose template type checking, inferred-type hover,
+    /// rename and type errors until native covers them.
+    static var nativeOnly: Bool {
+        get { UserDefaults.standard.object(forKey: nativeOnlyKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: nativeOnlyKey) }
+    }
 
     /// Settings > Languages: 'Native Vue template service' (default ON).
     static var enabled: Bool {

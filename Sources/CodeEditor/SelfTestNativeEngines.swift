@@ -116,14 +116,15 @@ enum SelfTestNativeEngines {
         let d = UserDefaults.standard
         let keys = [NativePHP.nativeOnlyKey, NativePy.enabledKey, NativeWeb.enabledKey, NativeWeb.nativeOnlyKey, NativeWeb.tailwindEnabledKey,
                     NativeWeb.tailwindNativeOnlyKey, NativeJS.enabledKey, NativeJS.nativeOnlyKey, NativeJSDiag.syntaxKey, NativeJSAutoImport.key,
-                    NativeJSDiag.enabledKey, NativeVue.enabledKey, NativePHPDiag.classSeverityKey]
+                    NativeJSDiag.enabledKey, NativeVue.enabledKey, NativeVue.nativeOnlyKey, NativePHPDiag.classSeverityKey]
         let saved = keys.map { d.object(forKey: $0) }
         defer { for (k, v) in zip(keys, saved) { if let v { d.set(v, forKey: k) } else { d.removeObject(forKey: k) } } }
-        for k in keys { d.set(k == NativePHPDiag.classSeverityKey ? 1 : (k == NativeJS.nativeOnlyKey || k == NativePHP.nativeOnlyKey ? true : false), forKey: k) }
+        // every key set to the OPPOSITE of its default, so a reset that misses one is caught
+        for k in keys { d.set(k == NativePHPDiag.classSeverityKey ? 1 : (k == NativePy.enabledKey), forKey: k) }
         NativeEngines.resetPrefs()
         check("reset removes every engine key", keys.allSatisfy { d.object(forKey: $0) == nil })
-        check("reset restores the defaults", NativePy.enabled && NativeJS.enabled && NativeVue.enabled && !NativeJS.nativeOnly && NativeWeb.enabled
-              && NativeWeb.nativeOnly && NativeJSDiag.enabled && NativePHPDiag.classSeverity == 2)
+        check("reset restores the defaults", !NativePy.enabled && NativeJS.enabled && NativeVue.enabled && NativeJS.nativeOnly && NativeVue.nativeOnly
+              && NativePHP.nativeOnly && NativeWeb.enabled && NativeWeb.nativeOnly && NativeJSDiag.enabled && NativePHPDiag.classSeverity == 2)
 
         // Settings rows: same sections, labels and order as the hand-written pane.
         var seq: [String] = []
@@ -138,9 +139,10 @@ enum SelfTestNativeEngines {
             + PyDiagGroup.allCases.map { "Python: " + $0.title }
             + ["# HTML / CSS", "Native HTML and CSS services", "Use native HTML / CSS only (stop the external servers)",
                "# Tailwind CSS", "Native Tailwind engine", "Use native Tailwind only (stop the Tailwind server)",
-               "# JavaScript / TypeScript", "Native JavaScript / TypeScript engine", "Plain JS / TS projects: do not start the TypeScript server (opt-in)",
+               "# JavaScript / TypeScript", "Native JavaScript / TypeScript engine", "Do not start the TypeScript server (native JS / TS only)",
                "Native JS / TS diagnostics (missing relative imports, unused imports)", "Report unclosed brackets (syntax)",
-               "Report unknown names and wrong argument counts (TypeScript)", "Auto-import suggestions while typing", "Native Vue template service"]
+               "Report unknown names and wrong argument counts (TypeScript)", "Auto-import suggestions while typing", "Native Vue template service",
+               "Do not start Volar / the TypeScript server for Vue projects"]
         check("settings rows keep their labels and order", seq == expected)
         if seq != expected { print("  settings rows were: \(seq)") }
         check("every toggle reads its preference", NativeEngines.settingsSections.flatMap(\.items).allSatisfy {

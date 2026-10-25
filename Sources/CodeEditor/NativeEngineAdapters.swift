@@ -180,6 +180,7 @@ struct JSEngine: NativeEngine {
             }
         }
     }
+    func allowsLinkHighlight(for url: URL) -> Bool { NativeJS.allowsLinkHighlight(url) }
     func hoverDiagnostics(for tab: EditorTab?) -> [LSPDiagnostic] { NativeJSDiagController.hoverDiagnostics(for: tab) }
     func registerCompletion() { NativeJSCompletion.register() }
     func startDiagnostics() { NativeJSDiagController.start() }
@@ -204,7 +205,7 @@ struct JSEngine: NativeEngine {
             toggle("Native JavaScript / TypeScript engine", "Native JavaScript and TypeScript engine",
                    "Go to definition, hover, find usages, import and member completion come from Kode's built-in parser first (tsconfig paths, node_modules, re-exports, classes); the TypeScript server answers whatever native cannot be certain about. Turn off to leave everything to the server.",
                    { NativeJS.enabled }, { NativeJS.enabled = $0; NativeJS.trimMemory() }),
-            toggle("Plain JS / TS projects: do not start the TypeScript server (opt-in)", "Do not start the TypeScript server for plain JavaScript and TypeScript projects",
+            toggle("Do not start the TypeScript server (native JS / TS only)", "Do not start the TypeScript server",
                    "Saves the server's 230 MB - 1 GB. You keep go to definition, hover, find usages, import and member completion and missing / unused import checks; you lose rename, type errors, completion and hover for inferred types, signature help and quick fixes. Vue projects always keep the server. Applies to projects opened afterwards.",
                    { NativeJS.nativeOnly }, { NativeJS.nativeOnly = $0 }),
             toggle("Native JS / TS diagnostics (missing relative imports, unused imports)", "Native JavaScript and TypeScript diagnostics", nil,
@@ -238,13 +239,18 @@ struct VueEngine: NativeEngine {
     func invalidate(root: URL) { NativeVue.invalidate(root: root) }
     func trimMemory() { NativeVue.trimMemory() }
     func installMemoryHooks() { NativeVue.installMemoryHooks() }
-    func resetPrefs() { off(NativeVue.enabledKey) }
+    func resetPrefs() { off(NativeVue.enabledKey); off(NativeVue.nativeOnlyKey) }
+    func suppressesServer(_ id: String, root: URL?) -> Bool { id == "volar" && NativeVue.enabled && NativeVue.nativeOnly }
 
     /// Continues the JavaScript / TypeScript section (no heading of its own), as the row always did.
     var settingsSections: [NativeSettingsSection] {
         [NativeSettingsSection(title: nil, items: [.toggle(NativeSettingsToggle(
             title: "Native Vue template service", accessibility: "Native Vue template service",
             help: "In .vue templates: go to definition, hover, find usages and completion for custom component tags, their props / events / slots, template variables, assets and router links come from Kode itself (imports, components option, global and auto-imported components, aliases). The Vue language server only answers what native cannot be certain about.",
-            get: { NativeVue.enabled }, set: { NativeVue.enabled = $0; NativeVue.trimMemory() }))])]
+            get: { NativeVue.enabled }, set: { NativeVue.enabled = $0; NativeVue.trimMemory() })),
+            .toggle(NativeSettingsToggle(
+            title: "Do not start Volar / the TypeScript server for Vue projects", accessibility: "Do not start Volar for Vue projects",
+            help: "Saves the Volar + TypeScript server pair (about 750 MB - 1 GB). You keep native template navigation, hover, find usages and completion; you lose template type checking, type errors, rename and inferred-type hover. Takes effect for projects opened afterwards.",
+            get: { NativeVue.nativeOnly }, set: { NativeVue.nativeOnly = $0 }))])]
     }
 }

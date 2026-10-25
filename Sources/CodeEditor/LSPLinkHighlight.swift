@@ -8,7 +8,7 @@ extension LSPSession {
     static func commandHeld() -> Bool { commandHeldOverride ?? NSEvent.modifierFlags.contains(.command) }
 
     func updateLinkHighlight(flags: NSEvent.ModifierFlags, point: NSPoint?) {
-        guard flags.contains(.command), !flags.contains(.shift), !flags.contains(.option), let tv = textView,
+        guard flags.contains(.command), !flags.contains(.shift), !flags.contains(.option), NativeEngines.allowsLinkHighlight(url), let tv = textView,
               let point, tv.visibleRect.contains(point), let off = offsetUnderPoint(point),
               instance(supporting: "definitionProvider") != nil || NativeEngines.handles(url) else { clearLinkHighlight(); return }
         if tab.map({ LanguageServers.suppressHoverUnderline?($0, off) == true }) == true { clearLinkHighlight(); return }

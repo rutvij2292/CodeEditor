@@ -102,6 +102,7 @@ enum NativeEngines {
     static func trimMemory() { for e in all { e.trimMemory() } }
     static func resetPrefs() { for e in all { e.resetPrefs() } }
 
+    static func allowsLinkHighlight(_ url: URL) -> Bool { all.allSatisfy { $0.allowsLinkHighlight(for: url) } }
     static func suppressesServer(_ id: String, root: URL? = nil) -> Bool { all.contains { $0.suppressesServer(id, root: root) } }
     static func suppressesBuiltinCompletion(_ topic: NativeBuiltinCompletionTopic, for url: URL) -> Bool {
         all.contains { $0.suppressesBuiltinCompletion(topic, for: url) }

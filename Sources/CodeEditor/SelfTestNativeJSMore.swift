@@ -105,14 +105,19 @@ extension SelfTestNativeJS {
         check("infer: ref({...}).value.key", rhit("to\nfunction") == 8)
         check("infer: several returns / async functions are left to the server", rhit("k\nasync") == nil && rhit("z\n") == nil)
 
-        // opt-in 'native only': default off, never for Vue projects
+        // 'native only' (default ON): plain projects get no TypeScript server; Vue projects follow the Vue switch
         let keepNative = NativeJS.nativeOnly
-        check("native only is off by default", UserDefaults.standard.object(forKey: NativeJS.nativeOnlyKey) != nil || !NativeJS.nativeOnly)
+        let keepVue = NativeVue.nativeOnly
+        UserDefaults.standard.removeObject(forKey: NativeJS.nativeOnlyKey); UserDefaults.standard.removeObject(forKey: NativeVue.nativeOnlyKey)
+        check("native only is on by default (JS / TS and Vue)", NativeJS.nativeOnly && NativeVue.nativeOnly)
         NativeJS.nativeOnly = true
         put(root, "pkg-plain/package.json", "{\"name\":\"plain\"}")
         put(root, "pkg-vue/package.json", "{\"dependencies\":{\"vue\":\"^3\"}}")
         check("native only: a plain project gets no TypeScript server", NativeJS.suppressesTypeScriptServer(root: root.appendingPathComponent("pkg-plain")) && LanguageServerLaunch.typescript(root: root.appendingPathComponent("pkg-plain"), manager: .shared) == nil)
-        check("native only: a Vue project keeps its server", !NativeJS.suppressesTypeScriptServer(root: root.appendingPathComponent("pkg-vue")))
+        check("native only: a Vue project gets no TypeScript server either", NativeJS.suppressesTypeScriptServer(root: root.appendingPathComponent("pkg-vue")))
+        NativeVue.nativeOnly = false
+        check("Vue switch off: a Vue project keeps its server", !NativeJS.suppressesTypeScriptServer(root: root.appendingPathComponent("pkg-vue")))
+        NativeVue.nativeOnly = keepVue
         NativeJS.nativeOnly = false
         check("native only off: nothing is suppressed", !NativeJS.suppressesTypeScriptServer(root: root.appendingPathComponent("pkg-plain")))
         NativeJS.nativeOnly = keepNative

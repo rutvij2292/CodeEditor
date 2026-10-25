@@ -23,16 +23,22 @@ enum NativeJS {
     }
 
 
-    /// OPT-IN (default off): do not start the TypeScript server for plain JS / TS projects. Native then answers go to definition, hover,
+    /// DEFAULT ON: do not start the TypeScript server (turn off in Settings > Languages to run it). Native then answers go to definition, hover,
     /// find usages, import / member completion and the two diagnostics; not available: rename, type errors, completion of inferred
-    /// members, lib / dependency hover with inferred types, signature help, code actions. Vue projects always keep their server (Volar
-    /// talks to tsserver). Takes effect for projects opened afterwards.
+    /// members, lib / dependency hover with inferred types, signature help, code actions. Vue projects follow NativeVue.nativeOnly (Volar talks to tsserver). Takes effect for projects opened afterwards.
     static var nativeOnly: Bool {
-        get { UserDefaults.standard.object(forKey: nativeOnlyKey) as? Bool ?? false }
+        get { UserDefaults.standard.object(forKey: nativeOnlyKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: nativeOnlyKey) }
     }
 
-    static func suppressesTypeScriptServer(root: URL) -> Bool { enabled && nativeOnly && !LanguageServerLaunch.isVueProject(root) }
+    static func suppressesTypeScriptServer(root: URL) -> Bool {
+        guard enabled, nativeOnly else { return false }
+        return !LanguageServerLaunch.isVueProject(root) || (NativeVue.enabled && NativeVue.nativeOnly)
+    }
+
+    /// No Cmd-hover link look on plain JS / TS files (navigation by Cmd-click still works): the owner rarely reads library source.
+    static let plainScriptExtensions: Set<String> = ["js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts"]
+    static func allowsLinkHighlight(_ url: URL) -> Bool { !plainScriptExtensions.contains(url.pathExtension.lowercased()) }
 
     static let extensions: Set<String> = ["js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "vue"]
 

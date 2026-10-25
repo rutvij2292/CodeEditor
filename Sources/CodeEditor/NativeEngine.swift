@@ -63,6 +63,8 @@ protocol NativeEngine {
     var emptyHoverIsAnswer: Bool { get }
     /// True when the Cmd-hover underline covers the hit's own range instead of the word under the pointer (Vue).
     var underlinesHitRange: Bool { get }
+    /// False: no Cmd-hover link look for this file (Cmd-click still navigates).
+    func allowsLinkHighlight(for url: URL) -> Bool
     /// True when files of this engine need the language-server session UI (hover, Cmd-click) even without any external server.
     var providesSessionUI: Bool { get }
     var supportsSignatureHelp: Bool { get }
@@ -97,6 +99,7 @@ extension NativeEngine {
     var completionRank: Int { 0 }
     var emptyHoverIsAnswer: Bool { false }
     var underlinesHitRange: Bool { false }
+    func allowsLinkHighlight(for url: URL) -> Bool { true }
     var providesSessionUI: Bool { false }
     var supportsSignatureHelp: Bool { false }
     func goToDefinition(in tab: EditorTab, at offset: Int) -> Bool { false }

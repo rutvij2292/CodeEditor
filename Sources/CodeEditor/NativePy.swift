@@ -10,9 +10,9 @@ import SwiftTreeSitter
 enum NativePy {
     static let enabledKey = "py.native.enabled"
 
-    /// 'Use native Python engine'. Default ON: there is no other Python language service.
+    /// 'Use native Python engine'. Default OFF (opt-in): Python is not part of the daily stack; the engine costs nothing while off.
     static var enabled: Bool {
-        get { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
+        get { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? false }
         set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
     }
 

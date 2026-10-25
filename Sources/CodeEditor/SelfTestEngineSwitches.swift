@@ -6,11 +6,16 @@ enum SelfTestEngineSwitches {
 
     static func run() {
         let d = UserDefaults.standard
-        let keys = [NativeWeb.enabledKey, NativeWeb.nativeOnlyKey, NativeWeb.tailwindEnabledKey, NativeWeb.tailwindNativeOnlyKey, NativePHP.nativeOnlyKey]
+        let keys = [NativePy.enabledKey, NativeJS.nativeOnlyKey, NativeVue.nativeOnlyKey, NativeWeb.enabledKey, NativeWeb.nativeOnlyKey, NativeWeb.tailwindEnabledKey, NativeWeb.tailwindNativeOnlyKey, NativePHP.nativeOnlyKey]
         let saved = keys.map { d.object(forKey: $0) }
         defer { for (k, v) in zip(keys, saved) { if let v { d.set(v, forKey: k) } else { d.removeObject(forKey: k) } } }
         keys.forEach { d.removeObject(forKey: $0) }
 
+        func u(_ n: String) -> URL { URL(fileURLWithPath: "/p/" + n) }
+        check("no Cmd-hover link look on plain JS / TS files", ["a.js", "a.ts", "a.tsx", "a.jsx", "a.mjs", "a.cts"].allSatisfy { !NativeEngines.allowsLinkHighlight(u($0)) })
+        check("...but still on PHP, Vue, CSS and Python files", ["a.php", "a.vue", "a.css", "a.py", "a.blade.php"].allSatisfy { NativeEngines.allowsLinkHighlight(u($0)) })
+        check("defaults: Python engine off (opt-in), Volar and the TypeScript server not started",
+              !NativePy.enabled && NativeEngines.suppressesServer("volar") && NativeEngines.suppressesServer("typescript", root: FileManager.default.temporaryDirectory))
         check("defaults: intelephense, html, css and tailwind servers are not started",
               ["intelephense", "html", "css", "tailwind"].allSatisfy { !LanguageServerPrefs.isEnabled($0) })
         NativeWeb.nativeOnly = false
