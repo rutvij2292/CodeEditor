@@ -94,6 +94,7 @@ final class FTEval {
     var authModelCache: [String: String] = [:]
     var ctorPropCache: [String: String] = [:]
     var facadeRootCache: [String: String] = [:]
+    var deprecatedCache: [ObjectIdentifier: Set<String>] = [:]
 
     init(fp: FastProject, text: NSString, lex: PHPLex, cur: FTClass?) {
         self.fp = fp; ns = text; self.lex = lex; self.cur = cur
@@ -715,31 +716,37 @@ final class FTEval {
     private static let queryBuilder = "Illuminate\\Database\\Query\\Builder"
     private static let collectionClass = "Illuminate\\Support\\Collection"
 
-    private func methodItem(_ m: FTMethod, sort: String, owner: String) -> CompletionItem {
+    private func methodItem(_ m: FTMethod, sort: String, owner k: FTClass) -> CompletionItem {
         let noArgs = m.params.isEmpty
         let detail = "(" + m.params + ")" + (m.ret.isEmpty ? "" : ": " + m.ret)
-        var it = CI.make(m.name, .method, detail: detail, insert: noArgs ? m.name + "()" : m.name + "($1)$0", snippet: !noArgs, sort: sort + m.name.lowercased(),
-                         doc: "```php\n\(m.name)\(detail)\n```\n\(owner)")
-        it.deprecated = false
+        let header = "```php\n\(m.name)\(detail)\n```\n\(k.fqn)"
+        var it = CI.make(m.name, .method, detail: detail, insert: noArgs ? m.name + "()" : CI.callInsert(m.name, params: m.params), snippet: !noArgs, sort: sort + m.name.lowercased(),
+                         doc: header)
+        it.deprecated = deprecatedMethods(of: k).contains(m.name)
+        if k !== cur { it.resolve = lazyDoc(owner: k.fqn, declStart: m.declStart, header: header) }      // docblock summary / @param / @deprecated on selection
         return it
     }
 
     func members(of t: FTType, via: String?, fromSameClass: Bool, staticDollar: Bool, onlyNames: inout Set<String>) -> [CompletionItem] {
         var out: [CompletionItem] = []
-        func add(_ it: CompletionItem) { if onlyNames.insert(it.kind.rawValue + ":" + it.label).inserted { out.append(it) } }
+        func add(_ it: CompletionItem, prio: Int = -1) {
+            if onlyNames.insert(it.kind.rawValue + ":" + it.label).inserted { var x = it; if prio >= 0 { x.priority = prio }; out.append(x) }
+        }
         func classMembers(_ fqn: String, instance: Bool, includeAll: Bool, base: String) {
+            let b = (Int(base) ?? 0) * 10
             for (idx, k) in hierarchy(fqn).enumerated() {
+                let tierOf = b + min(idx, 5)                       // own class, then each parent / trait / interface further down
                 let own = idx == 0 || (fromSameClass && k.kind == "trait")
                 func visible(_ vis: Int) -> Bool { vis == 0 || (vis == 1 && fromSameClass) || (vis == 2 && own && fromSameClass) }
                 for m in k.methods where visible(m.vis) && !m.name.hasPrefix("__") && (instance || m.isStatic || includeAll) {
-                    add(methodItem(m, sort: base + (m.isStatic == instance ? "b" : "a"), owner: k.fqn))
+                    add(methodItem(m, sort: base + (m.isStatic == instance ? "b" : "a"), owner: k), prio: tierOf + (m.isStatic == instance ? 6 : 0))
                 }
                 if instance {
-                    for p in k.props where !p.isStatic && visible(p.vis) { add(CI.make(p.name, .property, detail: p.type, sort: base + "a" + p.name.lowercased(), doc: k.fqn)) }
+                    for p in k.props where !p.isStatic && visible(p.vis) { add(CI.make(p.name, .property, detail: p.type, sort: base + "a" + p.name.lowercased(), doc: k.fqn), prio: tierOf) }
                 } else {
-                    for c in k.consts { add(CI.make(c, .constant, detail: k.name, sort: base + "a" + c.lowercased())) }
-                    for c in k.cases { add(CI.make(c, .enumMember, detail: k.name, sort: base + "a" + c.lowercased())) }
-                    if staticDollar { for p in k.props where p.isStatic && visible(p.vis) { add(CI.make("$" + p.name, .property, detail: p.type, sort: base + "a" + p.name.lowercased())) } }
+                    for c in k.consts { add(CI.make(c, .constant, detail: k.name, sort: base + "a" + c.lowercased()), prio: tierOf) }
+                    for c in k.cases { add(CI.make(c, .enumMember, detail: k.name, sort: base + "a" + c.lowercased()), prio: tierOf) }
+                    if staticDollar { for p in k.props where p.isStatic && visible(p.vis) { add(CI.make("$" + p.name, .property, detail: p.type, sort: base + "a" + p.name.lowercased()), prio: tierOf) } }
                 }
             }
         }
@@ -752,7 +759,7 @@ final class FTEval {
                 let h = hierarchy(b)
                 if h.isEmpty { continue }
                 found = true
-                for k in h { for m in k.methods where m.vis == 0 && !m.name.hasPrefix("__") { add(methodItem(m, sort: base + "c", owner: k.fqn)) } }
+                for k in h { for m in k.methods where m.vis == 0 && !m.name.hasPrefix("__") { add(methodItem(m, sort: base + "c", owner: k), prio: (Int(base) ?? 0) * 10 + 7) } }
             }
             if !found { for l in CI.lines(CompletionData.eloquentStatic) { var it = CI.member(l, kind: .method, sort: base + "c"); it.sortText = base + "c" + it.label.lowercased(); add(it) } }
         }
@@ -775,7 +782,7 @@ final class FTEval {
         case .table:
             builderMembers(nil, base: "0")
         case .collection:
-            for k in hierarchy(Self.collectionClass) { for m in k.methods where m.vis == 0 && !m.name.hasPrefix("__") { add(methodItem(m, sort: "0", owner: k.fqn)) } }
+            for k in hierarchy(Self.collectionClass) { for m in k.methods where m.vis == 0 && !m.name.hasPrefix("__") { add(methodItem(m, sort: "0", owner: k)) } }
         }
         return out
     }

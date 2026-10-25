@@ -54,7 +54,7 @@ enum NWService {
                 let pos = NWCss.position(b, from: loc.contentRange.location, caret: caret, lang: .css)
                 return NWCssService.complete(p, b, pos, caret: caret, lang: .css, url: url, tw: theme(), manual: ctx.isManual, from: loc.contentRange.location)
             case .tagName, .attrName:
-                return NWHtmlService.complete(p, b, loc, caret: caret, url: url, tw: nil, manual: ctx.isManual)
+                return NWHtmlService.complete(p, b, loc, caret: caret, url: url, tw: nil, manual: ctx.isManual || (loc.kind == .tagName && ctx.triggerCharacter == "<"))   // `<` itself lists the tags
             case .attrValue:
                 return NWHtmlService.complete(p, b, loc, caret: caret, url: url, tw: theme(), manual: ctx.isManual)
             case .script:                         // class strings inside <script> (template literals with markup, className=, cn(...))
