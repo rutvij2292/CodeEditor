@@ -10,136 +10,29 @@ final class LanguagesPane: SettingsPane {
     private var licenceField: NSSecureTextField?
 
     override func build() {
-        section("PHP")
-        let nativeOnly = NSButton(checkboxWithTitle: "Use native PHP engine only (stop Intelephense)", target: nil, action: nil)
-        nativeOnly.target = action { c in NativePHP.setNativeOnly((c as? NSButton)?.state == .on) }
-        nativeOnly.action = #selector(SettingsAction.fire(_:))
-        nativeOnly.setAccessibilityLabel("Use native PHP engine only")
-        onRefresh { nativeOnly.state = NativePHP.nativeOnly ? .on : .off }
-        row(nil, nativeOnly, help: "Definition, hover, find usages, rename, signature help and diagnostics come from Kode's built-in PHP engine (about 0 MB extra). Intelephense (160-1100 MB) is not started; turn this off to run it alongside. See docs/native-php.md.")
-
-        section("PHP diagnostics")
-        for g in NPDiagGroup.allCases {
-            let box = NSButton(checkboxWithTitle: g.title, target: nil, action: nil)
-            box.target = action { c in
-                g.enabled = (c as? NSButton)?.state == .on
-                NotificationCenter.default.post(name: NativePHPDiagController.settingsDidChange, object: nil)
+        // PHP, Python, HTML / CSS, Tailwind, JavaScript / TypeScript, Vue: described by the native engines (NativeEngines.swift).
+        for sec in NativeEngines.settingsSections {
+            if let title = sec.title { section(title) }
+            for item in sec.items {
+                switch item {
+                case .toggle(let t):
+                    let box = NSButton(checkboxWithTitle: t.title, target: nil, action: nil)
+                    box.target = action { c in t.set((c as? NSButton)?.state == .on) }
+                    box.action = #selector(SettingsAction.fire(_:))
+                    box.setAccessibilityLabel(t.accessibility)
+                    onRefresh { box.state = t.get() ? .on : .off }
+                    row(nil, box, help: t.help)
+                case .choice(let ch):
+                    let pop = NSPopUpButton(frame: .zero, pullsDown: false)
+                    pop.addItems(withTitles: ch.options)
+                    pop.target = action { c in ch.set((c as? NSPopUpButton)?.indexOfSelectedItem ?? 0) }
+                    pop.action = #selector(SettingsAction.fire(_:))
+                    pop.setAccessibilityLabel(ch.accessibility)
+                    onRefresh { pop.selectItem(at: ch.get()) }
+                    row(ch.label, pop)
+                }
             }
-            box.action = #selector(SettingsAction.fire(_:))
-            box.setAccessibilityLabel("PHP diagnostics: \(g.title)")
-            onRefresh { box.state = g.enabled ? .on : .off }
-            row(nil, box, help: g == .syntax ? "Native checks run after edits settle, for the open file only. Rules stay silent when they cannot be certain; with Intelephense running the same problem is never listed twice." : nil)
         }
-        let severity = NSPopUpButton(frame: .zero, pullsDown: false)
-        severity.addItems(withTitles: ["Warning", "Error"])
-        severity.target = action { c in
-            NativePHPDiag.classSeverity = (c as? NSPopUpButton)?.indexOfSelectedItem == 1 ? 1 : 2
-            NotificationCenter.default.post(name: NativePHPDiagController.settingsDidChange, object: nil)
-        }
-        severity.action = #selector(SettingsAction.fire(_:))
-        severity.setAccessibilityLabel("Severity of undefined classes")
-        onRefresh { severity.selectItem(at: NativePHPDiag.classSeverity == 1 ? 1 : 0) }
-        row("Undefined class severity", severity)
-
-        section("Python")
-        let pyNative = NSButton(checkboxWithTitle: "Use native Python engine", target: nil, action: nil)
-        pyNative.target = action { c in
-            NativePy.enabled = (c as? NSButton)?.state == .on
-            NotificationCenter.default.post(name: NativePyDiagController.settingsDidChange, object: nil)
-        }
-        pyNative.action = #selector(SettingsAction.fire(_:))
-        pyNative.setAccessibilityLabel("Use native Python engine")
-        onRefresh { pyNative.state = NativePy.enabled ? .on : .off }
-        row(nil, pyNative, help: "Go to definition, hover with docstrings, find usages, completion and diagnostics for .py files from Kode's built-in Python index (no pyright / pylsp process, a few MB while idle). Imports resolve through the project, its virtualenv (.venv, venv, poetry, pipenv, pyenv, conda) and the standard library.")
-        for g in PyDiagGroup.allCases {
-            let box = NSButton(checkboxWithTitle: "Python: " + g.title, target: nil, action: nil)
-            box.target = action { c in
-                g.enabled = (c as? NSButton)?.state == .on
-                NotificationCenter.default.post(name: NativePyDiagController.settingsDidChange, object: nil)
-            }
-            box.action = #selector(SettingsAction.fire(_:))
-            box.setAccessibilityLabel("Python diagnostics: \(g.title)")
-            onRefresh { box.state = g.enabled ? .on : .off }
-            row(nil, box, help: g == .syntax ? "Checks run after edits settle, for the open file only, and stay silent when they cannot be certain (unresolved imports need a discovered virtualenv)." : nil)
-        }
-        section("HTML / CSS")
-        let webOn = NSButton(checkboxWithTitle: "Native HTML and CSS services", target: nil, action: nil)
-        webOn.target = action { c in NativeWeb.enabled = (c as? NSButton)?.state == .on }
-        webOn.action = #selector(SettingsAction.fire(_:))
-        webOn.setAccessibilityLabel("Native HTML and CSS services")
-        onRefresh { webOn.state = NativeWeb.enabled ? .on : .off }
-        row(nil, webOn, help: "Completion, hover and go to definition for HTML and CSS come from Kode itself (no node process).")
-        let webOnly = NSButton(checkboxWithTitle: "Use native HTML / CSS only (stop the external servers)", target: nil, action: nil)
-        webOnly.target = action { c in NativeWeb.setNativeOnly((c as? NSButton)?.state == .on) }
-        webOnly.action = #selector(SettingsAction.fire(_:))
-        webOnly.setAccessibilityLabel("Use native HTML CSS only")
-        onRefresh { webOnly.state = NativeWeb.nativeOnly ? .on : .off }
-        row(nil, webOnly, help: "Does not start the HTML and CSS language servers (about 100-165 MB). Diagnostics and formatting from those servers are unavailable meanwhile.")
-        section("Tailwind CSS")
-        let twOn = NSButton(checkboxWithTitle: "Native Tailwind engine", target: nil, action: nil)
-        twOn.target = action { c in NativeWeb.setTailwindEnabled((c as? NSButton)?.state == .on) }
-        twOn.action = #selector(SettingsAction.fire(_:))
-        twOn.setAccessibilityLabel("Native Tailwind engine")
-        onRefresh { twOn.state = NativeWeb.tailwindEnabled ? .on : .off }
-        row(nil, twOn, help: "Class completion and hover from the project's tailwind.config.* or @theme (no node process). It only loads in projects that use Tailwind; switched off, nothing Tailwind-related runs.")
-        let twOnly = NSButton(checkboxWithTitle: "Use native Tailwind only (stop the Tailwind server)", target: nil, action: nil)
-        twOnly.target = action { c in NativeWeb.setTailwindNativeOnly((c as? NSButton)?.state == .on) }
-        twOnly.action = #selector(SettingsAction.fire(_:))
-        twOnly.setAccessibilityLabel("Use native Tailwind only")
-        onRefresh { twOnly.state = NativeWeb.tailwindNativeOnly ? .on : .off }
-        row(nil, twOnly, help: "Does not start the Tailwind language server (about 345 MB). Configs that need JavaScript (presets, plugins) get no answer meanwhile.")
-        section("JavaScript / TypeScript")
-        let nativeJS = NSButton(checkboxWithTitle: "Native JavaScript / TypeScript engine", target: nil, action: nil)
-        nativeJS.target = action { c in NativeJS.enabled = (c as? NSButton)?.state == .on; NativeJS.trimMemory() }
-        nativeJS.action = #selector(SettingsAction.fire(_:))
-        nativeJS.setAccessibilityLabel("Native JavaScript and TypeScript engine")
-        onRefresh { nativeJS.state = NativeJS.enabled ? .on : .off }
-        row(nil, nativeJS, help: "Go to definition, hover, find usages, import and member completion come from Kode's built-in parser first (tsconfig paths, node_modules, re-exports, classes); the TypeScript server answers whatever native cannot be certain about. Turn off to leave everything to the server.")
-        let nativeJSOnly = NSButton(checkboxWithTitle: "Plain JS / TS projects: do not start the TypeScript server (opt-in)", target: nil, action: nil)
-        nativeJSOnly.target = action { c in NativeJS.nativeOnly = (c as? NSButton)?.state == .on }
-        nativeJSOnly.action = #selector(SettingsAction.fire(_:))
-        nativeJSOnly.setAccessibilityLabel("Do not start the TypeScript server for plain JavaScript and TypeScript projects")
-        onRefresh { nativeJSOnly.state = NativeJS.nativeOnly ? .on : .off }
-        row(nil, nativeJSOnly, help: "Saves the server's 230 MB - 1 GB. You keep go to definition, hover, find usages, import and member completion and missing / unused import checks; you lose rename, type errors, completion and hover for inferred types, signature help and quick fixes. Vue projects always keep the server. Applies to projects opened afterwards.")
-        let nativeJSDiag = NSButton(checkboxWithTitle: "Native JS / TS diagnostics (missing relative imports, unused imports)", target: nil, action: nil)
-        nativeJSDiag.target = action { c in
-            NativeJSDiag.enabled = (c as? NSButton)?.state == .on
-            for ctl in NativeJSDiagController.controllers.values { ctl.schedule(initial: true) }
-        }
-        nativeJSDiag.action = #selector(SettingsAction.fire(_:))
-        nativeJSDiag.setAccessibilityLabel("Native JavaScript and TypeScript diagnostics")
-        onRefresh { nativeJSDiag.state = NativeJSDiag.enabled ? .on : .off }
-        row(nil, nativeJSDiag, help: nil)
-        let nativeJSSyntax = NSButton(checkboxWithTitle: "Report unclosed brackets (syntax)", target: nil, action: nil)
-        nativeJSSyntax.target = action { c in
-            NativeJSDiag.syntaxEnabled = (c as? NSButton)?.state == .on
-            for ctl in NativeJSDiagController.controllers.values { ctl.schedule(initial: true) }
-        }
-        nativeJSSyntax.action = #selector(SettingsAction.fire(_:))
-        nativeJSSyntax.setAccessibilityLabel("Native syntax diagnostics for unclosed brackets")
-        onRefresh { nativeJSSyntax.state = NativeJSDiag.syntaxEnabled ? .on : .off }
-        row(nil, nativeJSSyntax, help: "Only the repairs tree-sitter is sure about (a missing ) ] or }); other parse errors are never reported because the grammar lacks some newer syntax.")
-        let nativeJSTypes = NSButton(checkboxWithTitle: "Report unknown names and wrong argument counts (TypeScript)", target: nil, action: nil)
-        nativeJSTypes.target = action { c in
-            NativeJSDiag.typesEnabled = (c as? NSButton)?.state == .on
-            for ctl in NativeJSDiagController.controllers.values { ctl.schedule(initial: true) }
-        }
-        nativeJSTypes.action = #selector(SettingsAction.fire(_:))
-        nativeJSTypes.setAccessibilityLabel("Native type diagnostics for unknown names and argument counts")
-        onRefresh { nativeJSTypes.state = NativeJSDiag.typesEnabled ? .on : .off }
-        row(nil, nativeJSTypes, help: "Off by default. Cannot find name (TS2304) and wrong argument count (TS2554) for single functions, only in TypeScript files the tsconfig includes, and silent in projects with global declaration files.")
-        let nativeJSAuto = NSButton(checkboxWithTitle: "Auto-import suggestions while typing", target: nil, action: nil)
-        nativeJSAuto.target = action { c in NativeJSAutoImport.enabled = (c as? NSButton)?.state == .on }
-        nativeJSAuto.action = #selector(SettingsAction.fire(_:))
-        nativeJSAuto.setAccessibilityLabel("Auto-import suggestions")
-        onRefresh { nativeJSAuto.state = NativeJSAutoImport.enabled ? .on : .off }
-        row(nil, nativeJSAuto, help: "Exported names of other project files and dependencies appear in the completion list and add the import when accepted.")
-        let nativeVue = NSButton(checkboxWithTitle: "Native Vue template service", target: nil, action: nil)
-        nativeVue.target = action { c in NativeVue.enabled = (c as? NSButton)?.state == .on; NativeVue.trimMemory() }
-        nativeVue.action = #selector(SettingsAction.fire(_:))
-        nativeVue.setAccessibilityLabel("Native Vue template service")
-        onRefresh { nativeVue.state = NativeVue.enabled ? .on : .off }
-        row(nil, nativeVue, help: "In .vue templates: go to definition, hover, find usages and completion for custom component tags, their props / events / slots, template variables, assets and router links come from Kode itself (imports, components option, global and auto-imported components, aliases). The Vue language server only answers what native cannot be certain about.")
 
         section("Language servers")
         for server in LanguageServers.serverIds {

@@ -127,23 +127,8 @@ enum NativePy {
         }
     }
 
-    /// Registers the completion provider and the diagnostics driver (AppDelegate, once).
-    static func start() {
+    /// Registered through the engine registry (NativeEngines.swift: PythonEngine).
+    static func registerCompletion() {
         CompletionRegistry.register(NativePyCompletionProvider(), forExtensions: ["py", "pyi", "pyw"])
-        NativePyDiagController.start()
-    }
-}
-
-/// One dispatch point for the native engines that answer from the editor session (hover, link underline, Cmd-B).
-enum NativeLang {
-    static func handles(_ url: URL) -> Bool { NativePHP.handles(url) || NativePy.handles(url) }
-
-    static func lookupAsync(url: URL, text: NSString, offset: Int, completion: @escaping (NPHit?) -> Void) {
-        if NativePy.handles(url) { NativePy.lookupAsync(url: url, text: text, offset: offset, completion: completion) }
-        else { NativePHP.lookupAsync(url: url, text: text, offset: offset, completion: completion) }
-    }
-
-    static func goToDefinition(in tab: EditorTab, at offset: Int) -> Bool {
-        NativePy.handles(tab.url) ? NativePy.goToDefinition(in: tab, at: offset) : NativePHP.goToDefinition(in: tab, at: offset)
     }
 }

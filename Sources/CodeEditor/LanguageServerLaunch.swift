@@ -17,9 +17,7 @@ struct LSPLaunch {
 enum LanguageServerPrefs {
     static func key(_ id: String) -> String { "lsp.\(id).enabled" }
     static func isEnabled(_ id: String) -> Bool {
-        if id == "intelephense", NativePHP.nativeOnly { return false }      // Settings > Languages > native PHP engine only
-        if NativeWeb.managedServerIds.contains(id), NativeWeb.enabled, NativeWeb.nativeOnly { return false }   // native HTML / CSS only
-        if id == NativeWeb.tailwindServerId, NativeWeb.enabled, NativeWeb.tailwindEnabled, NativeWeb.tailwindNativeOnly { return false }   // native Tailwind only
+        if NativeEngines.suppressesServer(id) { return false }      // a native engine replaces this server (Settings > Languages)
         return UserDefaults.standard.object(forKey: key(id)) as? Bool ?? true
     }
     static func setEnabled(_ id: String, _ on: Bool) { UserDefaults.standard.set(on, forKey: key(id)) }
@@ -129,7 +127,7 @@ enum LanguageServerLaunch {
     }
 
     static func typescript(root: URL, manager: LanguageServerManager) -> LSPLaunch? {
-        if NativeJS.suppressesTypeScriptServer(root: root), !manager.vueRoots.contains(root.path) { return nil }      // opt-in: native JS / TS only (Settings > Languages)
+        if NativeEngines.suppressesServer("typescript", root: root), !manager.vueRoots.contains(root.path) { return nil }      // opt-in: native JS / TS only (Settings > Languages)
         let env = AppEnv.value("CE_TS_MODE")
         let forceNode = env == "tsserver" || UserDefaults.standard.bool(forKey: "lsp.typescript.preferTsserver")
             || manager.vueRoots.contains(root.path) || isVueProject(root)

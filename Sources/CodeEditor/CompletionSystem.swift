@@ -43,9 +43,6 @@ enum CompletionSystem {
         CompletionRegistry.register(BuiltinProvider(LiveTemplateCompletion.generate), forExtensions: LiveTemplateCompletion.extensions)
         CompletionRegistry.register(SymbolCompletionProvider(), forExtensions: ["php", "phtml", "js", "jsx", "ts", "tsx", "mjs", "vue"])
         StructuredCompletion.register()   // YAML / JSON key + value completion (StructuredCompletion.swift)
-        NativeWeb.register()  // native CSS / HTML / Tailwind (NativeWeb*.swift)
-        NativeJSCompletion.register()
-        NativeVue.register()  // native Vue template completion (NativeVue*.swift)
-        FastTier.register()   // last: wins score ties when deduping against the other providers
+        NativeEngines.registerCompletions()   // native engines (Web, JS, Vue, Python, then PHP's FastTier last: it wins score ties when deduping)
     }
 }

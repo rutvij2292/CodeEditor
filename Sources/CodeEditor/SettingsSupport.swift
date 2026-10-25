@@ -159,20 +159,7 @@ enum SettingsDefaults {
 
     static func restoreLanguages() {
         for s in LanguageServers.serverIds { UserDefaults.standard.removeObject(forKey: LanguageServerPrefs.key(s.id)) }
-        UserDefaults.standard.removeObject(forKey: NativePHP.nativeOnlyKey)
-        NativePHPDiag.resetPrefs()
-        UserDefaults.standard.removeObject(forKey: NativePy.enabledKey)
-        PyDiagGroup.resetPrefs()
-        UserDefaults.standard.removeObject(forKey: NativeWeb.enabledKey)
-        UserDefaults.standard.removeObject(forKey: NativeWeb.nativeOnlyKey)
-        UserDefaults.standard.removeObject(forKey: NativeWeb.tailwindEnabledKey)
-        UserDefaults.standard.removeObject(forKey: NativeWeb.tailwindNativeOnlyKey)
-        UserDefaults.standard.removeObject(forKey: NativeJS.enabledKey)
-        UserDefaults.standard.removeObject(forKey: NativeJS.nativeOnlyKey)
-        UserDefaults.standard.removeObject(forKey: NativeJSDiag.syntaxKey)
-        UserDefaults.standard.removeObject(forKey: NativeJSAutoImport.key)
-        UserDefaults.standard.removeObject(forKey: NativeJSDiag.enabledKey)
-        UserDefaults.standard.removeObject(forKey: NativeVue.enabledKey)
+        NativeEngines.resetPrefs()      // every native engine removes its own keys
     }
 
     static func restoreTerminal() {

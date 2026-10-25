@@ -305,7 +305,7 @@ enum SelfTestNativePyDiag {
         w.open(file)
         guard let tab = w.current, tab.url.standardizedFileURL == file.standardizedFileURL else { check("ui: python tab opened", false); return }
         check("ui: python tab gets a session (hover / Cmd-click UI) without any language server", LanguageServers.session(for: tab) != nil)
-        check("ui: native handles the tab", NativeLang.handles(tab.url))
+        check("ui: native handles the tab", NativeEngines.handles(tab.url))
         let ns = code as NSString
         // go to definition through the editor hook
         var opened: (URL, Int)?
