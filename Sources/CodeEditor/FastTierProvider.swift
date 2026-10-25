@@ -118,6 +118,8 @@ enum FastEngine {
             if region == .js || region == .css { return Result(items: []) }
             return stringItems(ctx, ns, open: open, caret: caret, blade: blade, fp: fp)
         }
+        // `'exists:users,|` / `'in:a,b,|`: a comma inside the string, only meaningful for validation rules
+        if !blade, region == .php, let open = openString(ns, caret, allowComma: true), let r = FastRules.items(ns, open: open, caret: caret, fp: fp) { return r }
         // 2. Blade component tags
         if blade, region == .html, let r = componentItems(ns, caret, fp) { return r }
         if region == .js || region == .css || region == .html && !blade { return Result(items: []) }
@@ -130,7 +132,7 @@ enum FastEngine {
     // MARK: Strings
 
     /// Opening quote of the string literal containing the caret on this line (heuristic that also works inside HTML attributes).
-    static func openString(_ ns: NSString, _ caret: Int) -> Int? {
+    static func openString(_ ns: NSString, _ caret: Int, allowComma: Bool = false) -> Int? {
         let ls = max(CompletionLex.lineStart(ns, caret), caret - 300)
         var j = caret - 1
         while j >= ls {
@@ -141,7 +143,7 @@ enum FastEngine {
                 var k = j + 1
                 while k < caret {
                     let d = ns.character(at: k)
-                    if d == 39 || d == 34 || d == 40 || d == 41 || d == 91 || d == 93 || d == 123 || d == 125 || d == 59 || d == 44 || d == 60 || d == 62 || d == 61 || d == 36 { return nil }
+                    if d == 39 || d == 34 || d == 40 || d == 41 || d == 91 || d == 93 || d == 123 || d == 125 || d == 59 || (d == 44 && !allowComma) || d == 60 || d == 62 || d == 61 || d == 36 { return nil }
                     k += 1
                 }
                 // opener is preceded by ( , [ => = . ? : or whitespace-after-those
@@ -157,7 +159,7 @@ enum FastEngine {
         return nil
     }
 
-    private static func enclosingCall(_ ns: NSString, openAbs: Int) -> Int? {
+    static func enclosingCall(_ ns: NSString, openAbs: Int) -> Int? {
         let start = max(0, openAbs - 2500)
         let u = ns.substring(with: NSRange(location: start, length: openAbs - start)) as NSString
         var depth = 0
@@ -189,6 +191,7 @@ enum FastEngine {
 
     private static func stringItems(_ ctx: CompletionContext, _ ns: NSString, open: Int, caret: Int, blade: Bool, fp: FastProject) -> Result {
         let range = NSRange(location: open + 1, length: caret - open - 1)
+        if !blade, let r = FastRules.items(ns, open: open, caret: caret, fp: fp) { return r }      // validation rules / casts
         guard let call = LaravelResolver.callContext(ns, openAbs: open) else { return Result(items: []) }
         let key = call.key
         var method = key.components(separatedBy: CharacterSet(charactersIn: ":->")).last(where: { !$0.isEmpty }) ?? key
@@ -214,6 +217,15 @@ enum FastEngine {
         } else if (FTEval.columnMethods.contains(method) || FTEval.relationMethods.contains(method)), !blade,
                   let r = modelStringItems(ctx, ns, open: open, caret: caret, method: method, fp: fp) {
             return r
+        } else if FTEval.columnMethods.contains(method), !blade, call.argIndex == 0 {
+            // receiver type unknown (query builder chain, dynamic model): every column of the schema, most widespread first
+            var count: [String: (type: String, n: Int)] = [:]
+            for cols in fp.schema().values { for c in cols { let e = count[c.name]; count[c.name] = (e?.type ?? c.type, (e?.n ?? 0) + 1) } }
+            items = count.sorted { ($0.value.n, $1.key) > ($1.value.n, $0.key) }.prefix(1500).enumerated().map { i, e in
+                var it = CI.make(e.key, .field, detail: e.value.type + (e.value.n > 1 ? "  \u{00D7}\(e.value.n)" : ""), doc: "Column found in \(e.value.n) table(s)", range: range)
+                it.priority = 20 + min(i, 900) / 30
+                return it
+            }
         }
         return Result(items: items)
     }
@@ -314,7 +326,11 @@ enum FastEngine {
             guard opTok >= 1, opTok < lex.count, lex.toks[opTok].loc == opLoc else { return Result(items: []) }
             let lo = ev.chainStart(before: opTok)
             guard let t = ev.eval(lo, opTok) else { return Result(items: []) }
-            if case .staticRef(let f) = t, f.hasPrefix("Illuminate\\Support\\Facades\\") { return Result(items: []) }
+            if case .staticRef(let f) = t, f.hasPrefix("Illuminate\\Support\\Facades\\") {
+                var items = ev.facadeItems(f, prefix: prefix)
+                if staticDollar { items = [] }
+                return Result(items: items, incomplete: !prefix.isEmpty)
+            }
             var via: String?
             if lo < opTok, lex.toks[lo].kind == .ident { via = lex.text(lo) }
             var seen = Set<String>()
@@ -324,8 +340,23 @@ enum FastEngine {
             default: same = false
             }
             var items = ev.members(of: t, via: via, fromSameClass: same, staticDollar: staticDollar, onlyNames: &seen)
+            var docFiltered = false
+            switch t {                                                      // @method / @property tags (Carbon, IDE-helper annotated models)
+            case .instance(let f): items += ev.docMemberItems(f, prefix: prefix, instance: true, seen: &seen); docFiltered = true
+            case .staticRef(let f) where !staticDollar: items += ev.docMemberItems(f, prefix: prefix, instance: false, seen: &seen); docFiltered = true
+            default: break
+            }
             if staticDollar { let r = NSRange(location: pStart, length: caret - pStart); for i in items.indices { items[i].replaceRange = r } }
-            return Result(items: items)
+            return Result(items: items, incomplete: docFiltered && !prefix.isEmpty)
+        }
+        // named arguments of the call being typed: `foo(me|` -> `message: `
+        if !prefix.isEmpty || ctx.isManual, let named = FastRules.namedArgs(ctx, ns, caret: caret, fp: fp) {
+            var items = named.items
+            if !prefix.isEmpty, let f = prefix.unicodeScalars.first, CharacterSet.letters.contains(f), prefix.count >= 2 || ctx.isManual,
+               p > 0, ns.character(at: p - 1) != 36, ns.character(at: p - 1) != 92 {
+                items += classItems(prefix: prefix, ctx: ctx, ns: ns, range: ctx.prefixRange, fp: fp).items
+            }
+            return Result(items: items, incomplete: !prefix.isEmpty)
         }
         // class names
         guard !prefix.isEmpty || ctx.isManual else { return Result(items: []) }
@@ -411,6 +442,9 @@ enum FastEngine {
                              detail: c.fqn, insert: insert, sort: (c.project ? "1" : "2") + c.short.lowercased(), doc: "`\(c.fqn)`\n\nAdds `use \(c.fqn);` when accepted.", range: range)
             if ambiguous { it.filterText = c.short }
             it.additionalEdits = edits
+            // imported or same namespace: what the file already talks about; then the project, PHP built-ins, vendor packages
+            let local = cur.map { namespaceOf(c.fqn) == ($0.ns.isEmpty ? "global" : $0.ns) || $0.uses.values.contains(c.fqn) } ?? false
+            it.priority = local ? 0 : (c.project ? 1 : (c.builtin ? 2 : 3))
             items.append(it)
         }
         return Result(items: items, incomplete: true)
