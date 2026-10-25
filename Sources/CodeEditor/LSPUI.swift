@@ -336,6 +336,17 @@ extension LSPSession {
             popup.setContent(LSPMarkdown.render(parts.joined(separator: "\n\n")))
             popup.show(for: self, anchor: self.screenRect(forCharacterRange: anchorRange))
         }
+        if docs, NativeVue.handles(url) {          // native Vue template service first (components, props, expressions); the chain below only when it has no answer
+            NativeVue.lookupAsync(url: url, text: text as NSString, offset: offset) { [weak self] hit in
+                guard let self, token == self.hoverToken else { return }
+                if let md = hit?.markdown, !md.isEmpty { present(md) } else { self.nativeHoverChain(at: offset, docs: docs, token: token, present: present) }
+            }
+            return
+        }
+        nativeHoverChain(at: offset, docs: docs, token: token, present: present)
+    }
+
+    private func nativeHoverChain(at offset: Int, docs: Bool, token: Int, present: @escaping (String?) -> Void) {
         if docs, NativeJS.handles(url) {           // native JS / TS first, the TypeScript server only when it has no answer
             NativeJS.lookupAsync(url: url, text: text as NSString, offset: offset) { [weak self] hit in
                 guard let self, token == self.hoverToken else { return }

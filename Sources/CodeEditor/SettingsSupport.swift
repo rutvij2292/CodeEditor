@@ -170,6 +170,7 @@ enum SettingsDefaults {
         UserDefaults.standard.removeObject(forKey: NativeJS.enabledKey)
         UserDefaults.standard.removeObject(forKey: NativeJS.nativeOnlyKey)
         UserDefaults.standard.removeObject(forKey: NativeJSDiag.enabledKey)
+        UserDefaults.standard.removeObject(forKey: NativeVue.enabledKey)
     }
 
     static func restoreTerminal() {
