@@ -89,14 +89,16 @@ final class NJSDoc {
     let isVue: Bool
     let scriptRanges: [NSRange]          // vue: ranges of script content
     private var _summary: NJSSummary?
+    private let summaryLock = NSLock()      // the live document is shared by the project queue and the find-usages queue
     var summary: NJSSummary {
+        summaryLock.lock(); defer { summaryLock.unlock() }
         if let s = _summary { return s }
         let s = NJSExtractor(doc: self).extract()
         _summary = s
         return s
     }
 
-    init?(path: String, text: NSString) {
+    init?(path: String, text: NSString, maxChars: Int = 3_000_000) {
         let ext = (path as NSString).pathExtension.lowercased()
         var parseText = text
         var ranges: [NSRange] = []
@@ -107,7 +109,7 @@ final class NJSDoc {
             parseText = masked; ranges = rs
             lang = NJSParsers.lang(forExtension: "vue", vueScriptIsTS: ts)
         }
-        guard let l = lang, text.length < 3_000_000, let t = NJSParsers.parse(parseText, lang: l), let r = t.rootNode else { return nil }
+        guard let l = lang, text.length < maxChars, let t = NJSParsers.parse(parseText, lang: l), let r = t.rootNode else { return nil }
         self.path = path; self.text = text; self.tree = t; self.root = r; self.lang = l
         self.isVue = ext == "vue"; self.scriptRanges = ranges
     }

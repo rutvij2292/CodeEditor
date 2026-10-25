@@ -23,6 +23,21 @@ enum SelfTestNativeJS {
             fputs(out, stderr); exit(0)
         }
         if let p = AppEnv.value("CE_NJS_BENCH") { NativeJSBench.run(p); exit(0) }
+        if let f = AppEnv.value("CE_NJS_MEM") {                 // footprint of reading / parsing / summarising one file
+            func mb() -> String { String(format: "%.1f", NativePHPBench.footprintMB()) }
+            fputs("MEM start \(mb())\n", stderr)
+            var text: NSString? = FastProject.read(f)
+            fputs("MEM read \(text?.length ?? 0) chars -> \(mb())\n", stderr)
+            var doc: NJSDoc? = NJSDoc(path: f, text: text!)
+            fputs("MEM parsed -> \(mb())\n", stderr)
+            let sm = doc!.summary
+            fputs("MEM summary (\(sm.order.count) syms, cost \(sm.cost / 1024) KB) -> \(mb())\n", stderr)
+            doc = nil; text = nil
+            fputs("MEM released -> \(mb())\n", stderr)
+            malloc_zone_pressure_relief(nil, 0)
+            fputs("MEM relief -> \(mb())\n", stderr)
+            exit(0)
+        }
         if let spec = AppEnv.value("CE_NJS_PROBE") {        // file:word:nth (0-based occurrence)
             let parts = spec.split(separator: ":").map(String.init)
             if parts.count >= 2 { let m = NJSModules(root: NativeJS.root(for: URL(fileURLWithPath: parts[0]))); fputs("PROBE root \(m.root) aliases \(m.aliases(inConfig: m.root + "/vite.config.js").map { "\($0.key)=\($0.target)" })\n", stderr) }

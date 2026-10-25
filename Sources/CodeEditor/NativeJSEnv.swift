@@ -95,7 +95,7 @@ final class NJSProject {
             lock.unlock(); return s
         }
         lock.unlock()
-        guard let text = FastProject.read(path), let doc = NJSDoc(path: path, text: text) else { return nil }
+        guard let text = FastProject.read(path), let doc = NJSDoc(path: path, text: text, maxChars: 1_000_000) else { return nil }      // a tree costs ~26 bytes per character while it lives
         let s = doc.summary
         s.stamp = stamp
         lock.lock()

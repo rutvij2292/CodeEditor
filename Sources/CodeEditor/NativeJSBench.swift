@@ -135,7 +135,7 @@ enum NativeJSBench {
         }
         if AppEnv.value("CE_NJS_LEAK") != nil {
             for round in 1...4 {
-                for r in rows { if let text = FastProject.read(r.file) { _ = NativeJS.lookup(url: URL(fileURLWithPath: r.file), text: text, offset: r.offset + 1, root: root) } }
+                for r in rows { autoreleasepool { if let text = FastProject.read(r.file) { _ = NativeJS.lookup(url: URL(fileURLWithPath: r.file), text: text, offset: r.offset + 1, root: root) } } }
                 var st = malloc_statistics_t(); malloc_zone_statistics(nil, &st)
                 fputs("BENCH malloc in use before trim \(f1(Double(st.size_in_use) / 1_048_576)) MB, allocated \(f1(Double(st.size_allocated) / 1_048_576)) MB\n", stderr)
                 let before = NativePHPBench.footprintMB()
