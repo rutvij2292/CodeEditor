@@ -349,13 +349,28 @@ enum NVService {
             if let em = doc.cur.emit(t.text) { return NPHit(range: inner, targets: [doc.target(doc.file, em.loc)], markdown: "**\(em.name)** — event declared by this component", kind: "event") }
             return nil
         }
-        // route names / paths in `{ name: 'x' }` / `{ path: '/x' }`
-        if ti >= 2, ex.tk[ti - 1].isP(":"), ex.tk[ti - 2].kind == .ident || ex.tk[ti - 2].kind == .str, ["name", "path"].contains(ex.tk[ti - 2].text),
-           element >= 0, routerTags.contains(doc.tpl.elems[element].name.lowercased()) {
+        // route names / paths: `{ name: 'x' }` / `{ path: '/x' }` of a router link or of `$router.push(...)`, `router.push('/x')`, `:to="'/x'"`
+        let routerElement = element >= 0 && routerTags.contains(doc.tpl.elems[element].name.lowercased())
+        func inRouterCall(_ from: Int) -> Bool {            // the object literal around `from` is the argument of push / replace / resolve
+            var depth = 0
+            var k = from
+            while k >= 0 {
+                if ex.tk[k].isP("}") || ex.tk[k].isP(")") || ex.tk[k].isP("]") { depth += 1 }
+                else if ex.tk[k].isP("{") || ex.tk[k].isP("(") || ex.tk[k].isP("[") {
+                    if depth == 0 { return ex.tk[k].isP("{") && k >= 2 && ex.tk[k - 1].isP("(") && ex.tk[k - 2].kind == .ident && ["push", "replace", "resolve"].contains(ex.tk[k - 2].text) }
+                    depth -= 1
+                }
+                k -= 1
+            }
+            return false
+        }
+        if ti >= 3, ex.tk[ti - 1].isP(":"), ex.tk[ti - 2].kind == .ident || ex.tk[ti - 2].kind == .str, ["name", "path"].contains(ex.tk[ti - 2].text), routerElement || inRouterCall(ti - 3) {
             let ts = ex.tk[ti - 2].text == "name" ? doc.p.routeTargets(path: nil, name: t.text) : doc.p.routeTargets(path: t.text, name: nil)
             if !ts.isEmpty { return NPHit(range: inner, targets: ts, markdown: "route `\(t.text)`", kind: "route") }
         }
-        if element >= 0, routerTags.contains(doc.tpl.elems[element].name.lowercased()), attrName == ":to" || attrName == "v-bind:to", t.text.hasPrefix("/"), ti == 0 {
+        let boundTo = routerElement && (attrName == ":to" || attrName == "v-bind:to") && ti == 0
+        let pushed = ti >= 2 && ex.tk[ti - 1].isP("(") && ex.tk[ti - 2].kind == .ident && ["push", "replace"].contains(ex.tk[ti - 2].text)
+        if t.text.hasPrefix("/"), boundTo || pushed {
             let ts = doc.p.routeTargets(path: t.text, name: nil)
             if !ts.isEmpty { return NPHit(range: inner, targets: ts, markdown: "route `\(t.text)`", kind: "route") }
         }

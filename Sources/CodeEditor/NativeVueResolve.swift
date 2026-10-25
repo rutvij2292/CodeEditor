@@ -99,14 +99,15 @@ extension NVProject {
     func resolveSpecToComponent(_ spec: String, _ imported: String, from file: String, depth: Int) -> (path: String, offset: Int?)? {
         guard let p = resolve(spec, from: file) else { return nil }
         if p.hasSuffix(".vue") { return (p, nil) }
-        if depth < 4, !p.hasSuffix(".d.ts"), let r = resolveExport(imported, in: p, depth: depth + 1) { return r }
+        if depth < 4, let r = resolveExport(imported, in: p, depth: depth + 1) { return r }
         return (p, nil)
     }
 
     func resolveExport(_ name: String, in module: String, depth: Int) -> (path: String, offset: Int?)? {
         guard depth < 5 else { return nil }
         if module.hasSuffix(".vue") { return name == "default" ? (module, nil) : nil }
-        guard let c = comp(path: module) else { return nil }
+        if module.hasSuffix(".d.ts"), name == "default" { return nil }          // a library component's own declaration file: nothing to follow
+        guard let c = exportsComp(path: module) else { return nil }
         for e in c.exports where e.name == name {
             if let spec = e.spec {
                 if e.local == "*" { if let p = resolve(spec, from: module) { return (p, nil) }; continue }

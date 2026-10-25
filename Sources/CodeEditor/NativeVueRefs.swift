@@ -72,6 +72,12 @@ enum NVRefs {
         }
         for (name, path) in p.autoComponents() where path == T { global.insert(name) }
         var needles = Set<String>([VSName.pascal(base), VSName.kebab(VSName.pascal(base))])
+        if base.lowercased() == "index" || T.hasSuffix(".d.ts") {           // library entries / Dir/index.vue: the written tag is the better prefilter
+            needles = Set<String>()
+            let shown = (target.display.split(separator: " ").first.map(String.init) ?? target.display)
+            needles.insert(VSName.pascal(shown)); needles.insert(VSName.kebab(VSName.pascal(shown)))
+            if base.lowercased() == "index", T.hasSuffix(".vue") { let dirName = (((T as NSString).deletingLastPathComponent) as NSString).lastPathComponent; needles.insert(VSName.pascal(dirName)); needles.insert(VSName.kebab(VSName.pascal(dirName))) }
+        }
         for g in global { needles.insert(g); needles.insert(VSName.kebab(g)) }
         needles = needles.filter { !$0.isEmpty }
         var out: [NPRefHit] = []

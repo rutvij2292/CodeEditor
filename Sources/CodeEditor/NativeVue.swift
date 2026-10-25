@@ -107,6 +107,8 @@ final class NVProject {
     private var cache: [String: (stamp: Int64, comp: VSComp)] = [:]
     private var lru: [String] = []
     private var cost = 0
+    nonisolated(unsafe) static var statPaths: [String: Int] = [:]
+    nonisolated(unsafe) static var statBuilds = 0, statBuildNs: UInt64 = 0     // dev counters (bench)
     static let maxEntries = 160
     static let maxCost = 1_500_000
     static let maxFileBytes = 700_000
@@ -124,18 +126,19 @@ final class NVProject {
         queue = DispatchQueue(label: "nativevue.\(root)", qos: .utility)
     }
 
-    func markDirty() { lock.lock(); dirty = true; globalsMemo = nil; autoMemo = nil; routeMemo.removeAll(); lock.unlock() }
+    func markDirty() { lock.lock(); dirty = true; globalsMemo = nil; autoMemo = nil; implicitDirs = nil; routeMemo.removeAll(); lock.unlock() }
 
     func dropCaches() {
         lock.lock()
         cache.removeAll(); lru.removeAll(); cost = 0
+        exportCache.removeAll(); exportCost = 0
         globalsMemo = nil; autoMemo = nil; routeMemo.removeAll()
         dirty = true
         lock.unlock()
         listLock.lock(); vueList = []; codeList = []; listed = false; listLock.unlock()
     }
 
-    var cachedSummaries: Int { lock.lock(); defer { lock.unlock() }; return cache.count }
+    var cachedSummaries: Int { lock.lock(); defer { lock.unlock() }; return cache.count + exportCache.count }
     var cachedCost: Int { lock.lock(); defer { lock.unlock() }; return cost }
     var isListed: Bool { listLock.lock(); defer { listLock.unlock() }; return listed }
 
@@ -154,7 +157,9 @@ final class NVProject {
         }
         lock.unlock()
         guard let text = FastProject.readRaw(path), text.length <= Self.maxFileBytes * (path.hasSuffix(".d.ts") ? 2 : 1) else { return nil }
+        let t0 = DispatchTime.now().uptimeNanoseconds
         let c = NVProject.build(path: path, text: text)
+        NVProject.statBuilds += 1; NVProject.statPaths[path, default: 0] += 1; NVProject.statBuildNs += DispatchTime.now().uptimeNanoseconds &- t0
         c.stamp = stamp
         lock.lock()
         if let old = cache.removeValue(forKey: path) { cost -= old.comp.cost; if let i = lru.lastIndex(of: path) { lru.remove(at: i) } }
@@ -167,20 +172,40 @@ final class NVProject {
         return c
     }
 
+    private var exportCache: [String: (stamp: Int64, comp: VSComp)] = [:]
+    private var exportCost = 0
+
+    /// Imports / exports / declarations of a plain module (barrels, `index.d.ts` of a component library): no props, no templates. Small and capped separately
+    /// so a scan over many library imports never evicts the real component summaries.
+    func exportsComp(path: String) -> VSComp? {
+        let stamp = LaravelFS.mtime(path)
+        guard stamp != 0 else { return nil }
+        lock.lock()
+        if let c = exportCache[path], c.stamp == stamp { lock.unlock(); return c.comp }
+        lock.unlock()
+        guard let text = FastProject.readRaw(path), text.length <= 1_400_000 else { return nil }
+        let c = VSBuild.script(path: path, text: text, scanGlobals: false)
+        c.stamp = stamp
+        lock.lock()
+        if exportCost + c.cost > 700_000 { exportCache.removeAll(); exportCost = 0 }
+        exportCache[path] = (stamp, c); exportCost += c.cost
+        lock.unlock()
+        return c
+    }
+
     static func build(path: String, text: NSString) -> VSComp {
         if path.hasSuffix(".d.ts") { return VSBuild.declaration(path: path, text: text) }
         if path.hasSuffix(".vue") { return VSBuild.component(path: path, text: text) }
         return VSBuild.script(path: path, text: text, scanGlobals: true)
     }
 
-    private var liveMemo: (path: String, len: Int, hash: Int, comp: VSComp)?
+    private var liveMemo: (path: String, text: NSString, comp: VSComp)?
 
     /// Summary of an open buffer (unsaved edits count). The last one is memoised.
     func liveComp(path: String, text: NSString) -> VSComp {
-        let h = text.hash
-        if let m = liveMemo, m.path == path, m.len == text.length, m.hash == h { return m.comp }
+        if let m = liveMemo, m.path == path, m.text === text || m.text.isEqual(to: text as String) { return m.comp }
         let c = NVProject.build(path: path, text: text)
-        liveMemo = (path, text.length, h, c)
+        liveMemo = (path, NSString(string: text as String), c)
         return c
     }
 
@@ -225,7 +250,31 @@ final class NVProject {
 
     func resolve(_ spec: String, from file: String) -> String? {
         let m = NJSProject.shared(root: NativeJS.root(for: URL(fileURLWithPath: file))).modules
-        return m.resolve(spec, from: file)
+        if let r = m.resolve(spec, from: file) { return r }
+        // a nested package (nwidart Modules/X with its own package.json / vite.config) does not see the aliases of the application's root config
+        if !spec.hasPrefix("."), !spec.hasPrefix("/"), m.root != root, let r = NJSProject.shared(root: root).modules.resolve(spec, from: root + "/__vue_probe.vue") { return r }
+        // `@/x` / `~/x` that no config declares: laravel-vite-plugin aliases `@` to resources/js, Vue CLI / Vite templates use src, Nuxt the project root
+        if spec.hasPrefix("@/") || spec.hasPrefix("~/") {
+            let rest = String(spec.dropFirst(2))
+            for dir in implicitAliasDirs() { if let r = m.tryModule(dir + "/" + rest) { return NJSModules.canonicalCase(r) } }
+        }
+        return nil
+    }
+
+    private var implicitDirs: [String]?
+
+    private func implicitAliasDirs() -> [String] {
+        lock.lock(); if let d = implicitDirs { lock.unlock(); return d }; lock.unlock()
+        var dirs: [String] = []
+        var hay = ""
+        for n in ["package.json"] + NJSModules.aliasConfigNames {
+            if LaravelFS.isFile(root + "/" + n), let d = FileManager.default.contents(atPath: root + "/" + n), d.count < 200_000 { hay += String(decoding: d, as: UTF8.self) }
+        }
+        if hay.contains("laravel-vite-plugin") || hay.contains("laravel-mix") { dirs.append(root + "/resources/js") }
+        dirs += [root + "/src", root + "/app", root + "/resources/js", root]
+        dirs = dirs.filter { LaravelFS.isDir($0) }
+        lock.lock(); implicitDirs = dirs; lock.unlock()
+        return dirs
     }
 
     func beginRequest() { NJSProject.shared(root: root).modules.beginRequest() }

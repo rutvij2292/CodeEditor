@@ -90,6 +90,8 @@ enum SelfTestNativeVue {
         <MyButton v-for="n in 3" :key="n" label="n" @click="(count) => count + n" ref="btn" />
         <input ref="field" />
         <p @click="$refs.field.focus()">{{ label }}</p>
+        <button @click="$router.push({ name: 'about' })">go</button>
+        <button @click="$router.push('/about')">go</button>
       </div>
     </template>
 
@@ -165,6 +167,16 @@ enum SelfTestNativeVue {
         }
         declare const Select: DefineComponent<SelectProps, {}, SelectEmitsOptions>;
         export default Select;
+        export { default as Button } from './button';
+        """)
+        put(root, "node_modules/libui/button/index.d.ts", """
+        export interface ButtonProps {
+            /** Text of the button. */
+            label?: string;
+            severity?: 'primary' | 'danger';
+        }
+        declare const Button: DefineComponent<ButtonProps, {}, {}>;
+        export default Button;
         """)
     }
 
@@ -298,9 +310,13 @@ enum SelfTestNativeVue {
         check("router-link to=\"/path\" -> route record", target(h)?.file == "index.js" && (target(h)?.text.contains("path: '/about'") ?? false))
         h = hit(homeURL, t, "name: 'about'", 9, root: r)
         check("router-link :to name -> route record", target(h)?.file == "index.js")
+        h = hit(homeURL, t, "name: 'about'", 9, nth: 1, root: r)
+        check("$router.push({ name }) -> route record", target(h)?.file == "index.js")
+        h = hit(homeURL, t, "push('/about')", 8, root: r)
+        check("$router.push('/path') -> route record", target(h)?.file == "index.js")
 
         // library component declarations
-        let libText = "<template>\n  <Select :option-label=\"'x'\" @change=\"go\" />\n</template>\n<script setup>\nimport Select from 'libui'\n</script>\n"
+        let libText = "<template>\n  <Select :option-label=\"'x'\" @change=\"go\" />\n  <Button severity=\"danger\" />\n</template>\n<script setup>\nimport Select, { Button } from 'libui'\n</script>\n"
         let libURL = root.appendingPathComponent("src/Lib.vue")
         put(root, "src/Lib.vue", libText)
         h = hit(libURL, libText, "<Select", 3, root: r)
@@ -309,6 +325,30 @@ enum SelfTestNativeVue {
         check("library prop -> interface member with docs", target(h)?.text.hasPrefix("optionLabel?") ?? false)
         h = hit(libURL, libText, "@change", 3, root: r)
         check("library event -> emits interface member", target(h)?.text.hasPrefix("change(event") ?? false)
+
+        h = hit(libURL, libText, "<Button", 3, root: r)
+        check("named import from a library barrel .d.ts follows the re-export", target(h)?.file == "index.d.ts" && h?.targets.first?.path.hasSuffix("libui/button/index.d.ts") == true)
+        h = hit(libURL, libText, "severity=", 3, root: r)
+        check("prop of the re-exported library component", target(h)?.text.hasPrefix("severity?") ?? false)
+
+        // laravel-vite-plugin's implicit `@` alias, and a nested package (nwidart module) that does not see the root's aliases
+        let lara = fm.temporaryDirectory.appendingPathComponent("ce-selftest-vue-lara-\(getpid())").standardizedFileURL
+        try? fm.removeItem(at: lara)
+        defer { try? fm.removeItem(at: lara) }
+        put(lara, "package.json", #"{"devDependencies":{"laravel-vite-plugin":"^1","vite":"^5"},"dependencies":{"vue":"^3"}}"#)
+        put(lara, "vite.config.js", "export default { resolve: { alias: { '@shared': path.resolve(__dirname, 'resources/js/shared') } } }\n")
+        put(lara, "resources/js/components/DataTable.vue", "<template>\n  <table />\n</template>\n")
+        put(lara, "resources/js/shared/Thing.vue", "<template>\n  <i />\n</template>\n")
+        let laraPage = "<template>\n  <data-table />\n</template>\n<script setup>\nimport DataTable from '@/components/DataTable.vue'\n</script>\n"
+        put(lara, "resources/js/pages/P.vue", laraPage)
+        h = hit(lara.appendingPathComponent("resources/js/pages/P.vue"), laraPage, "<data-table", 4, root: lara.path)
+        check("laravel-vite-plugin: implicit @ -> resources/js", target(h)?.file == "DataTable.vue")
+        put(lara, "Modules/M/package.json", #"{"name":"m"}"#)
+        put(lara, "Modules/M/vite.config.js", "export default {}\n")
+        let modPage = "<template>\n  <Thing />\n</template>\n<script setup>\nimport Thing from '@shared/Thing.vue'\n</script>\n"
+        put(lara, "Modules/M/resources/js/P.vue", modPage)
+        h = hit(lara.appendingPathComponent("Modules/M/resources/js/P.vue"), modPage, "<Thing", 3, root: lara.path)
+        check("nested module package: root vite alias still resolves", target(h)?.file == "Thing.vue")
 
         // nuxt style auto imports
         let nuxt = fm.temporaryDirectory.appendingPathComponent("ce-selftest-nuxt-\(getpid())").standardizedFileURL
