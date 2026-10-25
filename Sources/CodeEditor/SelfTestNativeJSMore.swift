@@ -73,7 +73,7 @@ extension SelfTestNativeJS {
         put(root, "node_modules/@vue/reactivity/dist/reactivity.d.ts", "export interface Ref<T = any> { value: T }\nexport interface ComputedRef<T = any> extends Ref<T> { readonly value: T }\nexport declare function ref<T>(v: T): [T] extends [Ref] ? T : Ref<T>;\nexport declare const computed: { <T>(g: () => T): ComputedRef<T> };\n")
         put(root, "node_modules/vue/package.json", "{\"name\":\"vue\",\"types\":\"dist/vue.d.ts\"}")
         put(root, "node_modules/vue/dist/vue.d.ts", "export * from '@vue/reactivity'\n")
-        let inf = "import { ref, computed } from 'vue'\nimport { Owner } from '@/util'\nfunction mk(): Owner { return new Owner() }\nconst n = ref(0)\nn.value\nconst c = computed(() => 1)\nc.value\nconst o = mk()\no.ping()\nconst top = mk()\nfunction f() { return top.email }\n"
+        let inf = "import { ref, computed } from 'vue'\nimport { Owner } from '@/util'\nfunction mk(): Owner { return new Owner() }\nconst n = ref(0)\nn.value\nconst c = computed(() => 1)\nc.value\nconst o = mk()\no.ping()\nconst top = mk()\nfunction f() { return top.email }\nlet [d1] = mk()\nd1.email\nlet viaLet = mk()\nviaLet.email\n"
         put(root, "src/inf.ts", inf)
         let iu = root.appendingPathComponent("src/inf.ts")
         func ihit(_ needle: String, _ nth: Int = 0, plus: Int = 1) -> String {
@@ -84,6 +84,8 @@ extension SelfTestNativeJS {
         check("infer: ref().value is the Ref interface's value", ihit("value\nconst c") == "node_modules/@vue/reactivity/dist/reactivity.d.ts:1")
         check("infer: computed().value is ComputedRef's value", ihit("value\nconst o") == "node_modules/@vue/reactivity/dist/reactivity.d.ts:2")
         check("infer: const x = f() takes f's declared return type", ihit("ping()") == "src/util.ts:17")
+        check("infer: let x = f() has the declared type of f too", ihit("email\n", 1) == "src/util.ts:17")
+        check("infer: a destructured binding is not the whole value", ihit("d1.email", 0, plus: 3) == "nil")
         check("infer: top-level const x = f()", ihit("email }") == "src/util.ts:17")
 
         // completion: specifiers

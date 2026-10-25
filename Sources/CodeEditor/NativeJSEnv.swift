@@ -367,7 +367,7 @@ final class NJSEnv {
             if let b = localBinding(name, from: n) {
                 if let t = b.typeName, localBinding(t.split(separator: ".").first.map(String.init) ?? t, from: n) != nil { return nil }   // a local type (type parameter, local class)
                 if let v = tv(of: [resolve(b)]) ?? bindingType(b) { return v }
-                if b.keyword == "const", b.typeName == nil, b.declNode.kind == "variable_declarator", let init_ = b.declNode.field("value"), init_.kind == "call_expression" { return typeOf(init_, depth: depth + 1) }
+                if b.typeName == nil, b.declNode.kind == "variable_declarator", b.declNode.field("name")?.kind == "identifier", let init_ = b.declNode.field("value"), init_.kind == "call_expression" { return typeOf(init_, depth: depth + 1) }
                 return nil
             }
             return tv(of: resolveTop(path, name))

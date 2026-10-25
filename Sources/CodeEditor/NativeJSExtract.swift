@@ -313,7 +313,7 @@ struct NJSExtractor {
             if let spec = requireSpec { sy.kind = .import; sy.impSource = spec; sy.impName = "="; sy.keyword = nil }
             sy.typeName = typeName(d.field("type")) ?? newName(value)
             if let v = value, v.kind == "object" { sy.members = objectMembers(v) }
-            if keyword == "const", sy.typeName == nil, let v = value, v.kind == "call_expression", let f = v.field("function"), f.kind == "identifier" || f.kind == "member_expression" { sy.initCall = f.text(ns) }
+            if sy.typeName == nil, let v = value, v.kind == "call_expression", let f = v.field("function"), f.kind == "identifier" || f.kind == "member_expression" { sy.initCall = f.text(ns) }
             out.append(sy)
         } else {
             var bs: [(Node, String?)] = []
