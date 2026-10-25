@@ -195,8 +195,8 @@ enum NWCssService {
         }
         let pr = NWCssData.props[prop]
         for v in pr?.values ?? [] {
-            if v.hasSuffix("()") { add(v, .function, detail: prop, insert: String(v.dropLast()) + "$1)", snippet: true) }
-            else { add(v, .value, detail: prop) }
+            if v.hasSuffix("()") { add(v, .function, detail: prop, insert: String(v.dropLast()) + "$1)", snippet: true, sort: "1" + v) }
+            else { add(v, .value, detail: prop, sort: "1" + v) }       // the property's own keywords before custom properties / generic functions
         }
         for g in NWCssData.globalValues { add(g, .keyword, detail: "global", sort: "~" + g) }
         let colorProp = (pr?.hasColor ?? false) || NWCssData.colorProps.contains(prop) || prop.hasPrefix("--") && !prop.contains("spacing") || prop.hasPrefix("$") || prop.hasPrefix("@")

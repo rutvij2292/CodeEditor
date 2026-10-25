@@ -173,7 +173,23 @@ enum PyComplete {
         }
     }
 
-    private static func item(for s: PySym, rank: Int, _ r: PyResolver) -> CompletionItem {
+    /// Parameter list of a `def f(a, b) -> int` header without `self` / `cls`; nil when there is no parenthesis.
+    static func headerParams(_ header: String) -> String? {
+        guard let open = header.firstIndex(of: "(") else { return nil }
+        var depth = 0
+        var end = header.endIndex
+        for i in header[open...].indices {
+            let c = header[i]
+            if c == "(" || c == "[" || c == "{" { depth += 1 }
+            else if c == ")" || c == "]" || c == "}" { depth -= 1; if depth == 0 { end = i; break } }
+        }
+        let inner = String(header[header.index(after: open)..<end])
+        var parts = NPResolver.splitParams(inner)
+        if let f = parts.first?.trimmingCharacters(in: .whitespaces), f == "self" || f == "cls" || f.hasPrefix("self:") || f.hasPrefix("cls:") { parts.removeFirst() }
+        return parts.joined(separator: ", ")
+    }
+
+    private static func item(for s: PySym, rank: Int, _ r: PyResolver, call: Bool = true) -> CompletionItem {
         var kind: CompletionKind
         var detail = ""
         switch s.kind {
@@ -188,6 +204,10 @@ enum PyComplete {
         }
         let sortPrefix = s.name.hasPrefix("_") ? "9" : String(min(rank, 8))
         var it = CompletionItem(label: s.name, insertText: s.name, kind: kind, detail: detail, sortText: sortPrefix + s.name)
+        if call, s.kind == .fn, !s.isProperty, let h = s.header, let params = headerParams(h) {      // functions and methods are called: `name(` + required parameters
+            if params.trimmingCharacters(in: .whitespaces).isEmpty { it.insertText = s.name + "()" }
+            else { it.insertText = CI.callInsert(s.name, params: params); it.isSnippet = true }
+        }
         if s.docRange != nil, let f = r.ctx.file(s.path) {
             let range = s.docRange
             let base = it                      // a copy without `resolve`: capturing `it` itself would make a reference cycle
@@ -251,7 +271,7 @@ enum PyComplete {
             var out: [CompletionItem] = []
             var seen = Set<String>()
             if case .file(let p) = loc, let f = ctx.file(p) {
-                for s in f.root.order where shouldOffer(s.name, prefix: prefix, own: false) && seen.insert(s.name).inserted { out.append(item(for: s, rank: 0, r)) }
+                for s in f.root.order where shouldOffer(s.name, prefix: prefix, own: false) && seen.insert(s.name).inserted { out.append(item(for: s, rank: 0, r, call: false)) }
                 if f.isInit { addSubmodules(dir: (p as NSString).deletingLastPathComponent, prefix: prefix, into: &out, seen: &seen) }
             } else if case .dir(let d) = loc { addSubmodules(dir: d, prefix: prefix, into: &out, seen: &seen) }
             return out

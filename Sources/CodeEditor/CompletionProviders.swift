@@ -20,7 +20,7 @@ enum CI {
         var stops: [String] = []
         for raw in NPResolver.splitParams(params) {
             let p = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if p.isEmpty || p.contains("=") || p.contains("...") || p.hasPrefix("?") || p.hasPrefix("[") || p.hasPrefix("{") || p.hasSuffix("?") || p.hasSuffix("]") || p.contains("?:") { continue }
+            if p.isEmpty || p.contains("=") || p.contains("...") || p.hasPrefix("?") || p.hasPrefix("[") || p.hasPrefix("{") || p.hasSuffix("?") || p.hasSuffix("]") || p.contains("?:") || p.hasPrefix("*") { continue }
             var label = p
             if let v = p.split(separator: " ").last(where: { $0.hasPrefix("$") }) { label = String(v) }       // PHP: the variable
             else if let c = p.split(separator: ":").first, p.contains(":") { label = String(c).trimmingCharacters(in: .whitespaces) }   // TS: name: type
@@ -115,25 +115,29 @@ enum WordProvider {
             }
         }
         if pr.length == 0 && !ctx.isManual { return [] }
-        var buf = [unichar](repeating: 0, count: len)
-        ns.getCharacters(&buf, range: NSRange(location: 0, length: len))
+        // words of a huge file: only a window around the caret is scanned (main thread; bounded to ~1-2 ms)
+        var lo = 0
+        var wlen = len
+        if len > 300_000 { lo = max(0, min(len - 300_000, ctx.caret - 150_000)); wlen = 300_000 }
+        var buf = [unichar](repeating: 0, count: wlen)
+        ns.getCharacters(&buf, range: NSRange(location: lo, length: wlen))
         var q: [UInt8] = []
         for u in ns.substring(with: pr).utf16 { if u < 128 { q.append(u >= 65 && u <= 90 ? UInt8(u + 32) : UInt8(u)) } else { q = []; break } }
         let pre = q.count == pr.length ? q : []
         var seen = Set<String>()
         var out: [CompletionItem] = []
         var i = 0
-        while i < len {
+        while i < wlen {
             let c = buf[i]
             guard CompletionLex.isIdent(c), !(c >= 48 && c <= 57) else { i += 1; continue }
             var j = i + 1
-            while j < len, CompletionLex.isIdent(buf[j]) { j += 1 }
+            while j < wlen, CompletionLex.isIdent(buf[j]) { j += 1 }
             defer { i = j }
             let n = j - i
             if n < 3 || n > 60 { continue }
-            if i == pr.location && j >= pr.upperBound && pr.length > 0 && j - i >= 0 && i + pr.length <= j {
+            if i + lo == pr.location && j + lo >= pr.upperBound && pr.length > 0 && j - i >= 0 && i + pr.length <= j {
                 // the word being typed (or extended in place)
-                if ctx.caret <= j { continue }
+                if ctx.caret <= j + lo { continue }
             }
             if !pre.isEmpty {
                 var k = 0

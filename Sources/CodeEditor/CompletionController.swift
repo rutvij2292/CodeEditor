@@ -397,15 +397,16 @@ final class CompletionController: NSObject {
         if r.upperBound > ns.length { r.length = ns.length - r.location }
 
         var text = item.insertText
+        var isSnippet = item.isSnippet
+        // the user already typed the parentheses (renaming a call in place): insert the name alone
+        if item.insertText.hasPrefix(item.label + "("), r.upperBound < ns.length, ns.character(at: r.upperBound) == 40 { text = item.label; isSnippet = false }
         var stops: [(index: Int, range: NSRange)] = []
-        if item.isSnippet {
+        if isSnippet {
             let ls = CompletionLex.lineStart(ns, r.location)
             var ws = ls
             while ws < r.location, ns.character(at: ws) == 32 || ns.character(at: ws) == 9 { ws += 1 }
             let indent = ns.substring(with: NSRange(location: ls, length: ws - ls))
             var raw = item.insertText
-            // the user already typed the parentheses (renaming a call in place): insert the name alone
-            if raw.hasPrefix(item.label + "("), r.upperBound < ns.length, ns.character(at: r.upperBound) == 40 { raw = item.label }
             raw = raw.replacingOccurrences(of: "\n", with: "\n" + indent).replacingOccurrences(of: "\t", with: textView.indentUnit)
             let parsed = SnippetParser.parse(raw)
             text = parsed.text

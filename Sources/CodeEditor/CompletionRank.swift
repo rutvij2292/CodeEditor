@@ -29,7 +29,7 @@ enum CompletionRanker {
 
     /// Per-request knowledge about the document / project that the ranking uses (built once per request, not per keystroke).
     struct Context {
-        var docCounts: [String: Int] = [:]
+        var docCounts: [UInt64: UInt16] = [:]
         var history: ((String) -> Int)?
         var popularity: [String: Int] = [:]
         static let empty = Context()
@@ -45,35 +45,51 @@ enum CompletionRanker {
 
     // MARK: Document statistics
 
-    /// Occurrence counts of the identifier-like tokens of `ns` (3...60 chars; `$` / `@` / leading `-` stripped), skipping the token under the caret.
-    static func docCounts(_ ns: NSString, caret: Int) -> [String: Int] {
+    /// Key of a name in `docCounts`: FNV-1a over its UTF-16 units (64 bit; no String is allocated per token while scanning).
+    static func docKey(_ s: String) -> UInt64 {
+        var h: UInt64 = 0xcbf29ce484222325
+        for u in s.utf16 { h = (h ^ UInt64(u)) &* 0x100000001b3 }
+        return h
+    }
+
+    /// Occurrence counts of the identifier-like tokens of `ns` (3...60 chars; `$` / `@` / leading `-` stripped), skipping the token under
+    /// the caret. A window of at most 120k characters around the caret is read, so the cost is bounded (about 1 ms) whatever the file size.
+    static func docCounts(_ ns: NSString, caret: Int) -> [UInt64: UInt16] {
         var lo = 0, hi = ns.length
-        if hi > 400_000 { lo = max(0, caret - 200_000); hi = min(ns.length, caret + 200_000) }
+        if hi > 120_000 { lo = max(0, caret - 60_000); hi = min(ns.length, lo + 120_000); lo = max(0, hi - 120_000) }
         let len = hi - lo
         guard len > 0 else { return [:] }
         var buf = [unichar](repeating: 0, count: len)
         ns.getCharacters(&buf, range: NSRange(location: lo, length: len))
-        var out: [String: Int] = [:]
+        var out: [UInt64: UInt16] = [:]
         out.reserveCapacity(1024)
         var i = 0
-        @inline(__always) func part(_ c: unichar) -> Bool { CompletionLex.isIdent(c) || c == 45 }
-        while i < len {
-            let c = buf[i]
-            guard part(c) || c == 36 || c == 64 else { i += 1; continue }
-            var s = i
-            while s < len, buf[s] == 36 || buf[s] == 64 || buf[s] == 45 { s += 1 }
-            var j = s
-            while j < len, part(buf[j]) { j += 1 }
-            while j > s, buf[j - 1] == 45 { j -= 1 }
-            let n = j - s
-            let atCaret = lo + s <= caret && caret <= lo + j
-            i = max(j, i + 1)
-            if n < 3 || n > 60 || atCaret || (buf[s] >= 48 && buf[s] <= 57) { continue }
-            if out.count > 30_000 { continue }
-            let w = buf[s..<j].withUnsafeBufferPointer { String(utf16CodeUnits: $0.baseAddress!, count: n) }
-            out[w, default: 0] += 1
+        buf.withUnsafeBufferPointer { b in
+            @inline(__always) func part(_ c: unichar) -> Bool { CompletionLex.isIdent(c) || c == 45 }
+            while i < len {
+                let c = b[i]
+                guard part(c) || c == 36 || c == 64 else { i += 1; continue }
+                var s = i
+                while s < len, b[s] == 36 || b[s] == 64 || b[s] == 45 { s += 1 }
+                var j = s
+                while j < len, part(b[j]) { j += 1 }
+                while j > s, b[j - 1] == 45 { j -= 1 }
+                let n = j - s
+                let atCaret = lo + s <= caret && caret <= lo + j
+                i = max(j, i + 1)
+                if n < 3 || n > 60 || atCaret || (b[s] >= 48 && b[s] <= 57) { continue }
+                if out.count > 30_000 { continue }
+                out[Self.hashUnits(b, s, j), default: 0] += 1
+            }
         }
         return out
+    }
+
+    @inline(__always) private static func hashUnits(_ b: UnsafeBufferPointer<unichar>, _ s: Int, _ e: Int) -> UInt64 {
+        var h: UInt64 = 0xcbf29ce484222325
+        var k = s
+        while k < e { h = (h ^ UInt64(b[k])) &* 0x100000001b3; k += 1 }
+        return h
     }
 
     // MARK: Matching
@@ -170,7 +186,7 @@ enum CompletionRanker {
     static func familiarity(_ item: CompletionItem, _ ctx: Context) -> Int {
         var lvl = 0
         let key = strip(item.filterText ?? item.label)
-        if let n = ctx.docCounts[key] { lvl = n >= 4 ? 3 : (n >= 2 ? 2 : 1) }
+        if !ctx.docCounts.isEmpty, let n = ctx.docCounts[docKey(key)] { lvl = n >= 4 ? 3 : (n >= 2 ? 2 : 1) }
         if let h = ctx.history { lvl += h(key) }
         return min(lvl, 4)
     }
@@ -205,6 +221,8 @@ enum CompletionRanker {
                 var r = Ranked(item: item, score: m.score, order: order, query: q.q, cls: m.cls)
                 r.tier = tier(item)
                 r.boost = familiarity(item, context)
+                // a word of the file that is a case-sensitive prefix match and that the file really uses (a local, an import) is as good as a symbol
+                if item.kind == .text, r.cls == 3, r.score >= 440, r.boost >= 1 { r.cls = 4 }
                 if !context.popularity.isEmpty { r.pop = context.popularity[item.label] ?? context.popularity[strip(item.label)] ?? 1000 }
                 if let idx = seen[key] {
                     let o = out[idx]

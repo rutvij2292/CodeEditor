@@ -131,6 +131,8 @@ enum CompletionPopularity {
 
     /// Entries closer than this are treated as equally popular (the list order inside a bucket is guesswork; shorter names win there).
     private static let bucket = 10
+    /// Short, carefully ordered lists keep their exact order.
+    private static let bucketByGroup: [String: Int] = ["html": 1, "blade": 3, "vue": 2, "tw": 5]
 
     private static var cache: [String: [String: Int]] = [:]
     private static let lock = NSLock()
@@ -158,9 +160,10 @@ enum CompletionPopularity {
         for g in groups(ext: e, blade: blade) {
             guard let list = lists[g] else { continue }
             var i = 0
+            let size = bucketByGroup[g] ?? bucket
             for w in list.split(whereSeparator: { $0 == " " || $0 == "\n" }) where w != "\\" {
                 let k = String(w)
-                if t[k] == nil { t[k] = i / bucket }
+                if t[k] == nil { t[k] = i / size }
                 i += 1
             }
         }
