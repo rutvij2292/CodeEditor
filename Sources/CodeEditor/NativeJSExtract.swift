@@ -65,6 +65,29 @@ struct NJSExtractor {
     }
 
     /// Names of the type parameters declared by `node` (`<T, U extends X>`).
+    func clean(_ s: String, max: Int = 1500) -> String {
+        let t = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.count > max ? String(t.prefix(max)) : t
+    }
+
+    func typeParamDefaults(_ node: Node) -> [String] {
+        guard let tp = node.field("type_parameters") else { return [] }
+        return tp.kids.compactMap { $0.kind == "type_parameter" ? (($0.field("value").map { n in clean((n.kind == "default_type" ? (n.kids.first ?? n) : n).text(ns)) }) ?? "") : nil }
+    }
+
+    func typeParamList(_ node: Node) -> [String] {
+        guard let tp = node.field("type_parameters") else { return [] }
+        return tp.kids.compactMap { $0.kind == "type_parameter" ? $0.field("name")?.text(ns) : nil }
+    }
+
+    /// The annotation of a node (`x: T` -> `T`).
+    func annotationText(_ n: Node?) -> String? {
+        guard let a = n else { return nil }
+        let t = a.kind == "type_annotation" || a.kind == "opting_type_annotation" ? (a.kids.first ?? a) : a
+        let s = clean(t.text(ns))
+        return s.isEmpty ? nil : s
+    }
+
     private func typeParams(_ node: Node) -> Set<String> {
         guard let tp = node.field("type_parameters") else { return [] }
         return Set(tp.kids.compactMap { $0.kind == "type_parameter" ? $0.field("name")?.text(ns) : nil })
@@ -236,22 +259,29 @@ struct NJSExtractor {
         case "class_declaration", "abstract_class_declaration", "class":
             guard let n = node.field("name") else { return [] }
             let sy = sym(n, .class, outer: outer, sigEnd: node.field("body")?.start ?? node.end)
+            sy.tparams = typeParamList(node); sy.tparamDefaults = typeParamDefaults(node)
             for h in node.kids where h.kind == "class_heritage" {
                 if let ext = h.kids.first(where: { $0.kind == "extends_clause" }) {
-                    if let v = ext.field("value") { sy.heritage.append(v.text(ns)) }
-                } else if let v = h.kids.first { sy.heritage.append(v.text(ns)) }
+                    if let v = ext.field("value") {
+                        sy.heritage.append(v.text(ns))
+                        sy.heritageFull.append(clean(v.text(ns) + (ext.field("type_arguments").map { $0.text(ns) } ?? "")))
+                    }
+                } else if let v = h.kids.first { sy.heritage.append(v.text(ns)); sy.heritageFull.append(clean(v.text(ns))) }
             }
             if let body = node.field("body") { sy.members = classMembers(body, typeParams: typeParams(node)) }
             return [sy]
         case "interface_declaration":
             guard let n = node.field("name") else { return [] }
             let sy = sym(n, .interface, outer: outer, sigEnd: node.field("body")?.start ?? node.end)
-            for h in node.kids where h.kind == "extends_type_clause" { for t in h.kids { if let tn = typeName(t) { sy.heritage.append(tn) } } }
+            sy.tparams = typeParamList(node); sy.tparamDefaults = typeParamDefaults(node)
+            for h in node.kids where h.kind == "extends_type_clause" { for t in h.kids { if let tn = typeName(t) { sy.heritage.append(tn); sy.heritageFull.append(clean(t.text(ns))) } } }
             if let body = node.field("body") { sy.members = signatureMembers(body, typeParams: typeParams(node)) }
             return [sy]
         case "type_alias_declaration":
             guard let n = node.field("name") else { return [] }
             let sy = sym(n, .typeAlias, outer: outer, sigEnd: node.end)
+            sy.tparams = typeParamList(node); sy.tparamDefaults = typeParamDefaults(node)
+            sy.aliasText = node.field("value").map { clean($0.text(ns), max: 3000) }
             if let v = node.field("value"), v.kind == "object_type" { sy.members = signatureMembers(v, typeParams: typeParams(node)) }
             else if let v = node.field("value"), v.kind == "intersection_type" {            // type A<T> = T & B<T> & { x: number }
                 let tps = typeParams(node)
@@ -331,6 +361,7 @@ struct NJSExtractor {
             sy.keyword = keyword
             if let spec = requireSpec { sy.kind = .import; sy.impSource = spec; sy.impName = "="; sy.keyword = nil }
             sy.typeName = typeName(d.field("type")) ?? newName(value)
+            sy.typeText = annotationText(d.field("type"))
             if let q = d.field("type")?.kids.first, q.kind == "type_query", let id = q.kids.first, id.kind == "identifier" { sy.aliasOf = id.text(ns) }
             if let v = value, v.kind == "object" { sy.members = objectMembers(v) }
             else if let v = value, v.kind == "arrow_function" || v.kind == "function_expression" {
@@ -398,6 +429,8 @@ struct NJSExtractor {
                 var mem = NJSMember(name: nm, kind: .property, loc: nn.start, len: nn.range.length, declStart: m.start, sigEnd: m.end)
                 mem.isStatic = m.allKids.contains { $0.kind == "static" && $0.start < nn.start }
                 mem.typeName = typeName(m.field("type")) ?? newName(m.field("value"))
+                mem.typeText = annotationText(m.field("type"))
+                mem.optional = m.allKids.contains { $0.kind == "?" }
                 if let t = mem.typeName, tps.contains(t) { mem.typeName = nil }
                 if let v = m.field("value"), v.kind == "arrow_function" || v.kind == "function_expression" { mem.sigText = fnSig(v) }
                 (mem.docStart, mem.docEnd) = docRange(before: m)
@@ -439,7 +472,9 @@ struct NJSExtractor {
                 var mem = NJSMember(name: nm, kind: m.kind == "method_signature" ? .method : .property, loc: nn.start, len: nn.range.length, declStart: m.start, sigEnd: m.end)
                 mem.typeName = typeName(m.field(m.kind == "method_signature" ? "return_type" : "type"))
                 if let t = mem.typeName, tps.contains(t) || typeParams(m).contains(t) { mem.typeName = nil }
-                if m.kind == "method_signature" { mem.sigText = fnSig(m) }
+                if m.kind == "method_signature" { mem.sigText = fnSig(m) } else { mem.typeText = annotationText(m.field("type")) }
+                mem.optional = m.allKids.contains { $0.kind == "?" }
+                if m.kind == "method_signature" { if m.allKids.contains(where: { $0.kind == "get" }) { mem.accessor = 1 } else if m.allKids.contains(where: { $0.kind == "set" }) { mem.accessor = 2 } }
                 (mem.docStart, mem.docEnd) = docRange(before: m)
                 out.append(mem)
             default: break
@@ -485,6 +520,7 @@ struct NJSExtractor {
                 var m = NJSMember(name: sy.name, kind: sy.kind, loc: sy.loc, len: sy.len, declStart: sy.declStart, sigEnd: sy.sigEnd, docStart: sy.docStart, docEnd: sy.docEnd)
                 m.typeName = sy.typeName
                 m.sigText = sy.sigText
+                m.typeText = sy.typeText
                 if !sy.members.isEmpty { m.sub = sy.members }
                 m.heritage = sy.heritage
                 out.append(m)

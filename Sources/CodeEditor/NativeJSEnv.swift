@@ -18,19 +18,26 @@ struct NJSRes {
     var valueMembers: [NJSMember] = []
     var returnMembers: [NJSMember] = []
     var sigText: String?
+    var typeText: String?
+    var tparams: [String] = []
+    var tparamDefaults: [String] = []
+    var aliasText: String?
+    var heritageFull: [String] = []
     var overload = false
     var members: [NJSMember] = []
     var heritage: [String] = []
     var siblings: [NJSMember]?          // members of the enclosing namespace (heritage names resolve there first)
     var fileTop = false
+    var accessor: UInt8 = 0
     var owner: String?
     var local = false                   // declared inside a function / block of the current document
 
     init(path: String, sym s: NJSSym) {
         self.path = path; name = s.name; kind = s.kind; loc = s.loc; len = s.len; declStart = s.declStart; sigEnd = s.sigEnd
-        docStart = s.docStart; docEnd = s.docEnd; keyword = s.keyword; typeName = s.typeName; initCall = s.initCall; aliasOf = s.aliasOf; valueMembers = s.valueMembers; returnMembers = s.returnMembers; sigText = s.sigText; overload = s.overload; members = s.members; heritage = s.heritage
+        docStart = s.docStart; docEnd = s.docEnd; keyword = s.keyword; typeName = s.typeName; initCall = s.initCall; aliasOf = s.aliasOf; valueMembers = s.valueMembers; returnMembers = s.returnMembers; sigText = s.sigText; overload = s.overload; typeText = s.typeText; tparams = s.tparams; tparamDefaults = s.tparamDefaults; aliasText = s.aliasText; heritageFull = s.heritageFull; members = s.members; heritage = s.heritage
     }
-    init(path: String, member m: NJSMember, owner: String?, siblings: [NJSMember]? = nil) {
+    init(path: String, member m: NJSMember, owner: String?, siblings: [NJSMember]? = nil, ownerParams: [String] = []) {
+        self.tparams = ownerParams; self.typeText = m.typeText; self.accessor = m.accessor
         self.path = path; name = m.name; kind = m.kind; loc = m.loc; len = m.len; declStart = m.declStart; sigEnd = m.sigEnd
         docStart = m.docStart; docEnd = m.docEnd; typeName = m.typeName; members = m.sub ?? []; heritage = m.heritage; sigText = m.sigText
         self.owner = owner; self.siblings = siblings
@@ -161,6 +168,8 @@ final class NJSEnv {
     let doc: NJSDoc
     let path: String
     var memo: NJSMemo?
+    lazy var typer = NJSTyper(env: self)
+    lazy var infer = NJSInfer(env: self, typer: typer)
     var steps = 0                       // safety valve against pathological re-export / heritage cycles
 
     init(proj: NJSProject, doc: NJSDoc) { self.proj = proj; self.doc = doc; path = doc.path }
@@ -307,7 +316,7 @@ final class NJSEnv {
             var next: [NJSRes] = []
             for c in cur {
                 if c.fileTop { next += exportOf(c.path, part) }
-                else if let m = c.members.first(where: { $0.name == part }) { next.append(NJSRes(path: c.path, member: m, owner: c.name, siblings: c.members)) }
+                else if let m = c.members.first(where: { $0.name == part }) { next.append(NJSRes(path: c.path, member: m, owner: c.name, siblings: c.members, ownerParams: c.tparams)) }
             }
             cur = next
             if cur.isEmpty { break }
@@ -321,7 +330,7 @@ final class NJSEnv {
         guard depth < 10, steps < 400 else { return [] }
         let flexible = r.kind != .class
         let direct = r.members.filter { $0.name == name && (flexible || $0.isStatic == isStatic) }
-        if !direct.isEmpty { return direct.map { NJSRes(path: r.path, member: $0, owner: r.name, siblings: r.members) } }
+        if !direct.isEmpty { return direct.map { NJSRes(path: r.path, member: $0, owner: r.name, siblings: r.members, ownerParams: r.tparams) } }
         var out: [NJSRes] = []
         for h in r.heritage {
             for base in resolveTypeRef(h, in: r.path, siblings: r.siblings) where !(base.path == r.path && base.loc == r.loc) {

@@ -250,9 +250,12 @@ enum NativeJSProviderSupport {
         defer { withExtendedLifetime(doc) {} }
         let env = NJSEnv(proj: proj, doc: doc)
         guard let leaf = doc.leaf(at: prefix.location), leaf.kind == "property_identifier", let p = leaf.parent, p.kind == "member_expression",
-              let o = p.field("object"), let t = env.typeOf(o) else { return [] }
+              let o = p.field("object") else { return [] }
+        guard let t = env.typeOf(o) else { return env.inferredCompletion(object: o) }
+        let listed = env.memberList(t)
+        if listed.isEmpty { return env.inferredCompletion(object: o) }
         var items: [CompletionItem] = []
-        for m in env.memberList(t) {
+        for m in listed {
             var kind: CompletionKind = .property
             switch m.kind {
             case .method: kind = .method
