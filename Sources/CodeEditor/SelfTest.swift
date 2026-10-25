@@ -115,9 +115,11 @@ enum SelfTest {
                                         SelfTestPlans.run(w: w)
                                         SelfTestClaudeCLI.run(w: w) {
                                             SelfTestFindPopup.run(w: w) {
-                                                SelfTestComposer.run(w: w)
-                                                SelfTestPerf.run(app: app)
-                                                finish()
+                                                SelfTestLinkHover.run(w: w) {
+                                                    SelfTestComposer.run(w: w)
+                                                    SelfTestPerf.run(app: app)
+                                                    finish()
+                                                }
                                             }
                                         }
                                     }

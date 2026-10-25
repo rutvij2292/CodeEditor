@@ -3,6 +3,10 @@ import AppKit
 /// Cmd-hover link look for symbols (PhpStorm): while Cmd is held, the identifier under the pointer turns link-blue and
 /// underlined, but only once the language server confirms it resolves to a definition.
 extension LSPSession {
+    /// Test hook: the headless harness cannot hold a real Cmd key.
+    static var commandHeldOverride: Bool?
+    static func commandHeld() -> Bool { commandHeldOverride ?? NSEvent.modifierFlags.contains(.command) }
+
     func updateLinkHighlight(flags: NSEvent.ModifierFlags, point: NSPoint?) {
         guard flags.contains(.command), !flags.contains(.shift), !flags.contains(.option), let tv = textView,
               let point, tv.visibleRect.contains(point), let off = offsetUnderPoint(point),
@@ -10,14 +14,16 @@ extension LSPSession {
         if tab.map({ LanguageServers.suppressHoverUnderline?($0, off) == true }) == true { clearLinkHighlight(); return }
         let word = wordRange(at: off)
         guard word.length > 0 else { clearLinkHighlight(); return }
-        if linkRange == word { return }
+        if linkRange == word || linkPending == word { return }   // restarting on every mouseMoved would discard each answer as stale
         clearLinkHighlight()
         linkToken += 1
+        linkPending = word
+        linkRequests += 1
         let token = linkToken
         flushChanges()
         let applyLink: () -> Void = { [weak self] in
             guard let self, token == self.linkToken, let tv = self.textView, let lm = tv.layoutManager,
-                  NSMaxRange(word) <= (tv.string as NSString).length, NSEvent.modifierFlags.contains(.command) else { return }
+                  NSMaxRange(word) <= (tv.string as NSString).length, Self.commandHeld() else { return }
             lm.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: NSColor.linkColor,
                                        .foregroundColor: NSColor.linkColor], forCharacterRange: word)
             self.linkRange = word
@@ -44,6 +50,7 @@ extension LSPSession {
 
     func clearLinkHighlight() {
         linkToken += 1
+        linkPending = nil
         guard let r = linkRange else { return }
         linkRange = nil
         if let tv = textView, let lm = tv.layoutManager {

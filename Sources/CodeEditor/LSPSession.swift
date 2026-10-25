@@ -40,6 +40,8 @@ final class LSPSession: NSResponder {
     var hoverAnchor: NSRange?
     var linkRange: NSRange?
     var linkToken = 0
+    var linkPending: NSRange?          // word whose definition check is in flight (moves inside it must not restart the check)
+    var linkRequests = 0  // test hook: definition checks started
     var signatureWork: DispatchWorkItem?
     var trackingArea: NSTrackingArea?
     var overlay: LSPDiagnosticOverlay?
