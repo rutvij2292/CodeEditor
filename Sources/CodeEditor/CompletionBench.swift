@@ -116,6 +116,7 @@ enum CompletionBench {
         add("php.new", phpKinds, re("\\bnew\\s+([A-Z]\\w*)"))
         add("php.use", phpKinds, re("^use\\s+[\\w\\\\]+\\\\(\\w+);"))
         add("php.var", phpKinds, reused("\\$([A-Za-z_]\\w*)\\s*=[^=>]", usagePrefix: "$", minLen: 4))
+        add("php.argvar", phpKinds, p: [0, 2], re("(?<![\\w$])[A-Za-z_]\\w*(?:->\\w+|::\\w+)?\\(\\s*\\$([A-Za-z_]\\w{2,})\\s*[,)]", minLen: 3))
         add("php.func", phpKinds, re("(?<![>:\\w$\\\\])((?:array|str|preg|json|mb)_\\w+|in_array|implode|explode|number_format|is_[a-z]+)\\(", minLen: 4))
         add("php.namedarg", phpKinds, re("[(,]\\s*([a-z][A-Za-z]\\w*):\\s(?!:)", minLen: 3))
         add("php.column", phpKinds, p: [0, 2], re("->(?:where|orderBy|pluck|whereIn|select|value|whereNull|whereNotNull)\\(\\s*'(\\w+)'", minLen: 3))
@@ -422,11 +423,13 @@ enum CompletionBench {
         for root in spec.split(separator: ",").map(String.init) {
             let t0 = now()
             let rootURL = URL(fileURLWithPath: root)
+            let foot0 = NativePHPBench.footprintMB()
             if FileManager.default.fileExists(atPath: root + "/composer.json") || FileManager.default.fileExists(atPath: root + "/artisan") {
                 FastTier.warm(root: rootURL)
                 VendorIndex.shared(for: rootURL).refreshIfNeeded(force: true)
                 VendorIndex.shared(for: rootURL).waitUntilIdle()
             }
+            let footWarm = NativePHPBench.footprintMB()
             var samples = collect(root: root, only: only, perCat: perCat)
             // group by file for read reuse; keep category order stable for the warm-up rule below
             samples.sort { ($0.file, $0.loc) < ($1.file, $1.loc) }
@@ -442,6 +445,11 @@ enum CompletionBench {
                 warmSeen[key, default: 0] += 1
                 results.append(r)
                 if results.count % 250 == 0 { fputs("CBENCH progress \(results.count)/\(samples.count) (\(Int(now() - t0)) ms)\n", stderr) }
+            }
+            let footEnd = NativePHPBench.footprintMB()
+            if let fpj = FastProject.existing(root: rootURL) {
+                fputs(String(format: "CBENCH FOOTPRINT start %.1f MB, after warm %.1f MB (+%.1f), after run %.1f MB (+%.1f total); usage table %@ %.2f MB in %.0f ms\n", foot0, footWarm, footWarm - foot0, footEnd, footEnd - foot0,
+                             fpj.usageBuilt ? "built" : "not built", Double(fpj.usageBytes) / 1_048_576, fpj.usageBuildMs), stderr)
             }
             if !undelivered.isEmpty { fputs("CBENCH providers that never delivered (1.5 s timeout): \(undelivered)\n", stderr) }
             // latency from the second half of each category (first requests pay lazy index builds: reported separately)
@@ -470,7 +478,8 @@ enum CompletionBench {
             for k in lang.keys.sorted() { fputs("CBENCH LANG \(line(k, lang[k]!))\n", stderr) }
             if maxMiss > 0 {
                 var shown: [String: Int] = [:]
-                for r in results where r.rank == nil || r.rank! > 5 {
+                let missAbove = Int(AppEnv.value("CE_COMPLETION_BENCH_MISSRANK") ?? "5") ?? 5
+                for r in results where r.rank == nil || r.rank! > missAbove {
                     let key = r.sample.cat + "@\(r.sample.prefix)"
                     guard shown[key, default: 0] < maxMiss else { continue }
                     shown[key, default: 0] += 1

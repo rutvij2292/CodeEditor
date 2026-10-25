@@ -31,6 +31,8 @@ final class CompletionController: NSObject {
     private var applying = false
     private var lastRequestManual = false
     private var rankContext = CompletionRanker.Context.empty
+    /// Ctrl-Shift-Space: the list is limited to candidates whose type fits the expected type (typeMatch > 0).
+    private var smartMode = false
     private lazy var projectKey: String = CompletionHistory.shared.projectKey(for: url)
     private var resolved: [String: CompletionItem] = [:]
     private var resolving: Set<String> = []
@@ -53,6 +55,10 @@ final class CompletionController: NSObject {
         let prevTrigger = textView.onTriggerCompletion
         textView.onTriggerCompletion = { [weak self] in
             if let self { self.trigger(manual: true) } else { prevTrigger?() }
+        }
+        let prevSmart = textView.onTriggerSmartCompletion
+        textView.onTriggerSmartCompletion = { [weak self] in
+            if let self { self.trigger(manual: true, smart: true) } else { prevSmart?() }
         }
         let prevResign = textView.onResignFirstResponder
         textView.onResignFirstResponder = { [weak self] in self?.close(); prevResign?() }
@@ -88,9 +94,9 @@ final class CompletionController: NSObject {
         return caret - CompletionLex.runStart(ns, min(caret, ns.length), CompletionLex.isIdent)
     }
 
-    func trigger(manual: Bool, character: String? = nil) {
+    func trigger(manual: Bool, character: String? = nil, smart: Bool = false) {
         debounce?.invalidate()
-        if manual { request(trigger: character, manual: true) }
+        if manual { smartMode = smart; request(trigger: character, manual: true) }
         else {
             debounce = Timer.scheduledTimer(withTimeInterval: PowerState.shared.scaled(CompletionSystem.debounce), repeats: false) { [weak self] _ in
                 self?.request(trigger: character, manual: false)
@@ -119,7 +125,7 @@ final class CompletionController: NSObject {
             guard typed, caret > 0, caret <= ns.length else { close(); return }
             let c = ns.character(at: caret - 1)
             let s = String(utf16CodeUnits: [c], count: 1)
-            if allTriggers.contains(s) { close(); trigger(manual: false, character: s) }
+            if allTriggers.contains(s) { let keepSmart = smartMode; close(); smartMode = keepSmart; trigger(manual: false, character: s) }
             else if CompletionLex.isIdent(c) || "-$@#".utf16.contains(c) {
                 if results.contains(where: { $0?.incomplete == true }) { trigger(manual: false) }
                 refilter()
@@ -152,7 +158,7 @@ final class CompletionController: NSObject {
         let code = e.keyCode
         // Ctrl-Space (or Ctrl-Option-Space, in case macOS reserves Ctrl-Space for input-source switching) opens suggestions now.
         if code == 49, ctrl, !cmd {
-            trigger(manual: true)
+            trigger(manual: true, smart: shift)
             return true
         }
         if isOpen {
@@ -234,8 +240,9 @@ final class CompletionController: NSObject {
         let ns = text as NSString
         let caret = min(sel.location, ns.length)
         let start = CompletionLex.runStart(ns, caret, CompletionLex.isIdent)
-        let ctx = CompletionContext(text: text, caret: caret, fileURL: url, fileExtension: ext, triggerCharacter: trigger,
+        var ctx = CompletionContext(text: text, caret: caret, fileURL: url, fileExtension: ext, triggerCharacter: trigger,
                                     isManual: manual, prefixRange: NSRange(location: start, length: caret - start))
+        ctx.smart = smartMode
         lastRequestManual = manual
         let pkey = projectKey
         rankContext = CompletionRanker.Context(docCounts: CompletionRanker.docCounts(ns, caret: caret),
@@ -270,6 +277,7 @@ final class CompletionController: NSObject {
     private func rank() -> [Ranked] {
         let o = CompletionRanker.rank(results: results, text: textView.string as NSString, caret: textView.selectedRange().location, anchor: anchor, context: rankContext)
         anchor = o.anchor
+        if smartMode { return o.ranked.filter { $0.item.typeMatch > 0 } }
         return o.ranked
     }
 
@@ -364,6 +372,7 @@ final class CompletionController: NSObject {
 
     func close() {
         debounce?.invalidate()
+        smartMode = false
         hidePopup()
         generation += 1
         providers.forEach { $0.cancel() }

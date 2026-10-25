@@ -130,6 +130,8 @@ enum MainMenu {
             item("Minify JSON", #selector(ViewerSystem.minifyJSON(_:)), target: ViewerSystem.shared),
             sep,
             item("Basic Completion", Selector(("triggerCompletion:")), " ", [.control]),
+            item("Smart Completion", Selector(("triggerSmartCompletion:")), " ", [.control, .shift]),
+            item("Complete Current Statement", Selector(("completeCurrentStatement:")), "\r", [.command, .shift]),
             item("Parameter Info", Selector(("showParameterInfo:")), "p"),
             item("Quick Documentation", Selector(("showQuickDocumentation:")), "j", [.control]),
             item("Go to Declaration", Selector(("goToDefinition:")), "b"),

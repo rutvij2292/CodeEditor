@@ -723,6 +723,7 @@ final class FTEval {
         var it = CI.make(m.name, .method, detail: detail, insert: noArgs ? m.name + "()" : CI.callInsert(m.name, params: m.params), snippet: !noArgs, sort: sort + m.name.lowercased(),
                          doc: header)
         it.deprecated = deprecatedMethods(of: k).contains(m.name)
+        it.valueType = Self.valueType(m.ret, owner: k)
         if k !== cur { it.resolve = lazyDoc(owner: k.fqn, declStart: m.declStart, header: header) }      // docblock summary / @param / @deprecated on selection
         return it
     }
@@ -742,10 +743,14 @@ final class FTEval {
                     add(methodItem(m, sort: base + (m.isStatic == instance ? "b" : "a"), owner: k), prio: tierOf + (m.isStatic == instance ? 6 : 0))
                 }
                 if instance {
-                    for p in k.props where !p.isStatic && visible(p.vis) { add(CI.make(p.name, .property, detail: p.type, sort: base + "a" + p.name.lowercased(), doc: k.fqn), prio: tierOf) }
+                    for p in k.props where !p.isStatic && visible(p.vis) {
+                        var it = CI.make(p.name, .property, detail: p.type, sort: base + "a" + p.name.lowercased(), doc: k.fqn)
+                        it.valueType = Self.valueType(p.type, owner: k)
+                        add(it, prio: tierOf)
+                    }
                 } else {
                     for c in k.consts { add(CI.make(c, .constant, detail: k.name, sort: base + "a" + c.lowercased()), prio: tierOf) }
-                    for c in k.cases { add(CI.make(c, .enumMember, detail: k.name, sort: base + "a" + c.lowercased()), prio: tierOf) }
+                    for c in k.cases { var it = CI.make(c, .enumMember, detail: k.name, sort: base + "a" + c.lowercased()); it.valueType = k.fqn; add(it, prio: tierOf) }
                     if staticDollar { for p in k.props where p.isStatic && visible(p.vis) { add(CI.make("$" + p.name, .property, detail: p.type, sort: base + "a" + p.name.lowercased()), prio: tierOf) } }
                 }
             }
@@ -767,8 +772,12 @@ final class FTEval {
         case .instance(let f):
             classMembers(f, instance: true, includeAll: false, base: "0")
             if let c = hierarchy(f).first, isModel(f) {
-                for col in fp.columns(of: c) { add(CI.make(col.name, .field, detail: col.type, sort: "0a" + col.name.lowercased(), doc: "Column of `\(fp.tableName(of: c))`")) }
-                for k in hierarchy(f) { for r in k.relations { add(CI.make(r.name, .property, detail: r.kind + (r.related.map { " " + (($0 as NSString).lastPathComponent) } ?? ""), sort: "0a" + r.name.lowercased(), doc: "Eloquent relation")) } }
+                for col in fp.columns(of: c) { var it = CI.make(col.name, .field, detail: col.type, sort: "0a" + col.name.lowercased(), doc: "Column of `\(fp.tableName(of: c))`"); it.valueType = Self.columnValueType(col.type); add(it) }
+                for k in hierarchy(f) { for r in k.relations {
+                    var it = CI.make(r.name, .property, detail: r.kind + (r.related.map { " " + (($0 as NSString).lastPathComponent) } ?? ""), sort: "0a" + r.name.lowercased(), doc: "Eloquent relation")
+                    it.valueType = r.related.flatMap { rel in FTParser.singleRelations.contains(r.kind) ? rel : "Illuminate\\Database\\Eloquent\\Collection" }
+                    add(it)
+                } }
                 builderMembers(f, base: "1")
             }
         case .staticRef(let f):

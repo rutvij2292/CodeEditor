@@ -51,6 +51,7 @@ enum FastTier {
         fp.queue.async {
             fp.beginRequest()
             _ = fp.routeNames(); _ = fp.viewNames(); _ = fp.configKeys(); _ = fp.schema(); _ = fp.projectClasses()
+            _ = fp.usageView(file: root.appendingPathComponent("artisan"), live: "")
         }
     }
 
@@ -225,7 +226,20 @@ enum FastEngine {
                 return it
             }
         }
+        if !items.isEmpty, let kind = usageKind(key: key, method: method, argIndex: call.argIndex, view: viewCalls[key] == call.argIndex), items.count > 1,
+           let uv = fp.usageView(file: ctx.fileURL, live: ctx.text as NSString) {
+            uv.apply(&items, kind: kind)
+        }
         return Result(items: items)
+    }
+
+    private static func usageKind(key: String, method: String, argIndex: Int, view: Bool) -> FUsageKind? {
+        if argIndex == 0, routeCalls.contains(key) { return .route }
+        if view { return .view }
+        if argIndex == 0, configCalls.contains(key) { return .config }
+        if argIndex == 0, envCalls.contains(key) { return .env }
+        if argIndex == 0, langCalls.contains(key) { return .lang }
+        return nil
     }
 
     /// `where('`, `orderBy('`, `with('posts.` ...: columns / relations of the receiver's model (or DB::table).
@@ -261,17 +275,20 @@ enum FastEngine {
             for k in ev.hierarchy(m) { for r in k.relations where seen.insert(r.name).inserted {
                 items.append(CI.make(r.name, .property, detail: r.kind + (r.related.map { " " + ($0 as NSString).lastPathComponent } ?? ""), sort: "0" + r.name.lowercased(), range: range))
             } }
+            fp.usageView(file: ctx.fileURL, live: ns)?.apply(&items, kind: .rel, proximity: false)
             return Result(items: items)
         }
         let range = NSRange(location: contentStart, length: caret - contentStart)
         if case .table(let tbl) = t {
             items = (fp.schema()[tbl] ?? []).map { CI.make($0.name, .field, detail: $0.type, sort: "0" + $0.name.lowercased(), range: range) }
+            fp.usageView(file: ctx.fileURL, live: ns)?.apply(&items, kind: .col, proximity: false)
             return Result(items: items)
         }
         model = model.flatMap { ev.isModel($0) ? $0 : nil }
         guard let m = model, let c = ev.hierarchy(m).first else { return nil }
         let tbl = fp.tableName(of: c)
         items = fp.columns(of: c).map { CI.make($0.name, .field, detail: $0.type, sort: "0" + $0.name.lowercased(), doc: "`\(tbl)`", range: range) }
+        fp.usageView(file: ctx.fileURL, live: ns)?.apply(&items, kind: .col, proximity: false)
         return Result(items: items)
     }
 
@@ -345,8 +362,20 @@ enum FastEngine {
             default: break
             }
             if staticDollar { let r = NSRange(location: pStart, length: caret - pStart); for i in items.indices { items[i].replaceRange = r } }
+            // expected type of the whole `chain->|` expression (argument of the call being typed, `return`, typed assignment): lifts matching members
+            let resolver = NPResolver(fp: fp, url: ctx.fileURL, text: ns, lex: lex, cur: cur)
+            if let exp = resolver.expectedType(beforeToken: lo) {
+                ev.annotate(&items, expected: exp)
+                if ctx.smart { items += ev.smartChains(after: items, expected: exp) }
+            }
+            // how much this project talks to each member name (own-file use counts double): orders equal tiers
+            if let uv = fp.usageView(file: ctx.fileURL, live: ns) { for i in items.indices { items[i].usage = uv.count(.member, items[i].label) } }
             return Result(items: items, incomplete: docFiltered && !prefix.isEmpty)
         }
+        // `$|` where the surrounding code expects a type: the variables of the scope that have it (the plain variable list stays with PHPCompletion)
+        if p > 0, ns.character(at: p - 1) == 36, !isColons, let typed = typedVariableItems(ns, ctx: ctx, prefixStart: p, caret: caret, fp: fp) { return typed }
+        // Smart completion at the start of an expression: typed variables, chains, factories, enum cases, `new`
+        if ctx.smart, !(p > 0 && [36, 92, 64].contains(ns.character(at: p - 1))), let sm = smartStartItems(ns, ctx: ctx, prefixStart: p, caret: caret, fp: fp) { return sm }
         // named arguments of the call being typed: `foo(me|` -> `message: `
         if !prefix.isEmpty || ctx.isManual, let named = FastRules.namedArgs(ctx, ns, caret: caret, fp: fp) {
             var items = named.items
@@ -366,7 +395,60 @@ enum FastEngine {
         let t = before.trimmingCharacters(in: .whitespaces)
         for kw in ["function", "class", "interface", "trait", "enum", "const", "namespace", "case", "->", "::", "use"] where t.hasSuffix(kw) && !(kw == "use") { return Result(items: []) }
         if prefix.count < 2 && !ctx.isManual { return Result(items: []) }
-        return classItems(prefix: prefix, ctx: ctx, ns: ns, range: ctx.prefixRange, fp: fp)
+        return classItems(prefix: prefix, ctx: ctx, ns: ns, range: ctx.prefixRange, fp: fp, typed: classPositionExpectation(ns, before: t, prefixStart: p, ctx: ctx, fp: fp))
+    }
+
+    /// `new |`, `throw new |`, `catch (|`: what the surrounding code expects there (ev + expected type), nil when unknown.
+    private static func classPositionExpectation(_ ns: NSString, before t: String, prefixStart p: Int, ctx: CompletionContext, fp: FastProject) -> (FTEval, FTExpected)? {
+        let isNew = t.hasSuffix("new") && !(t.dropLast(3).last.map { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "$" } ?? false)
+        let isCatch = t.hasSuffix("catch (") || t.hasSuffix("catch(")
+        guard isNew || isCatch else { return nil }
+        let lex = PHPLex(ns)
+        let cur = FTParser.parse(ns, lex: lex)
+        let ev = FTEval(fp: fp, text: ns, lex: lex, cur: cur)
+        let at = ev.tokenIndex(atOrAfter: p)
+        var lo = at
+        if isNew { lo = at - 1; guard lo >= 0, lex.isIdent(lo, "new") else { return nil } }
+        let r = NPResolver(fp: fp, url: ctx.fileURL, text: ns, lex: lex, cur: cur)
+        guard let e = r.expectedType(beforeToken: lo) else { return nil }
+        return (ev, e)
+    }
+
+    private static func smartStartItems(_ ns: NSString, ctx: CompletionContext, prefixStart p: Int, caret: Int, fp: FastProject) -> Result? {
+        let lex = PHPLex(ns)
+        let cur = FTParser.parse(ns, lex: lex)
+        let r = NPResolver(fp: fp, url: ctx.fileURL, text: ns, lex: lex, cur: cur)
+        let lo = r.ev.tokenIndex(atOrAfter: p)
+        guard let exp = r.expectedType(beforeToken: lo) else { return nil }
+        var items = r.smartExpressionItems(expected: exp, lo: lo, range: ctx.prefixRange, dollarTyped: false, caretPrefixIsName: true)
+        items.removeAll { $0.typeMatch == 0 }
+        return items.isEmpty ? nil : Result(items: items)
+    }
+
+    /// Variables in scope whose type fits the expected type at `$|` (typeMatch > 0); nil when nothing is expected / nothing fits.
+    private static func typedVariableItems(_ ns: NSString, ctx: CompletionContext, prefixStart p: Int, caret: Int, fp: FastProject) -> Result? {
+        let lex = PHPLex(ns)
+        let cur = FTParser.parse(ns, lex: lex)
+        let ev = FTEval(fp: fp, text: ns, lex: lex, cur: cur)
+        let lo = ev.tokenIndex(atOrAfter: p - 1)
+        let r = NPResolver(fp: fp, url: ctx.fileURL, text: ns, lex: lex, cur: cur)
+        guard let exp = r.expectedType(beforeToken: lo) else { return nil }
+        let range = NSRange(location: p - 1, length: caret - (p - 1))
+        var items: [CompletionItem] = []
+        if ctx.smart {
+            items = r.smartExpressionItems(expected: exp, lo: lo, range: range, dollarTyped: true, caretPrefixIsName: true)
+            items.removeAll { $0.typeMatch == 0 }
+            return items.isEmpty ? nil : Result(items: items)
+        }
+        for v in r.typedVariables(atToken: lo) where v.valueType != nil {
+            var it = CI.make(v.name, .variable, detail: v.valueType.map { ($0 as NSString).lastPathComponent } ?? "variable", range: range)
+            it.valueType = v.valueType
+            it.priority = 50
+            items.append(it)
+        }
+        ev.annotate(&items, expected: exp)
+        items.removeAll { $0.typeMatch == 0 }
+        return items.isEmpty ? nil : Result(items: items)
     }
 
     private static func kind(of e: VendorEntry) -> CompletionKind {
@@ -424,7 +506,7 @@ enum FastEngine {
         return Result(items: items, incomplete: true)
     }
 
-    private static func classItems(prefix: String, ctx: CompletionContext, ns: NSString, range: NSRange, fp: FastProject) -> Result {
+    private static func classItems(prefix: String, ctx: CompletionContext, ns: NSString, range: NSRange, fp: FastProject, typed: (FTEval, FTExpected)? = nil) -> Result {
         let cands = candidates(prefix, fp: fp, limit: 40)
         guard !cands.isEmpty else { return Result(items: []) }
         let cur = FTParser.parse(ns)
@@ -443,8 +525,10 @@ enum FastEngine {
             // imported or same namespace: what the file already talks about; then the project, PHP built-ins, vendor packages
             let local = cur.map { namespaceOf(c.fqn) == ($0.ns.isEmpty ? "global" : $0.ns) || $0.uses.values.contains(c.fqn) } ?? false
             it.priority = local ? 0 : (c.project ? 1 : (c.builtin ? 2 : 3))
+            it.valueType = c.fqn
             items.append(it)
         }
+        if let (ev, e) = typed { ev.annotate(&items, expected: e) } else { for i in items.indices { items[i].valueType = nil } }
         return Result(items: items, incomplete: true)
     }
 

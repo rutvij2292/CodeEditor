@@ -49,7 +49,28 @@ final class FastProject {
         queue = DispatchQueue(label: "fasttier.\(path)", qos: .utility)
     }
 
-    func markDirty() { flagLock.lock(); dirty = true; flagLock.unlock() }
+    func markDirty() { flagLock.lock(); dirty = true; usageDirty = true; flagLock.unlock() }
+
+    // Usage statistics (FastTierUsage.swift): built lazily on the queue, dropped on memory trim, refreshed only when stale AND a file changed.
+    private var usageTable: FUsageTable?
+    private var usageDirty = false
+
+    /// Per request view of the usage table (queue only). Builds the table on first use.
+    func usageView(file: URL, live: NSString) -> FUsage.View? {
+        if FUsage.off { return nil }
+        flagLock.lock(); let dirtyNow = usageDirty; flagLock.unlock()
+        if usageTable == nil || (dirtyNow && Date().timeIntervalSince(usageTable!.builtAt) > FUsage.staleAfter) {
+            let t0 = DispatchTime.now().uptimeNanoseconds
+            usageTable = FUsage.build(root: path)
+            usageBuildMs = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6
+            flagLock.lock(); usageDirty = false; flagLock.unlock()
+        }
+        guard let t = usageTable, !t.counts.isEmpty else { return nil }
+        return FUsage.View(table: t, file: file, live: live)
+    }
+    private(set) var usageBuildMs = 0.0
+    var usageBytes: Int { usageTable?.approxBytes ?? 0 }
+    var usageBuilt: Bool { usageTable != nil }
 
     /// Start of every request (on `queue`): decide whether sections re-check their stamps.
     func beginRequest() {
@@ -119,7 +140,7 @@ final class FastProject {
         return Int64(bitPattern: acc)
     }
 
-    private static func files(in dir: String, ext: String, depth: Int = 0, rel: String = "") -> [String] {
+    static func files(in dir: String, ext: String, depth: Int = 0, rel: String = "") -> [String] {
         var out: [String] = []
         guard depth < 8 else { return out }
         for e in readEntries(dir, fileSuffix: Array(ext.utf8)).sorted(by: { $0.name < $1.name }) {
@@ -549,6 +570,7 @@ final class FastProject {
         classCache.removeAll(); classBytes = 0
         prefetchLock.lock(); prefetched.removeAll(); prefetchLock.unlock()
         pathCache.removeAll(); shortCache.removeAll()
+        usageTable = nil
     }
 
     static func trimAll() {

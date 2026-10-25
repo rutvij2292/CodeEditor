@@ -13,6 +13,7 @@ final class CodeTextView: NSTextView {
     /// Called first for every key press; return true to swallow the event (e.g. the completion popup's arrows/Return/Tab/Esc).
     var keyInterceptor: ((NSEvent) -> Bool)?
     var onTriggerCompletion: (() -> Void)?
+    var onTriggerSmartCompletion: (() -> Void)?
     var onGoToDefinition: (() -> Void)?
     var onQuickDocumentation: (() -> Void)?
     var onParameterInfo: (() -> Void)?
@@ -35,6 +36,8 @@ final class CodeTextView: NSTextView {
     }
 
     @objc func triggerCompletion(_ sender: Any?) { onTriggerCompletion?() }
+    @objc func triggerSmartCompletion(_ sender: Any?) { onTriggerSmartCompletion?() }
+    @objc func completeCurrentStatement(_ sender: Any?) { CompleteStatement.perform(on: self) }
     @objc func goToDefinition(_ sender: Any?) { onGoToDefinition?() }
     @objc func showQuickDocumentation(_ sender: Any?) { onQuickDocumentation?() }
     @objc func showParameterInfo(_ sender: Any?) { onParameterInfo?() }
