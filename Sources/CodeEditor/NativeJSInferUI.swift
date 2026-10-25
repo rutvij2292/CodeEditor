@@ -83,6 +83,7 @@ extension NJSEnv {
         guard let leaf = doc.leaf(at: offset), let p = leaf.parent else { return "no leaf" }
         let target: Node = (p.kind == "member_expression" ? p.field("object") : nil) ?? leaf
         let t = infer.ty(target)
+        if AppEnv.value("CE_NJS_LIBDBG") != nil, let dir = NJSLib.directory(forRoot: proj.root) { fputs("LIB root=\(proj.root) dir=\(dir) roots=\(NJSLib.rootNames(dir: dir, config: proj.modules.config(for: path))) cfg=\(proj.modules.config(for: path)?.path ?? "none")\n", stderr) }
         return target.kind + " " + target.text(doc.text).prefix(60) + " : " + t.describe() + (typer.exhausted ? " (budget spent)" : "")
     }
 }

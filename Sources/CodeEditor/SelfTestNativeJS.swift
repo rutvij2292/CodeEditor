@@ -105,6 +105,42 @@ enum SelfTestNativeJS {
             }
             exit(0)
         }
+        if let dir = AppEnv.value("CE_NJS_TYPES") {             // false-positive scan of the type rules over every TypeScript file under a directory (the directory is the project root)
+            var files = 0, bad = 0
+            let cap = Int(AppEnv.value("CE_NJS_SCAN_CAP") ?? "") ?? 6000
+            let en = FileManager.default.enumerator(atPath: dir)
+            func packageRoot(_ file: String) -> String {            // nearest ancestor with a tsconfig.json / package.json, as a real project would be opened
+                var cur = (file as NSString).deletingLastPathComponent
+                while cur.count > dir.count {
+                    if FileManager.default.fileExists(atPath: cur + "/tsconfig.json") || FileManager.default.fileExists(atPath: cur + "/package.json") { return cur }
+                    cur = (cur as NSString).deletingLastPathComponent
+                }
+                return dir
+            }
+            var perCode: [String: Int] = [:]
+            while let rel = en?.nextObject() as? String, files < cap {
+                let ext = (rel as NSString).pathExtension.lowercased()
+                guard ext == "ts" || ext == "tsx" || ext == "mts" || ext == "cts", !rel.hasSuffix(".d.ts") else { continue }
+                autoreleasepool {
+                    let path = dir + "/" + rel
+                    guard let t = FastProject.read(path), t.length < 400_000, let d = NJSDoc(path: path, text: t) else { return }
+                    files += 1
+                    let proj = NJSProject.shared(root: packageRoot(path))
+                    proj.queue.sync {
+                        proj.modules.beginRequest()
+                        let env = NJSEnv(proj: proj, doc: d)
+                        let diags = NativeJSDiag.typeErrors(env: env)
+                        withExtendedLifetime(d) {}
+                        for x in diags {
+                            bad += 1; perCode[x.code, default: 0] += 1
+                            if bad <= 100000 { fputs("TYPES \(rel): \(x.message) at `\(NPText.lineText(t, x.range.location, maxLen: 110))`\n", stderr) }
+                        }
+                    }
+                }
+            }
+            fputs("TYPES scanned \(files) files, \(bad) findings \(perCode)\n", stderr)
+            exit(0)
+        }
         if let dir = AppEnv.value("CE_NJS_SYNTAX") {            // false-positive scan of the syntax rule: every source file under a directory (node_modules included)
             var files = 0, bad = 0, shown = 0, dts = 0
             let cap = Int(AppEnv.value("CE_NJS_SCAN_CAP") ?? "") ?? 6000
@@ -132,7 +168,7 @@ enum SelfTestNativeJS {
             fputs("SYNTAX scanned \(files) files, \(bad) non-declaration files with a syntax finding (+\(dts) declaration files)\n", stderr)
             exit(0)
         }
-        if AppEnv.value("CE_NJS_ONLY") != nil { run(); runRefs(); runExtras(); runRename(); runSig(); runLib(); runAmbient(); runInfer(); SelfTest.finish() }
+        if AppEnv.value("CE_NJS_ONLY") != nil { run(); runRefs(); runExtras(); runRename(); runSig(); runLib(); runAmbient(); runInfer(); runDiagTypes(); SelfTest.finish() }
     }
 
     private static func check(_ name: String, _ ok: @autoclosure () -> Bool) { SelfTest.check(name, ok()) }

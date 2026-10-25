@@ -119,6 +119,15 @@ final class LanguagesPane: SettingsPane {
         nativeJSSyntax.setAccessibilityLabel("Native syntax diagnostics for unclosed brackets")
         onRefresh { nativeJSSyntax.state = NativeJSDiag.syntaxEnabled ? .on : .off }
         row(nil, nativeJSSyntax, help: "Only the repairs tree-sitter is sure about (a missing ) ] or }); other parse errors are never reported because the grammar lacks some newer syntax.")
+        let nativeJSTypes = NSButton(checkboxWithTitle: "Report unknown names and wrong argument counts (TypeScript)", target: nil, action: nil)
+        nativeJSTypes.target = action { c in
+            NativeJSDiag.typesEnabled = (c as? NSButton)?.state == .on
+            for ctl in NativeJSDiagController.controllers.values { ctl.schedule(initial: true) }
+        }
+        nativeJSTypes.action = #selector(SettingsAction.fire(_:))
+        nativeJSTypes.setAccessibilityLabel("Native type diagnostics for unknown names and argument counts")
+        onRefresh { nativeJSTypes.state = NativeJSDiag.typesEnabled ? .on : .off }
+        row(nil, nativeJSTypes, help: "Off by default. Cannot find name (TS2304) and wrong argument count (TS2554) for single functions, only in TypeScript files the tsconfig includes, and silent in projects with global declaration files.")
         let nativeJSAuto = NSButton(checkboxWithTitle: "Auto-import suggestions while typing", target: nil, action: nil)
         nativeJSAuto.target = action { c in NativeJSAutoImport.enabled = (c as? NSButton)?.state == .on }
         nativeJSAuto.action = #selector(SettingsAction.fire(_:))

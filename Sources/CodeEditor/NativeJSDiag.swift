@@ -64,6 +64,7 @@ enum NativeJSDiag {
             }
         }
         if syntaxEnabled { out += syntaxErrors(doc) }
+        if typesEnabled { out += typeErrors(env: env) }
         return NativePHPDiag.finish(Array(out.prefix(maxResults * 2)))
     }
 
