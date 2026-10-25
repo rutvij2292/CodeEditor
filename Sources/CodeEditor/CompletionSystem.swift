@@ -40,6 +40,7 @@ enum CompletionSystem {
                                     forExtensions: ["html", "htm", "vue", "php", "phtml", "jsx", "tsx", "js", "ts", "css", "scss"])
         CompletionRegistry.register(BuiltinProvider(SnippetCompletion.generate),
                                     forExtensions: ["php", "phtml", "js", "jsx", "ts", "tsx", "mjs", "html", "htm", "vue"])
+        CompletionRegistry.register(BuiltinProvider(triggers: ["."], PostfixTemplates.generate), forExtensions: ["php", "phtml", "js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts", "vue"])
         CompletionRegistry.register(BuiltinProvider(LiveTemplateCompletion.generate), forExtensions: LiveTemplateCompletion.extensions)
         CompletionRegistry.register(SymbolCompletionProvider(), forExtensions: ["php", "phtml", "js", "jsx", "ts", "tsx", "mjs", "vue"])
         StructuredCompletion.register()   // YAML / JSON key + value completion (StructuredCompletion.swift)

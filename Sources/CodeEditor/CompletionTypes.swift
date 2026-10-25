@@ -19,6 +19,12 @@ struct CompletionItem {
     var additionalEdits: [(range: NSRange, text: String)] = []   // e.g. auto-added `use` imports (ranges in the ORIGINAL text)
     var isSnippet = false
     var deprecated = false
+    /// Type this candidate evaluates to (class FQN or lower-case scalar name) when the provider knows it; compared with the expected type
+    /// at the caret by the provider, which stores the verdict in `typeMatch` (0 unknown / different, 1 compatible, 2 exact).
+    var valueType: String?
+    var typeMatch: UInt8 = 0
+    /// How much the project itself uses this name (member frequency); ranks equal tiers, higher first.
+    var usage = 0
     /// Providers may fill in documentation/edits lazily (LSP completionItem/resolve); controller calls it once on selection.
     var resolve: ((@escaping (CompletionItem) -> Void) -> Void)?
 }
@@ -30,6 +36,7 @@ struct CompletionContext {
     let fileExtension: String
     let triggerCharacter: String?     // set when auto-triggered by one of the provider's trigger characters
     let isManual: Bool                // Ctrl-Space
+    var smart = false                 // Ctrl-Shift-Space: only candidates of the expected type (PhpStorm Smart Completion)
     let prefixRange: NSRange          // identifier prefix before the caret (may be empty)
     var prefix: String { (text as NSString).substring(with: prefixRange) }
 }

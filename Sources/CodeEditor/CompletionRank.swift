@@ -20,6 +20,8 @@ enum CompletionRanker {
         var boost = 0
         var tier = 0
         var pop = 1000
+        var typeMatch: UInt8 = 0
+        var use = 0
     }
 
     struct Output {
@@ -220,6 +222,8 @@ enum CompletionRanker {
                 let key = item.label + "\u{1}" + kindGroup(item.kind)
                 var r = Ranked(item: item, score: m.score, order: order, query: q.q, cls: m.cls)
                 r.tier = tier(item)
+                r.typeMatch = item.typeMatch
+                r.use = item.usage
                 r.boost = familiarity(item, context)
                 // a word of the file that is a case-sensitive prefix match and that the file really uses (a local, an import) is as good as a symbol
                 if item.kind == .text, r.cls == 3, r.score >= 440, r.boost >= 1 { r.cls = 4 }
@@ -227,7 +231,7 @@ enum CompletionRanker {
                 if let idx = seen[key] {
                     let o = out[idx]
                     // the same symbol from two providers: keep the better tier / richer one (later provider wins a tie)
-                    if (r.cls, -r.tier, r.score) >= (o.cls, -o.tier, o.score) { r.order = o.order; out[idx] = r }
+                    if (r.cls, Int(r.typeMatch), -r.tier, r.score) >= (o.cls, Int(o.typeMatch), -o.tier, o.score) { r.order = o.order; out[idx] = r }
                     continue
                 }
                 seen[key] = out.count
@@ -243,8 +247,10 @@ enum CompletionRanker {
         if isMemberContext(ns, defaultStart) { out.removeAll { $0.item.kind == .text && keywords.contains($0.item.label) } }
         out.sort { a, b in
             if a.cls != b.cls { return a.cls > b.cls }
+            if a.typeMatch != b.typeMatch { return a.typeMatch > b.typeMatch }      // expected type at the caret (only set when the provider knows it)
             if a.boost != b.boost { return a.boost > b.boost }
             if a.tier != b.tier { return a.tier < b.tier }
+            if a.use != b.use { return a.use > b.use }
             if a.pop != b.pop { return a.pop < b.pop }
             if a.score != b.score { return a.score > b.score }
             let sa = a.item.sortText ?? a.item.label.lowercased(), sb = b.item.sortText ?? b.item.label.lowercased()
