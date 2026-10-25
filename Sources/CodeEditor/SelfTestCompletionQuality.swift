@@ -49,6 +49,7 @@ enum SelfTestCompletionQuality {
         rankingChecks()
         snippetChecks(w: w)
         variableChecks()
+        pythonChecks()
         tagChecks()
         laravelChecks()
     }
@@ -72,7 +73,7 @@ enum SelfTestCompletionQuality {
         c("rank: a word with the same name as a real symbol is dropped (no duplicate)", rank([item("subject", .text, sort: "~subject"), item("subject", .property)], "$a->sub|").filter { $0 == "subject" }.count == 1)
         // familiarity
         var ctx = CompletionRanker.Context()
-        ctx.docCounts = ["xzebra": 5, "xapple": 1]
+        ctx.docCounts = [CompletionRanker.docKey("xzebra"): 5, CompletionRanker.docKey("xapple"): 1]
         let fam2 = rank([item("xalpha"), item("xapple"), item("xzebra")], "x|", context: ctx)
         c("rank: more uses first, then one use, then unused", fam2 == ["xzebra", "xapple", "xalpha"])
         ctx.docCounts = [:]
@@ -102,7 +103,7 @@ enum SelfTestCompletionQuality {
         // doc stats
         let docText = "use App\\Models\\Invoice;\n$a = new Invoice();\n$b = new Invoice(); Inv" as NSString
         let counts = CompletionRanker.docCounts(docText, caret: docText.length)
-        c("rank: docCounts counts identifiers and skips the token under the caret", counts["Invoice"] == 3 && counts["Inv"] == nil && counts["Models"] == 1)
+        c("rank: docCounts counts identifiers and skips the token under the caret", counts[CompletionRanker.docKey("Invoice")] == 3 && counts[CompletionRanker.docKey("Inv")] == nil && counts[CompletionRanker.docKey("Models")] == 1)
         // refilter latency
         var big: [CompletionItem] = []
         for i in 0..<3000 { big.append(item("symbol\(i)Name\(i % 17)", .text, sort: "~")) }
@@ -167,6 +168,32 @@ enum SelfTestCompletionQuality {
     }
 
     // MARK: Pipeline details
+
+    private static func pythonChecks() {
+        let c = SelfTest.check
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("ce-cq-py-\(getpid())")
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        try? "def add_numbers(a, b=1):\n    pass\n\ndef noargs():\n    pass\n\nclass K:\n    def meth(self, x, y):\n        pass\n".write(to: dir.appendingPathComponent("m.py"), atomically: true, encoding: .utf8)
+        func items(_ file: String, _ code: String) -> [CompletionItem] {
+            let url = dir.appendingPathComponent(file)
+            try? code.write(to: url, atomically: true, encoding: .utf8)
+            let ns = code as NSString
+            var st = ns.length
+            while st > 0, CompletionLex.isIdent(ns.character(at: st - 1)) { st -= 1 }
+            let proj = NativePy.project(for: url)
+            return proj.queue.sync { PyComplete.items(project: proj, url: url, text: ns, caret: ns.length, prefixRange: NSRange(location: st, length: ns.length - st)) }
+        }
+        let a = items("use.py", "def add_numbers(a, b=1):\n    pass\n\ndef noargs():\n    pass\n\nadd_n").first { $0.label == "add_numbers" }
+        c("python: a function item inserts the call with its required parameters", a.map { SnippetParser.parse($0.insertText).text == "add_numbers(a)" && $0.isSnippet } ?? false)
+        let n = items("use2.py", "def add_numbers(a, b=1):\n    pass\n\ndef noargs():\n    pass\n\nnoar").first { $0.label == "noargs" }
+        c("python: a parameterless function inserts `name()`", n?.insertText == "noargs()")
+        let i = items("use3.py", "from m import add_n").first { $0.label == "add_numbers" }
+        c("python: import lines insert the bare name", i?.insertText == "add_numbers")
+        let m = items("use4.py", "from m import K\n\nK().me").first { $0.label == "meth" }
+        c("python: methods drop self from the placeholders", m.map { SnippetParser.parse($0.insertText).text == "meth(x, y)" } ?? false)
+    }
 
     private static func variableChecks() {
         let c = SelfTest.check
