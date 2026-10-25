@@ -6,7 +6,7 @@ extension LSPSession {
     func updateLinkHighlight(flags: NSEvent.ModifierFlags, point: NSPoint?) {
         guard flags.contains(.command), !flags.contains(.shift), !flags.contains(.option), let tv = textView,
               let point, tv.visibleRect.contains(point), let off = offsetUnderPoint(point),
-              instance(supporting: "definitionProvider") != nil || NativePHP.handles(url) else { clearLinkHighlight(); return }
+              instance(supporting: "definitionProvider") != nil || NativeLang.handles(url) else { clearLinkHighlight(); return }
         if tab.map({ LanguageServers.suppressHoverUnderline?($0, off) == true }) == true { clearLinkHighlight(); return }
         let word = wordRange(at: off)
         guard word.length > 0 else { clearLinkHighlight(); return }
@@ -23,8 +23,8 @@ extension LSPSession {
             self.linkRange = word
             NSCursor.pointingHand.set()
         }
-        if NativePHP.handles(url) {            // native PHP first; Intelephense confirms only when native has no target
-            NativePHP.lookupAsync(url: url, text: text as NSString, offset: off) { [weak self] hit in
+        if NativeLang.handles(url) {            // native engine first (PHP, Python); a language server confirms only when native has no target
+            NativeLang.lookupAsync(url: url, text: text as NSString, offset: off) { [weak self] hit in
                 guard let self, token == self.linkToken else { return }
                 if let hit, hit.targets.contains(where: { !($0.path == self.url.standardizedFileURL.path && NSLocationInRange($0.offset, hit.range)) }) { applyLink(); return }
                 if self.instance(supporting: "definitionProvider") != nil { self.lspLinkCheck(off: off, token: token, apply: applyLink) }

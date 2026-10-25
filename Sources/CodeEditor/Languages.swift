@@ -14,6 +14,7 @@ import TreeSitterYAML
 import TreeSitterBash
 import TreeSitterXML
 import TreeSitterSCSS
+import TreeSitterPython
 
 /// A loaded grammar: language, parser, highlight + injection queries. Created lazily the first
 /// time a language is opened and cached afterwards (the parser holds no tree, so it is cheap).
@@ -234,6 +235,7 @@ enum Languages {
         case "json": return g(tree_sitter_json(), hl: [read("JSON", "highlights.scm"), jsonPunctuation])
         case "yaml": return g(tree_sitter_yaml(), hl: [read("YAML", "highlights.scm")])
         case "bash": return g(tree_sitter_bash(), hl: [read("Bash", "highlights.scm")])
+        case "python": return g(tree_sitter_python(), hl: [read("Python", "highlights.scm")])
         case "xml": return g(tree_sitter_xml(), hl: [read("XML", "highlights.scm")])
         case "md":
             return g(tree_sitter_markdown(), hl: [read("Markdown", "highlights.scm")], inj: [markdownInjections])
@@ -267,7 +269,7 @@ enum Languages {
         "md": "md", "markdown": "md", "mdx": "md", "mkd": "md",
         "yml": "yaml", "yaml": "yaml",
         "sh": "bash", "bash": "bash", "zsh": "bash", "ksh": "bash", "command": "bash", "env": "dotenv",
-        "xml": "xml", "svg": "xml", "xsd": "xml", "xsl": "xml", "xslt": "xml", "plist": "xml", "csproj": "xml",
+        "py": "python", "pyi": "python", "pyw": "python", "xml": "xml", "svg": "xml", "xsd": "xml", "xsl": "xml", "xslt": "xml", "plist": "xml", "csproj": "xml",
         "rss": "xml", "atom": "xml", "wsdl": "xml", "storyboard": "xml", "xib": "xml",
         "sql": "sql", "http": "http", "rest": "http",
     ]
@@ -309,6 +311,7 @@ enum Languages {
         case "json", "jsonc", "json5": return "json"
         case "yaml", "yml": return "yaml"
         case "bash", "sh", "shell", "zsh", "console", "shellscript": return "bash"
+        case "python", "py", "python3", "py3": return "python"
         case "xml", "svg": return "xml"
         case "markdown", "md": return "md"
         case "markdown_inline": return "md_inline"

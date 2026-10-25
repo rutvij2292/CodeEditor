@@ -21,6 +21,16 @@ enum SelfTest {
     }
 
     private static func runChecks(app: AppDelegate) {
+        if AppEnv.value("CE_SELFTEST") == "py" {          // CE_SELFTEST=py: only the native Python checks (fast loop)
+            let pyDir = FileManager.default.temporaryDirectory.appendingPathComponent("ce-selftest-py-\(getpid())")
+            try? FileManager.default.createDirectory(at: pyDir, withIntermediateDirectories: true)
+            _ = app.openProject(pyDir)
+            SelfTestNativePy.run()
+            SelfTestNativePyDiag.run()
+            SelfTestNativePyDiag.runUI()
+            try? FileManager.default.removeItem(at: pyDir)
+            finish()
+        }
         // Hermetic: the host's battery / Low Power Mode must not switch the saver features these checks exercise.
         Prefs.powerSaver = "off"
         PowerState.shared.recompute()
@@ -92,6 +102,9 @@ enum SelfTest {
                     SelfTestNativePHPRefs.run(w: w)
                     SelfTestNativePHPDiag.run()
                     SelfTestNativePHPPerf.run()
+                    SelfTestNativePy.run()
+                    SelfTestNativePyDiag.run()
+                    SelfTestNativePyDiag.runUI()
                     SelfTestSpeedSearch.run(w: w)
                     SelfTestToolFocus.run(w: w)
                     SelfTestLocationsNewFile.run(w: w)

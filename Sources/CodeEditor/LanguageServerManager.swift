@@ -584,7 +584,7 @@ final class LanguageServerManager {
     }
 
     private func tabOpened(_ tab: EditorTab) {
-        guard !LanguageServerConfig.configs(for: tab.url).isEmpty else { return }
+        guard !LanguageServerConfig.configs(for: tab.url).isEmpty || NativePy.handles(tab.url) else { return }   // native Python needs the session UI (hover, Cmd-click)
         let id = ObjectIdentifier(tab)
         if let stale = sessions[id], stale.tab == nil { detach(stale) }   // a freed tab's address was reused
         guard sessions[id] == nil, !Self.isLargeFile(tab) else { return }
