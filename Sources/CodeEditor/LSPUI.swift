@@ -336,43 +336,15 @@ extension LSPSession {
             popup.setContent(LSPMarkdown.render(parts.joined(separator: "\n\n")))
             popup.show(for: self, anchor: self.screenRect(forCharacterRange: anchorRange))
         }
-        if docs, NativeVue.handles(url) {          // native Vue template service first (components, props, expressions); the chain below only when it has no answer
-            NativeVue.lookupAsync(url: url, text: text as NSString, offset: offset) { [weak self] hit in
-                guard let self, token == self.hoverToken else { return }
-                if let md = hit?.markdown, !md.isEmpty { present(md) } else { self.nativeHoverChain(at: offset, docs: docs, token: token, present: present) }
-            }
-            return
-        }
-        nativeHoverChain(at: offset, docs: docs, token: token, present: present)
-    }
-
-    private func nativeHoverChain(at offset: Int, docs: Bool, token: Int, present: @escaping (String?) -> Void) {
-        if docs, NativeJS.handles(url) {           // native JS / TS first, the TypeScript server only when it has no answer
-            NativeJS.lookupAsync(url: url, text: text as NSString, offset: offset) { [weak self] hit in
-                guard let self, token == self.hoverToken else { return }
-                guard let md = hit?.markdown, !md.isEmpty else { self.webOrLSPHover(at: offset, docs: docs, token: token, present: present); return }   // .vue templates: native web next
-                // The declaration as written is the whole answer unless its type is inferred and a server can say more.
-                if hit?.inferred == true, !self.instances(supporting: "hoverProvider").isEmpty { self.lspHover(at: offset, docs: docs) { present($0 ?? md) } }
-                else { present(md) }
-            }
-            return
-        }
-        if docs, NativeLang.handles(url) {          // native engine first, a language server only when it has no answer
-            NativeLang.lookupAsync(url: url, text: text as NSString, offset: offset) { [weak self] hit in
-                guard let self, token == self.hoverToken else { return }
-                if let md = hit?.markdown { present(md) } else { self.webOrLSPHover(at: offset, docs: docs, token: token, present: present) }
-            }
-            return
-        }
-        webOrLSPHover(at: offset, docs: docs, token: token, present: present)
-    }
-
-    /// Native CSS / HTML / Tailwind answer first (NativeWeb*.swift), the external servers only when it has none.
-    private func webOrLSPHover(at offset: Int, docs: Bool, token: Int, present: @escaping (String?) -> Void) {
-        guard docs, NativeWeb.handles(url) else { lspHover(at: offset, docs: docs, present: present); return }
-        NativeWeb.lookupAsync(url: url, text: text as NSString, offset: offset) { [weak self] hit in
+        // Native engines first, in registry order (e.g. .vue: Vue, JS, Web); the language server only when none has an answer.
+        guard docs else { lspHover(at: offset, docs: docs, present: present); return }
+        NativeEngines.lookup(url: url, text: text as NSString, offset: offset, stale: { [weak self] in self?.hoverToken != token },
+                             accept: { hit, engine in !hit.markdown.isEmpty || engine.emptyHoverIsAnswer }) { [weak self] hit, _ in
             guard let self, token == self.hoverToken else { return }
-            if let md = hit?.markdown, !md.isEmpty { present(md) } else { self.lspHover(at: offset, docs: docs, present: present) }
+            guard let hit else { self.lspHover(at: offset, docs: docs, present: present); return }
+            // The declaration as written is the whole answer unless its type is inferred and a server can say more.
+            if hit.inferred, !self.instances(supporting: "hoverProvider").isEmpty { self.lspHover(at: offset, docs: docs) { present($0 ?? hit.markdown) } }
+            else { present(hit.markdown) }
         }
     }
 
@@ -404,7 +376,7 @@ extension LSPSession {
     func scheduleSignatureCheck() {
         signatureWork?.cancel()
         let inst = instance(supporting: "signatureHelpProvider")
-        guard let tv = textView, inst != nil || NativePHP.handles(url) || NativeJS.handles(url) else { return }
+        guard let tv = textView, inst != nil || NativeEngines.signatureEngine(for: url) != nil else { return }
         let ns = tv.string as NSString
         let caret = tv.selectedRange().location
         var trigger: String?
@@ -428,32 +400,16 @@ extension LSPSession {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 
-    /// Native PHP answers first (Parameter Info / `(` / `,`); Intelephense is asked only when native cannot resolve the callee.
+    /// The native engine (PHP, JS / TS) answers first (Parameter Info / `(` / `,`); the server is asked only when native cannot resolve the callee.
     func showSignature(manual: Bool, trigger: String?) {
         guard let tv = textView else { return }
-        if NativeJS.handles(url) {                       // native JS / TS first; the server only when native cannot resolve the callee
-            let caret = tv.selectedRange().location
-            NativeJS.signatureHelpAsync(url: url, text: tv.string as NSString, caret: caret) { [weak self] outcome in
-                guard let self, let tv = self.textView, tv.selectedRange().location == caret else { return }
-                switch outcome {
-                case .help(let payload):
-                    guard let attributed = LSPUIParse.signature(payload) else { LSPPopups.signature.hide(); return }
-                    let popup = LSPPopups.signature
-                    popup.setContent(attributed)
-                    popup.show(for: self, anchor: self.screenRect(forCharacterRange: NSRange(location: max(0, caret - 1), length: 1)))
-                case .notInCall: LSPPopups.signature.hide()
-                case .unknown: self.lspSignature(manual: manual, trigger: trigger)
-                }
-            }
-            return
-        }
-        guard NativePHP.handles(url) else { lspSignature(manual: manual, trigger: trigger); return }
+        guard let engine = NativeEngines.signatureEngine(for: url) else { lspSignature(manual: manual, trigger: trigger); return }
         let caret = tv.selectedRange().location
-        NativePHP.signatureHelpAsync(url: url, text: tv.string as NSString, caret: caret) { [weak self] outcome in
+        engine.signatureHelp(url: url, text: tv.string as NSString, caret: caret) { [weak self] outcome in
             guard let self, let tv = self.textView, tv.selectedRange().location == caret else { return }
             switch outcome {
-            case .help(let help):
-                guard let attributed = LSPUIParse.signature(help.lspPayload) else { LSPPopups.signature.hide(); return }
+            case .help(let payload):
+                guard let attributed = LSPUIParse.signature(payload) else { LSPPopups.signature.hide(); return }
                 let popup = LSPPopups.signature
                 popup.setContent(attributed)
                 popup.show(for: self, anchor: self.screenRect(forCharacterRange: NSRange(location: max(0, caret - 1), length: 1)))

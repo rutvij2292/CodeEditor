@@ -17,9 +17,7 @@ enum FastTier {
     /// FSEvents batch handler hook: forces the next request to re-validate its sections.
     static func invalidate(root: URL) {
         FastProject.existing(root: root)?.markDirty()
-        NativeWeb.invalidate(root: root)
-        NativeVue.invalidate(root: root)
-        NJSRefs.dropFileList()                          // native JS find usages: the project's file listing is stale
+        NativeEngines.invalidate(root: root)            // the other native engines (web, vue, js)
         rootCache = rootCache.filter { $0.value == "" ? false : true }
     }
 

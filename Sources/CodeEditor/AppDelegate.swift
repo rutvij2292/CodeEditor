@@ -65,14 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         CompletionSystem.start()
         ViewerSystem.start()
-        NativePHPDiagController.start()
-        NativeJSDiagController.start()
-        NativePHP.installMemoryHooks()
-        NativePy.start()
-        NativeWeb.installMemoryHooks()
-        NativeWebDiagController.start()
-        NativeJS.installMemoryHooks()
-        NativeVue.installMemoryHooks()
+        NativeEngines.start()      // native engines: diagnostics drivers + memory hooks (NativeEngines.swift)
         CompletionSystem.symbolProvider = { [weak self] in self?.active?.symbolEntries ?? [] }
         LanguageServers.start()
         LanguageServers.openLocation = { [weak self] url, line, _ in self?.active?.open(url, line: line) }
@@ -107,7 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         Self.installLanguageHandlers()
         // Laravel-aware targets (view(), route(), <x-…>) take precedence over the language server for Cmd-click / Cmd-B.
         LanguageServers.beforeDefinition = { tab, offset in
-            guard !LaravelNavigator.targets(in: tab, at: offset).isEmpty else { return NativeVue.goToDefinition(in: tab, at: offset) || NativeLang.goToDefinition(in: tab, at: offset) || NativeWeb.goToDefinition(in: tab, at: offset) || NativeJS.goToDefinition(in: tab, at: offset) }
+            guard !LaravelNavigator.targets(in: tab, at: offset).isEmpty else { return NativeEngines.goToDefinition(in: tab, at: offset) }
             tab.textView.setSelectedRange(NSRange(location: offset, length: 0))
             return LaravelNavigator.goToDeclaration(in: tab, openLocation: { url, line, column in LaravelNavigator.openLocation?(url, line, column) },
                                                     over: tab.textView.window)
@@ -441,21 +434,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         previousProblemHandler = { w in if let tab = w.current, !LanguageServers.nextProblem(in: tab, forward: false) { NSSound.beep() } }
         findUsagesHandler = { w in
             guard let tab = w.current else { return }
-            if NativePHPUI.findUsages(w) || NativePyUI.findUsages(tab: tab) { return }
-            if NativeVueUI.findUsages(w) { return }
-            if NativeJSUI.findUsages(w) { return }
+            if NativeEngines.findUsages(w, tab: tab) { return }
             if !LanguageServers.findUsages(in: tab) { unavailable(w, "Find Usages isn’t available", "No language server is running for this file type yet.") }
         }
         renameHandler = { w in
             guard let tab = w.current else { return }
-            switch NativePHPUI.rename(w) {
-            case .handled: return
-            case .refused(let why):
-                if !LanguageServers.rename(in: tab, over: w.window) { unavailable(w, "Rename isn’t available here", why) }
-                return
-            case .notNative: break
-            }
-            switch NativeJSUI.rename(w) {
+            switch NativeEngines.rename(w) {
             case .handled: return
             case .refused(let why):
                 if !LanguageServers.rename(in: tab, over: w.window) { unavailable(w, "Rename isn’t available here", why) }

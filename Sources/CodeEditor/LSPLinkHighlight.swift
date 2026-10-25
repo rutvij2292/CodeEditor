@@ -10,7 +10,7 @@ extension LSPSession {
     func updateLinkHighlight(flags: NSEvent.ModifierFlags, point: NSPoint?) {
         guard flags.contains(.command), !flags.contains(.shift), !flags.contains(.option), let tv = textView,
               let point, tv.visibleRect.contains(point), let off = offsetUnderPoint(point),
-              instance(supporting: "definitionProvider") != nil || NativeLang.handles(url) || NativeWeb.handles(url) || NativeJS.handles(url) || NativeVue.handles(url) else { clearLinkHighlight(); return }
+              instance(supporting: "definitionProvider") != nil || NativeEngines.handles(url) else { clearLinkHighlight(); return }
         if tab.map({ LanguageServers.suppressHoverUnderline?($0, off) == true }) == true { clearLinkHighlight(); return }
         let word = wordRange(at: off)
         guard word.length > 0 else { clearLinkHighlight(); return }
@@ -21,66 +21,23 @@ extension LSPSession {
         linkRequests += 1
         let token = linkToken
         flushChanges()
-        let applyLink: () -> Void = { [weak self] in
+        let applyRange: (NSRange) -> Void = { [weak self] range in
             guard let self, token == self.linkToken, let tv = self.textView, let lm = tv.layoutManager,
-                  NSMaxRange(word) <= (tv.string as NSString).length, Self.commandHeld() else { return }
+                  NSMaxRange(range) <= (tv.string as NSString).length, Self.commandHeld() else { return }
             lm.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: NSColor.linkColor,
-                                       .foregroundColor: NSColor.linkColor], forCharacterRange: word)
-            self.linkRange = word
+                                       .foregroundColor: NSColor.linkColor], forCharacterRange: range)
+            self.linkRange = range
             NSCursor.pointingHand.set()
         }
-        if NativeVue.handles(url) {            // native Vue template service first; the chain below confirms only when it has no target
-            NativeVue.lookupAsync(url: url, text: text as NSString, offset: off) { [weak self] hit in
-                guard let self, token == self.linkToken else { return }
-                if let hit, hit.targets.contains(where: { !($0.path == self.url.standardizedFileURL.path && NSLocationInRange($0.offset, hit.range)) }) {
-                    guard let tv = self.textView, let lm = tv.layoutManager, NSMaxRange(hit.range) <= (tv.string as NSString).length, Self.commandHeld() else { return }
-                    lm.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: NSColor.linkColor,
-                                               .foregroundColor: NSColor.linkColor], forCharacterRange: hit.range)
-                    self.linkRange = hit.range
-                    NSCursor.pointingHand.set()
-                    return
-                }
-                self.linkChain(off: off, token: token, applyLink: applyLink)
-            }
-            return
+        let applyLink: () -> Void = { applyRange(word) }
+        let ownPath = url.standardizedFileURL.path
+        // Native engines first, in registry order; a language server confirms only when none has a target elsewhere.
+        NativeEngines.lookup(url: url, text: text as NSString, offset: off, stale: { [weak self] in self?.linkToken != token },
+                             accept: { hit, _ in hit.targets.contains { !($0.path == ownPath && NSLocationInRange($0.offset, hit.range)) } }) { [weak self] hit, engine in
+            guard let self, token == self.linkToken else { return }
+            if let hit, let engine { if engine.underlinesHitRange { applyRange(hit.range) } else { applyLink() }; return }
+            if self.instance(supporting: "definitionProvider") != nil { self.lspLinkCheck(off: off, token: token, apply: applyLink) }
         }
-        linkChain(off: off, token: token, applyLink: applyLink)
-    }
-
-    private func linkChain(off: Int, token: Int, applyLink: @escaping () -> Void) {
-        if NativeLang.handles(url) {            // native engine first (PHP, Python); a language server confirms only when native has no target
-            NativeLang.lookupAsync(url: url, text: text as NSString, offset: off) { [weak self] hit in
-                guard let self, token == self.linkToken else { return }
-                if let hit, hit.targets.contains(where: { !($0.path == self.url.standardizedFileURL.path && NSLocationInRange($0.offset, hit.range)) }) { applyLink(); return }
-                if NativeWeb.handles(self.url) {
-                    NativeWeb.lookupAsync(url: self.url, text: self.text as NSString, offset: off) { [weak self] web in
-                        guard let self, token == self.linkToken else { return }
-                        if let web, web.targets.contains(where: { !($0.path == self.url.standardizedFileURL.path && NSLocationInRange($0.offset, web.range)) }) { applyLink(); return }
-                        if self.instance(supporting: "definitionProvider") != nil { self.lspLinkCheck(off: off, token: token, apply: applyLink) }
-                    }
-                    return
-                }
-                if self.instance(supporting: "definitionProvider") != nil { self.lspLinkCheck(off: off, token: token, apply: applyLink) }
-            }
-            return
-        }
-        if NativeWeb.handles(url) {            // native CSS / HTML first; the CSS / HTML server confirms only when native has no target
-            NativeWeb.lookupAsync(url: url, text: text as NSString, offset: off) { [weak self] hit in
-                guard let self, token == self.linkToken else { return }
-                if let hit, hit.targets.contains(where: { !($0.path == self.url.standardizedFileURL.path && NSLocationInRange($0.offset, hit.range)) }) { applyLink(); return }
-                if self.instance(supporting: "definitionProvider") != nil { self.lspLinkCheck(off: off, token: token, apply: applyLink) }
-            }
-            return
-        }
-        if NativeJS.handles(url) {             // native JS / TS first; the TypeScript server confirms only when native has no target
-            NativeJS.lookupAsync(url: url, text: text as NSString, offset: off) { [weak self] hit in
-                guard let self, token == self.linkToken else { return }
-                if let hit, hit.targets.contains(where: { !($0.path == self.url.standardizedFileURL.path && NSLocationInRange($0.offset, hit.range)) }) { applyLink(); return }
-                if self.instance(supporting: "definitionProvider") != nil { self.lspLinkCheck(off: off, token: token, apply: applyLink) }
-            }
-            return
-        }
-        lspLinkCheck(off: off, token: token, apply: applyLink)
     }
 
     private func lspLinkCheck(off: Int, token: Int, apply: @escaping () -> Void) {
