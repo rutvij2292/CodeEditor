@@ -133,6 +133,7 @@ enum SelfTest {
                                         SelfTestPlans.run(w: w)
                                         SelfTestClaudeCLI.run(w: w) {
                                             SelfTestFindPopup.run(w: w) {
+                                                SelfTestEngineSwitches.run()
                                                 SelfTestLinkHover.run(w: w) {
                                                     SelfTestComposer.run(w: w)
                                                     SelfTestPerf.run(app: app)

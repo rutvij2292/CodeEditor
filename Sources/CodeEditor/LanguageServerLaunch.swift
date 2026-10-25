@@ -18,7 +18,8 @@ enum LanguageServerPrefs {
     static func key(_ id: String) -> String { "lsp.\(id).enabled" }
     static func isEnabled(_ id: String) -> Bool {
         if id == "intelephense", NativePHP.nativeOnly { return false }      // Settings > Languages > native PHP engine only
-        if NativeWeb.managedServerIds.contains(id), NativeWeb.enabled, NativeWeb.nativeOnly { return false }   // native HTML / CSS / Tailwind only
+        if NativeWeb.managedServerIds.contains(id), NativeWeb.enabled, NativeWeb.nativeOnly { return false }   // native HTML / CSS only
+        if id == NativeWeb.tailwindServerId, NativeWeb.enabled, NativeWeb.tailwindEnabled, NativeWeb.tailwindNativeOnly { return false }   // native Tailwind only
         return UserDefaults.standard.object(forKey: key(id)) as? Bool ?? true
     }
     static func setEnabled(_ id: String, _ on: Bool) { UserDefaults.standard.set(on, forKey: key(id)) }

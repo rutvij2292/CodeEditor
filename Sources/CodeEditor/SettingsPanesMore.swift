@@ -62,19 +62,32 @@ final class LanguagesPane: SettingsPane {
             onRefresh { box.state = g.enabled ? .on : .off }
             row(nil, box, help: g == .syntax ? "Checks run after edits settle, for the open file only, and stay silent when they cannot be certain (unresolved imports need a discovered virtualenv)." : nil)
         }
-        section("HTML / CSS / Tailwind")
-        let webOn = NSButton(checkboxWithTitle: "Native HTML, CSS and Tailwind services", target: nil, action: nil)
+        section("HTML / CSS")
+        let webOn = NSButton(checkboxWithTitle: "Native HTML and CSS services", target: nil, action: nil)
         webOn.target = action { c in NativeWeb.enabled = (c as? NSButton)?.state == .on }
         webOn.action = #selector(SettingsAction.fire(_:))
-        webOn.setAccessibilityLabel("Native HTML, CSS and Tailwind services")
+        webOn.setAccessibilityLabel("Native HTML and CSS services")
         onRefresh { webOn.state = NativeWeb.enabled ? .on : .off }
-        row(nil, webOn, help: "Completion, hover and go to definition for CSS, HTML and Tailwind classes come from Kode itself (the Tailwind theme is read from tailwind.config.* or @theme, no node process).")
-        let webOnly = NSButton(checkboxWithTitle: "Use native HTML / CSS / Tailwind only (stop the external servers)", target: nil, action: nil)
+        row(nil, webOn, help: "Completion, hover and go to definition for HTML and CSS come from Kode itself (no node process).")
+        let webOnly = NSButton(checkboxWithTitle: "Use native HTML / CSS only (stop the external servers)", target: nil, action: nil)
         webOnly.target = action { c in NativeWeb.setNativeOnly((c as? NSButton)?.state == .on) }
         webOnly.action = #selector(SettingsAction.fire(_:))
-        webOnly.setAccessibilityLabel("Use native HTML CSS Tailwind only")
+        webOnly.setAccessibilityLabel("Use native HTML CSS only")
         onRefresh { webOnly.state = NativeWeb.nativeOnly ? .on : .off }
-        row(nil, webOnly, help: "Does not start the HTML, CSS and Tailwind language servers (the Tailwind server alone is about 200 MB). Diagnostics and formatting from those servers are unavailable meanwhile.")
+        row(nil, webOnly, help: "Does not start the HTML and CSS language servers (about 100-165 MB). Diagnostics and formatting from those servers are unavailable meanwhile.")
+        section("Tailwind CSS")
+        let twOn = NSButton(checkboxWithTitle: "Native Tailwind engine", target: nil, action: nil)
+        twOn.target = action { c in NativeWeb.setTailwindEnabled((c as? NSButton)?.state == .on) }
+        twOn.action = #selector(SettingsAction.fire(_:))
+        twOn.setAccessibilityLabel("Native Tailwind engine")
+        onRefresh { twOn.state = NativeWeb.tailwindEnabled ? .on : .off }
+        row(nil, twOn, help: "Class completion and hover from the project's tailwind.config.* or @theme (no node process). It only loads in projects that use Tailwind; switched off, nothing Tailwind-related runs.")
+        let twOnly = NSButton(checkboxWithTitle: "Use native Tailwind only (stop the Tailwind server)", target: nil, action: nil)
+        twOnly.target = action { c in NativeWeb.setTailwindNativeOnly((c as? NSButton)?.state == .on) }
+        twOnly.action = #selector(SettingsAction.fire(_:))
+        twOnly.setAccessibilityLabel("Use native Tailwind only")
+        onRefresh { twOnly.state = NativeWeb.tailwindNativeOnly ? .on : .off }
+        row(nil, twOnly, help: "Does not start the Tailwind language server (about 345 MB). Configs that need JavaScript (presets, plugins) get no answer meanwhile.")
         section("JavaScript / TypeScript")
         let nativeJS = NSButton(checkboxWithTitle: "Native JavaScript / TypeScript engine", target: nil, action: nil)
         nativeJS.target = action { c in NativeJS.enabled = (c as? NSButton)?.state == .on; NativeJS.trimMemory() }

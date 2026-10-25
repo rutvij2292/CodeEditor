@@ -20,11 +20,40 @@ enum NativeWeb {
         set { UserDefaults.standard.set(newValue, forKey: nativeOnlyKey) }
     }
 
-    static let managedServerIds: Set<String> = ["html", "css", "tailwind"]
+    /// HTML and CSS share one engine; Tailwind is its own (below), so a project without Tailwind never touches it.
+    static let managedServerIds: Set<String> = ["html", "css"]
 
     static func setNativeOnly(_ on: Bool) {
         nativeOnly = on
         for id in managedServerIds { LanguageServerManager.shared.serverPreferenceChanged(id) }
+    }
+
+    // MARK: Tailwind (separate engine: own switches; off = no config discovery, no theme, no completion, no hover)
+
+    static let tailwindEnabledKey = "web.tailwind.enabled"
+    static let tailwindNativeOnlyKey = "web.tailwind.nativeOnly"
+    static let tailwindServerId = "tailwind"
+
+    static var tailwindEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: tailwindEnabledKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: tailwindEnabledKey) }
+    }
+
+    /// Default ON: the Tailwind server (about 345 MB) is not started; turn off to run it.
+    static var tailwindNativeOnly: Bool {
+        get { UserDefaults.standard.object(forKey: tailwindNativeOnlyKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: tailwindNativeOnlyKey) }
+    }
+
+    static func setTailwindEnabled(_ on: Bool) {
+        tailwindEnabled = on
+        trimMemory()
+        LanguageServerManager.shared.serverPreferenceChanged(tailwindServerId)
+    }
+
+    static func setTailwindNativeOnly(_ on: Bool) {
+        tailwindNativeOnly = on
+        LanguageServerManager.shared.serverPreferenceChanged(tailwindServerId)
     }
 
     enum Kind { case css, html, script }
@@ -130,7 +159,7 @@ enum NativeWeb {
         if active { activeRoots.insert(root) } else { activeRoots.remove(root) }
     }
     static func tailwindActive(for url: URL) -> Bool {
-        guard enabled else { return false }
+        guard enabled, tailwindEnabled else { return false }
         let r = root(for: url)
         activeLock.lock(); defer { activeLock.unlock() }
         return activeRoots.contains(r)
@@ -318,6 +347,7 @@ final class NWProject {
 
     /// The Tailwind setup that applies to files under `near` (nil: the project does not use Tailwind).
     func tailwind(near: String? = nil) -> NWTailwind? {
+        guard NativeWeb.tailwindEnabled else { return nil }      // separate engine: switched off = no discovery, no theme
         ensureLists()
         let tw = NWTailwindLoader.resolve(self, near: near)
         NativeWeb.noteTailwind(root: root, active: tw != nil)
