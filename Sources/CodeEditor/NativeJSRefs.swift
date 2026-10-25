@@ -11,12 +11,13 @@ struct NJSRefSymbol {
     var isMember: Bool
     var root: String
     var declFile: String
+    var importLocal = false              // the token names a default / namespace / aliased import binding: rename changes this file only (TypeScript's rule)
     var display: String { name }
     var isLocal: Bool { decls.contains { $0.local } }
 }
 
 enum NJSRefs {
-    static let maxHits = 1000
+    static let maxHits = 500
     static let maxUnresolved = 100
     static let maxFiles = 8000
     static let skipDirs: Set<String> = ["node_modules", ".git", "dist", "build", "out", ".next", ".nuxt", ".output", "coverage", "vendor", "storage", ".cache", "target", ".svelte-kit", ".turbo", "bower_components", ".yarn", "tmp"]
@@ -48,8 +49,18 @@ enum NJSRefs {
             decls = env.resolveToken(node)
         }
         decls = decls.filter { !$0.fileTop && $0.name != "default" }
+        if decls.isEmpty, !isMember, env.localBinding(name, from: node) == nil, let imp = env.doc.summary.top[name]?.first(where: { $0.kind == .import }) {
+            // `import * as ns` / a binding of a non-code module: no declaration to point at, but the binding itself can be renamed in this file
+            var s = NJSRefSymbol(name: name, decls: [NJSRes(path: env.path, sym: imp)], isMember: false, root: env.proj.root, declFile: env.path)
+            s.importLocal = true
+            return s
+        }
         guard !decls.isEmpty else { return nil }
-        return NJSRefSymbol(name: decls[0].name, decls: decls, isMember: isMember || decls[0].owner != nil, root: env.proj.root, declFile: decls[0].path)
+        var sym = NJSRefSymbol(name: decls[0].name, decls: decls, isMember: isMember || decls[0].owner != nil, root: env.proj.root, declFile: decls[0].path)
+        // a use of `import X from`, `import * as X`, `import { a as X }`, `const X = require()`: the binding is local to this file
+        if !isMember, env.localBinding(name, from: node) == nil, let imp = env.doc.summary.top[name]?.first(where: { $0.kind == .import }),
+           imp.impName == "default" || imp.impName == "*" || imp.impName == "=" || imp.impName != name { sym.name = name; sym.importLocal = true }
+        return sym
     }
 
     // MARK: collect
@@ -68,17 +79,26 @@ enum NJSRefs {
         return out
     }
 
+    /// readdir based walk (FileManager's enumerator costs ~45 ms on a 600 file project, this ~5 ms): hidden entries, symlinks and the
+    /// usual build / dependency directories are skipped.
     private static func walk(_ root: String, cancel: CancelToken?, truncated: inout Bool) -> [String] {
         var out: [String] = []
-        let fm = FileManager.default
-        guard let en = fm.enumerator(at: URL(fileURLWithPath: root), includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else { return [] }
-        for case let u as URL in en {
+        var stack = [root]
+        while let dir = stack.popLast() {
             if cancel?.isCancelled == true { break }
-            let n = u.lastPathComponent
-            if skipDirs.contains(n) { en.skipDescendants(); continue }
-            guard NJSModules.codeExts.contains(u.pathExtension.lowercased()) else { continue }
-            out.append((u.path as NSString).standardizingPath)
-            if out.count >= maxFiles { truncated = true; break }
+            guard let d = opendir(dir) else { continue }
+            while let e = readdir(d) {
+                let len = Int(e.pointee.d_namlen)
+                let type = e.pointee.d_type
+                let name = withUnsafePointer(to: &e.pointee.d_name) { $0.withMemoryRebound(to: UInt8.self, capacity: len + 1) { String(decoding: UnsafeBufferPointer(start: $0, count: len), as: UTF8.self) } }
+                if name.hasPrefix(".") { continue }
+                if type == UInt8(DT_DIR) { if !skipDirs.contains(name) { stack.append(dir + "/" + name) }; continue }
+                guard type == UInt8(DT_REG) || type == UInt8(DT_UNKNOWN) else { continue }
+                guard let dot = name.lastIndex(of: "."), NJSModules.codeExts.contains(name[name.index(after: dot)...].lowercased()) else { continue }
+                out.append(dir + "/" + name)
+                if out.count >= maxFiles { truncated = true; closedir(d); out.sort(); return out }
+            }
+            closedir(d)
         }
         out.sort()
         return out
@@ -97,6 +117,17 @@ enum NJSRefs {
             p = c.parent
         }
         return .usage
+    }
+
+    /// Declarations of member `name` read by a destructuring pattern: `const { name } = value` / `{ name: n } = value` / `function f({ name }: T)`.
+    static func patternMember(_ n: Node, _ name: String, _ env: NJSEnv, _ doc: NJSDoc) -> [NJSRes] {
+        var obj: Node? = n.parent
+        if n.kind == "property_identifier" { guard let pp = n.parent, pp.kind == "pair_pattern", let key = pp.field("key"), key == n else { return [] }; obj = pp.parent }
+        guard let o = obj, o.kind == "object_pattern", let holder = o.parent else { return [] }
+        if holder.kind == "variable_declarator", holder.field("name") == o, let v = holder.field("value"), let t = env.typeOf(v) { return env.memberOf(t, name) }
+        if holder.kind == "required_parameter" || holder.kind == "optional_parameter", holder.field("pattern") == o,
+           let tn = NJSExtractor(doc: doc).typeName(holder.field("type")), let t = env.instance(of: tn, in: doc.path) { return env.memberOf(t, name) }
+        return []
     }
 
     @inline(__always) private static func identChar(_ c: unichar) -> Bool { (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 || c == 36 || c > 127 }
@@ -135,6 +166,26 @@ enum NJSRefs {
         }
     }
 
+    static func listingDigest(_ paths: [String], _ liveTexts: [String: NSString]) -> Int {
+        var h = Hasher()
+        for p in paths { h.combine(p); h.combine(LaravelFS.mtime(p)) }
+        for (p, t) in liveTexts.sorted(by: { $0.key < $1.key }) { h.combine(p); h.combine(t.length); h.combine(t.hash) }
+        return h.finalize()
+    }
+
+    /// Project-open warm-up: builds the import graph (from the on-disk cache when there is one) so the first find usages is a warm one.
+    /// Utility QoS, bounded, skipped in power saver; nothing runs again until the project's files change.
+    static func warm(root: String) {
+        guard NativeJS.enabled, !PowerState.shared.saver, LaravelFS.exists(root + "/package.json") || LaravelFS.exists(root + "/tsconfig.json") || LaravelFS.exists(root + "/jsconfig.json") else { return }
+        DispatchQueue.global(qos: .utility).async {
+            let proj = NJSProject.shared(root: root)
+            var trunc = false
+            let paths = files(root, cancel: nil, truncated: &trunc)
+            guard paths.count < maxFiles else { return }
+            _ = proj.graph.ensureBuilt(files: paths, live: [:], modules: proj.modules, stateKey: listingDigest(paths, [:]))
+        }
+    }
+
     static func dropMemos() { memoLock.lock(); memos.removeAll(); memoLock.unlock() }
 
     static func collect(_ sym: NJSRefSymbol, liveDoc: NJSDoc?, liveTexts: [String: NSString], cancel: CancelToken? = nil) -> NPRefsResult {
@@ -153,13 +204,10 @@ enum NJSRefs {
             paths = files(sym.root, cancel: cancel, truncated: &trunc)
             NJSRefs.tList &+= NPStats.now() &- tList
             if trunc { result.truncated = true }
+            // a repeated search over unchanged files and buffers is answered from the memo
+            digest = listingDigest(paths, liveTexts)
             for d in sym.decls where !paths.contains(d.path) { paths.append(d.path) }      // declarations inside node_modules / .d.ts files
             for p in liveTexts.keys where !paths.contains(p) && NJSModules.codeExts.contains((p as NSString).pathExtension.lowercased()) { paths.append(p) }
-            // a repeated search over unchanged files and buffers is answered from the memo
-            var h = Hasher()
-            for p in paths { h.combine(p); h.combine(LaravelFS.mtime(p)) }
-            for (p, t) in liveTexts { h.combine(p); h.combine(t.length); h.combine(t.hash) }
-            digest = h.finalize()
             memoLock.lock()
             if let m = memos.first(where: { $0.key == memoKey && $0.digest == digest && (($0.live == nil && liveDoc == nil) || ($0.live != nil && liveDoc != nil && $0.live!.isEqual(liveDoc!.text))) }) {
                 memoLock.unlock(); return m.result
@@ -219,7 +267,8 @@ enum NJSRefs {
                         if p == sym.declFile || p == doc.path, declKeys.contains("\(p):\(n.start)") { matched = true; isDecl = true }
                         if !matched {
                             let res: [NJSRes]
-                            if k == "shorthand_property_identifier_pattern" { res = env.localBinding(nm, from: n).map { [env.resolve($0)] } ?? [] }
+                            if sym.isMember, k == "shorthand_property_identifier_pattern" || (k == "property_identifier" && n.parent?.kind == "pair_pattern") { res = patternMember(n, nm, env, doc) }
+                            else if k == "shorthand_property_identifier_pattern" { res = env.localBinding(nm, from: n).map { [env.resolve($0)] } ?? [] }
                             else { res = env.resolveToken(n) }
                             matched = res.contains { declKeys.contains("\($0.path):\($0.loc)") }
                             if !matched, sym.isMember, res.isEmpty, k == "property_identifier", let par = n.parent, par.kind == "member_expression",
@@ -231,7 +280,11 @@ enum NJSRefs {
                         }
                         if matched {
                             let (line, col) = tbl().position(of: n.start)
-                            out.hits.append(NPRefHit(path: p, range: n.range, line: line, column: col, snippet: NPText.lineText(text, n.start), role: role(of: n, isDecl: isDecl)))
+                            var h = NPRefHit(path: p, range: n.range, line: line, column: col, snippet: NPText.lineText(text, n.start), role: role(of: n, isDecl: isDecl))
+                            // rename needs to know a shorthand: `{ a }` (object literal or pattern) of a variable becomes `{ a: b }`, of a member `{ b: a }`
+                            if k == "shorthand_property_identifier" { h.form = .scopeShort }
+                            else if k == "shorthand_property_identifier_pattern" { h.form = sym.isMember ? .dollar : .scopeShort }
+                            out.hits.append(h)
                         }
                     }
                 }
@@ -342,7 +395,7 @@ enum NativeJSUI {
     }
 
     static func present(_ sym: NJSRefSymbol, result: NPRefsResult, window: NSWindow?) {
-        let list = NativePHPUI.items(for: result.hits, root: sym.root)
+        let list = hitRows(for: result.hits, root: sym.root)
         let n = result.resolvedCount
         var title = "Usages of \(sym.display) (\(n) in \(Set(result.hits.filter { $0.role != .unresolved }.map(\.path)).count) files)"
         if result.truncated { title += " - capped, narrow the search" }

@@ -18,6 +18,7 @@ enum FastTier {
     static func invalidate(root: URL) {
         FastProject.existing(root: root)?.markDirty()
         NativeWeb.invalidate(root: root)
+        NativeVue.invalidate(root: root)
         NJSRefs.dropFileList()                          // native JS find usages: the project's file listing is stale
         rootCache = rootCache.filter { $0.value == "" ? false : true }
     }

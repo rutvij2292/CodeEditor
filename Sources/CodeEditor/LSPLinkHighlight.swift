@@ -10,7 +10,7 @@ extension LSPSession {
     func updateLinkHighlight(flags: NSEvent.ModifierFlags, point: NSPoint?) {
         guard flags.contains(.command), !flags.contains(.shift), !flags.contains(.option), let tv = textView,
               let point, tv.visibleRect.contains(point), let off = offsetUnderPoint(point),
-              instance(supporting: "definitionProvider") != nil || NativeLang.handles(url) || NativeWeb.handles(url) || NativeJS.handles(url) else { clearLinkHighlight(); return }
+              instance(supporting: "definitionProvider") != nil || NativeLang.handles(url) || NativeWeb.handles(url) || NativeJS.handles(url) || NativeVue.handles(url) else { clearLinkHighlight(); return }
         if tab.map({ LanguageServers.suppressHoverUnderline?($0, off) == true }) == true { clearLinkHighlight(); return }
         let word = wordRange(at: off)
         guard word.length > 0 else { clearLinkHighlight(); return }
@@ -29,6 +29,25 @@ extension LSPSession {
             self.linkRange = word
             NSCursor.pointingHand.set()
         }
+        if NativeVue.handles(url) {            // native Vue template service first; the chain below confirms only when it has no target
+            NativeVue.lookupAsync(url: url, text: text as NSString, offset: off) { [weak self] hit in
+                guard let self, token == self.linkToken else { return }
+                if let hit, hit.targets.contains(where: { !($0.path == self.url.standardizedFileURL.path && NSLocationInRange($0.offset, hit.range)) }) {
+                    guard let tv = self.textView, let lm = tv.layoutManager, NSMaxRange(hit.range) <= (tv.string as NSString).length, Self.commandHeld() else { return }
+                    lm.addTemporaryAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue, .underlineColor: NSColor.linkColor,
+                                               .foregroundColor: NSColor.linkColor], forCharacterRange: hit.range)
+                    self.linkRange = hit.range
+                    NSCursor.pointingHand.set()
+                    return
+                }
+                self.linkChain(off: off, token: token, applyLink: applyLink)
+            }
+            return
+        }
+        linkChain(off: off, token: token, applyLink: applyLink)
+    }
+
+    private func linkChain(off: Int, token: Int, applyLink: @escaping () -> Void) {
         if NativeLang.handles(url) {            // native engine first (PHP, Python); a language server confirms only when native has no target
             NativeLang.lookupAsync(url: url, text: text as NSString, offset: off) { [weak self] hit in
                 guard let self, token == self.linkToken else { return }

@@ -51,6 +51,10 @@ struct NJSConfig {
     var baseUrl: String?             // absolute
     var rules: [NJSPathRule] = []
     var pathsBase: String            // directory the `paths` targets are relative to
+    var target: String?
+    var libs: [String]?
+    var noLib = false
+    var types: [String]?
     var hasRootDirs = false          // virtual directories (SvelteKit `$types`, ...): relative specifiers cannot be judged
 }
 
@@ -191,12 +195,17 @@ final class NJSModules {
             if let t = target, let parent = loadConfig(t, depth: depth + 1) {
                 if parent.baseUrl != nil { cfg.baseUrl = parent.baseUrl }
                 if parent.hasRootDirs { cfg.hasRootDirs = true }
+                cfg.target = parent.target; cfg.libs = parent.libs; cfg.noLib = parent.noLib; cfg.types = parent.types
                 if !parent.rules.isEmpty { cfg.rules = parent.rules; cfg.pathsBase = parent.pathsBase; parentDefinesPaths = true }
             }
         }
         _ = parentDefinesPaths
         if let co = raw["compilerOptions"] as? [String: Any] {
             if co["rootDirs"] != nil { cfg.hasRootDirs = true }
+            if let t = co["target"] as? String { cfg.target = t }
+            if let l = co["lib"] as? [String] { cfg.libs = l }
+            if let n = co["noLib"] as? Bool { cfg.noLib = n }
+            if let t = co["types"] as? [String] { cfg.types = t }
             if let b = co["baseUrl"] as? String { cfg.baseUrl = NJSModules.join(dir, b) }
             if let paths = co["paths"] as? [String: Any] {
                 cfg.rules = []
@@ -237,7 +246,7 @@ final class NJSModules {
         var d = dir, found = ""
         for _ in 0..<40 {
             for n in ["tsconfig.json", "jsconfig.json"] where NJSModules.isFile(d + "/" + n) { found = d + "/" + n; break }
-            if !found.isEmpty || d == "/" || d.isEmpty || d == root { break }
+            if !found.isEmpty || d == "/" || d.isEmpty { break }
             d = (d as NSString).deletingLastPathComponent
         }
         lock.lock(); configForDir[dir] = found; lock.unlock()

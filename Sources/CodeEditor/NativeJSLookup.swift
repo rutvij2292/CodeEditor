@@ -7,9 +7,9 @@ extension NJSEnv {
     private static let identKinds: Set<String> = ["identifier", "type_identifier", "property_identifier", "private_property_identifier", "shorthand_property_identifier"]
 
     func target(_ r: NJSRes) -> NPTarget {
-        if r.fileTop { return NPTarget(path: r.path, offset: 0, line: 1, column: 1) }
-        let (line, col) = text(r.path).map { NPText.lineCol($0, r.loc) } ?? (1, 1)
-        return NPTarget(path: r.path, offset: r.loc, line: line, column: col)
+        if r.fileTop { return NPTarget(path: NJSTypes.realPath(r.path), offset: 0, line: 1, column: 1) }
+        let (line, col) = lineCol(r.path, r.loc)
+        return NPTarget(path: NJSTypes.realPath(r.path), offset: r.loc, line: line, column: col)
     }
 
     func lookup(at offset: Int) -> NPHit? {
@@ -53,12 +53,12 @@ extension NJSEnv {
                 guard let t = proj.modules.resolve(spec, from: path) else { return [] }
                 return NJSEnv.isCode(t) ? exportOf(t, nm) : []
             }
-            return resolveTop(path, nm)
+            return resolveName(path, nm)
         case "jsx_opening_element", "jsx_self_closing_element", "jsx_closing_element":
             if node.kind == "identifier", let f = name.unicodeScalars.first, f.properties.isLowercase { return [] }   // intrinsic element
         case "nested_type_identifier":
             if let nm = parent.field("name"), nm == node, let m = parent.field("module") {
-                let base: [NJSRes] = m.kind == "identifier" ? (localBinding(m.text(ns), from: m).map { [resolve($0)] } ?? resolveTop(path, m.text(ns))) : []
+                let base: [NJSRes] = m.kind == "identifier" ? (localBinding(m.text(ns), from: m).map { [resolve($0)] } ?? resolveName(path, m.text(ns))) : []
                 guard let t = tv(of: base) else { return [] }
                 return memberOf(t, name)
             }
@@ -68,7 +68,7 @@ extension NJSEnv {
         }
         if node.kind == "shorthand_property_identifier_pattern" { return [] }
         if let b = localBinding(name, from: node) { return [resolve(b)] }
-        return resolveTop(path, name)
+        return resolveName(path, name)
     }
 
     private func moduleHit(_ n: Node) -> NPHit? {
@@ -89,7 +89,7 @@ extension NJSEnv {
         }
         guard isSpec, let frag = str.kids.first(where: { $0.kind == "string_fragment" }) else { return nil }
         let spec = frag.text(ns)
-        guard let target = proj.modules.resolve(spec, from: path) else { return nil }
+        guard let target = resolveModule(spec, from: path) else { return nil }
         let res = NJSRes(fileTop: target)
         return NPHit(range: frag.range, targets: [self.target(res)], markdown: markdown(res, others: 0), kind: "module")
     }

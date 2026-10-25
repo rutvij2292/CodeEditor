@@ -3,13 +3,19 @@ import SwiftTreeSitter
 
 /// Turns a parsed JS/TS file into its compact `NJSSummary`: top level declarations (with class / interface / enum / namespace /
 /// object-literal members), import bindings, and the export table (ES modules, `export =`, CommonJS). Only offsets are stored.
+final class NJSImportBox { var map: [String: (src: String, name: String)] = [:] }
+
 struct NJSExtractor {
     let doc: NJSDoc
+    let imports = NJSImportBox()          // import bindings seen so far (name -> module, imported name)
     var ns: NSString { doc.text }
 
     func extract() -> NJSSummary {
         let s = NJSSummary()
-        for n in doc.root.kids { statement(n, s, exp: nil) }
+        for n in doc.root.kids {
+            statement(n, s, exp: nil)
+            if n.kind == "import_statement" { for sy in s.order where sy.kind == .import { if let src = sy.impSource, let nm = sy.impName { imports.map[sy.name] = (src, nm) } } }
+        }
         return s
     }
 
@@ -85,7 +91,10 @@ struct NJSExtractor {
         switch node.kind {
         case "import_statement": importStatement(node, s)
         case "export_statement": exportStatement(node, s)
-        case "expression_statement": commonJS(node, s)
+        case "expression_statement":
+            if let m = node.kids.first, m.kind == "internal_module" || m.kind == "module" {            // `namespace X { }` at the top level
+                for sy in syms(for: m, outer: exp ?? node, ambient: false) { s.add(sy) }
+            } else { commonJS(node, s) }
         default:
             for sy in syms(for: node, outer: exp ?? node, ambient: false) {
                 if exp != nil { sy.exported = true; s.exports[sy.name] = s.exports[sy.name] ?? .local(sy.name) }
@@ -220,6 +229,9 @@ struct NJSExtractor {
             let sy = sym(n, .function, outer: outer, sigEnd: node.field("body")?.start ?? node.end)
             sy.typeName = typeName(node.field("return_type"))
             if let t = sy.typeName, typeParams(node).contains(t) { sy.typeName = nil }
+            if sy.typeName == nil { sy.returnMembers = returnShape(node) }
+            sy.sigText = fnSig(node)
+            sy.overload = node.kind == "function_signature"
             return [sy]
         case "class_declaration", "abstract_class_declaration", "class":
             guard let n = node.field("name") else { return [] }
@@ -241,6 +253,13 @@ struct NJSExtractor {
             guard let n = node.field("name") else { return [] }
             let sy = sym(n, .typeAlias, outer: outer, sigEnd: node.end)
             if let v = node.field("value"), v.kind == "object_type" { sy.members = signatureMembers(v, typeParams: typeParams(node)) }
+            else if let v = node.field("value"), v.kind == "intersection_type" {            // type A<T> = T & B<T> & { x: number }
+                let tps = typeParams(node)
+                for part in v.kids {
+                    if part.kind == "object_type" { sy.members += signatureMembers(part, typeParams: tps) }
+                    else if let nm = typeName(part), !tps.contains(nm) { sy.heritage.append(nm) }
+                }
+            }
             return [sy]
         case "enum_declaration":
             guard let n = node.field("name") else { return [] }
@@ -259,7 +278,7 @@ struct NJSExtractor {
             guard let n = node.field("name"), n.kind == "identifier" || n.kind == "nested_identifier" else { return [] }
             let nameNode = n.kind == "nested_identifier" ? (n.kids.first ?? n) : n
             let sy = sym(nameNode, .namespace, outer: outer, sigEnd: node.field("body")?.start ?? node.end)
-            if let body = node.field("body") { sy.members = namespaceMembers(body, ambient: ambient || outer.kind == "ambient_declaration") }
+            if let body = node.field("body") { sy.members = namespaceMembers(body, ambient: ambient || outer.kind == "ambient_declaration" || doc.path.hasSuffix(".d.ts")) }
             return [sy]
         case "ambient_declaration":
             var out: [NJSSym] = []
@@ -312,7 +331,18 @@ struct NJSExtractor {
             sy.keyword = keyword
             if let spec = requireSpec { sy.kind = .import; sy.impSource = spec; sy.impName = "="; sy.keyword = nil }
             sy.typeName = typeName(d.field("type")) ?? newName(value)
+            if let q = d.field("type")?.kids.first, q.kind == "type_query", let id = q.kids.first, id.kind == "identifier" { sy.aliasOf = id.text(ns) }
             if let v = value, v.kind == "object" { sy.members = objectMembers(v) }
+            else if let v = value, v.kind == "arrow_function" || v.kind == "function_expression" {
+                if v.field("return_type") == nil { sy.returnMembers = returnShape(v) }
+                sy.sigText = fnSig(v)
+            }
+            else if let v = value, v.kind == "call_expression", let sh = shape(of: v, imported: { self.imports.map[$0].map { ($0.src, $0.name) } }) {
+                sy.members = sh.members
+                sy.valueMembers = sh.valueMembers
+                if sy.typeName == nil { sy.typeName = sh.typeName }
+            }
+            if let ta = d.field("type")?.kids.first, ta.kind == "object_type" { sy.members = signatureMembers(ta, typeParams: []) }       // `declare var x: { go(): void }`
             if sy.typeName == nil, let v = value, v.kind == "call_expression", let f = v.field("function"), f.kind == "identifier" || f.kind == "member_expression" { sy.initCall = f.text(ns) }
             out.append(sy)
         } else {
@@ -349,6 +379,7 @@ struct NJSExtractor {
                 mem.isStatic = isStatic
                 mem.typeName = typeName(m.field("return_type"))
                 if let t = mem.typeName, tps.contains(t) || typeParams(m).contains(t) { mem.typeName = nil }
+                mem.sigText = fnSig(m)
                 (mem.docStart, mem.docEnd) = docRange(before: m)
                 add(mem)
                 if nm == "constructor", let b = m.field("body") {
@@ -368,6 +399,7 @@ struct NJSExtractor {
                 mem.isStatic = m.allKids.contains { $0.kind == "static" && $0.start < nn.start }
                 mem.typeName = typeName(m.field("type")) ?? newName(m.field("value"))
                 if let t = mem.typeName, tps.contains(t) { mem.typeName = nil }
+                if let v = m.field("value"), v.kind == "arrow_function" || v.kind == "function_expression" { mem.sigText = fnSig(v) }
                 (mem.docStart, mem.docEnd) = docRange(before: m)
                 add(mem)
             default: break
@@ -394,11 +426,20 @@ struct NJSExtractor {
         var out: [NJSMember] = []
         for m in body.kids {
             switch m.kind {
+            case "construct_signature", "call_signature":                 // `new (...): T` / `(...): T` of a constructor / callable interface
+                let isNew = m.kind == "construct_signature"
+                var mem = NJSMember(name: isNew ? "new" : "()", kind: .method, loc: m.start, len: isNew ? 3 : 1, declStart: m.start, sigEnd: m.end)
+                mem.typeName = typeName(m.field(isNew ? "type" : "return_type"))
+                if let t = mem.typeName, tps.contains(t) || typeParams(m).contains(t) { mem.typeName = nil }
+                mem.sigText = fnSig(m)
+                (mem.docStart, mem.docEnd) = docRange(before: m)
+                out.append(mem)
             case "property_signature", "method_signature":
                 guard let (nm, nn) = memberName(m.field("name")) else { continue }
                 var mem = NJSMember(name: nm, kind: m.kind == "method_signature" ? .method : .property, loc: nn.start, len: nn.range.length, declStart: m.start, sigEnd: m.end)
                 mem.typeName = typeName(m.field(m.kind == "method_signature" ? "return_type" : "type"))
                 if let t = mem.typeName, tps.contains(t) || typeParams(m).contains(t) { mem.typeName = nil }
+                if m.kind == "method_signature" { mem.sigText = fnSig(m) }
                 (mem.docStart, mem.docEnd) = docRange(before: m)
                 out.append(mem)
             default: break
@@ -443,11 +484,107 @@ struct NJSExtractor {
             for sy in syms(for: decl, outer: outer, ambient: ambient) {
                 var m = NJSMember(name: sy.name, kind: sy.kind, loc: sy.loc, len: sy.len, declStart: sy.declStart, sigEnd: sy.sigEnd, docStart: sy.docStart, docEnd: sy.docEnd)
                 m.typeName = sy.typeName
+                m.sigText = sy.sigText
                 if !sy.members.isEmpty { m.sub = sy.members }
                 m.heritage = sy.heritage
                 out.append(m)
             }
         }
         return out
+    }
+}
+
+
+// MARK: shapes of well known factory calls
+
+extension NJSExtractor {
+    /// Factories whose result has the properties of the object literal they are given (Vue reactivity, Inertia forms).
+    static let shapeFactories: [String: Set<String>] = [
+        "vue": ["reactive", "shallowReactive", "readonly", "shallowReadonly"],
+        "@vue/reactivity": ["reactive", "shallowReactive", "readonly", "shallowReadonly"],
+        "@inertiajs/vue3": ["useForm"], "@inertiajs/react": ["useForm"], "@inertiajs/inertia-vue3": ["useForm"], "@inertiajs/inertia-react": ["useForm"],
+    ]
+
+    /// Members (declared at the literal's keys) / type of what `call` returns, for `defineProps(...)` in a `<script setup>` block
+    /// (a compiler macro: only when nothing by that name is imported) and for the factories above when imported from the library.
+    /// nil for everything else.
+    func shape(of call: Node, imported: (String) -> (String, String)?) -> (members: [NJSMember], typeName: String?, valueMembers: [NJSMember])? {
+        guard let f = call.field("function"), f.kind == "identifier", let args = call.field("arguments") else { return nil }
+        let callee = f.text(ns)
+        let imp = imported(callee)
+        if callee == "withDefaults" || callee == "defineProps" {
+            guard doc.isVue, imp == nil else { return nil }
+            if callee == "withDefaults" {
+                guard let inner = args.kids.first, inner.kind == "call_expression" else { return nil }
+                return shape(of: inner, imported: imported)
+            }
+            if let ta = call.field("type_arguments"), let t = ta.kids.first {
+                if t.kind == "object_type" { return (signatureMembers(t, typeParams: []), nil, []) }
+                if let nm = typeName(t) { return ([], nm, []) }
+                return nil
+            }
+            guard let a = args.kids.first else { return nil }
+            if a.kind == "object" { return (objectMembers(a), nil, []) }
+            if a.kind == "array" {
+                var out: [NJSMember] = []
+                for e in a.kids where e.kind == "string" {
+                    guard let frag = e.kids.first(where: { $0.kind == "string_fragment" }) else { continue }
+                    out.append(NJSMember(name: frag.text(ns), kind: .property, loc: frag.start, len: frag.range.length, declStart: e.start, sigEnd: e.end))
+                }
+                return (out, nil, [])
+            }
+            return nil
+        }
+        guard let (src, name) = imp else { return nil }
+        if (src == "vue" || src == "@vue/reactivity"), name == "ref" || name == "shallowRef" {       // the object goes into .value
+            if let a = args.kids.first, a.kind == "object" { return ([], nil, objectMembers(a)) }
+            return nil
+        }
+        guard NJSExtractor.shapeFactories[src]?.contains(name) == true else { return nil }
+        for a in args.kids where a.kind == "object" { return (objectMembers(a), nil, []) }
+        return nil
+    }
+}
+
+
+extension NJSExtractor {
+    /// Properties of a function's result when its only `return` hands back an object literal made of plain keys (no spreads, no computed
+    /// keys): TypeScript infers exactly that shape, declared at those keys. Async / generator functions return something else.
+    func returnShape(_ fn: Node) -> [NJSMember] {
+        guard !fn.allKids.contains(where: { $0.kind == "async" || $0.kind == "*" }), let body = fn.field("body") else { return [] }
+        var obj: Node?
+        if body.kind == "parenthesized_expression", let o = body.kids.first, o.kind == "object" { obj = o }
+        else if body.kind == "statement_block" {
+            var returns: [Node] = []
+            var stack = body.kids
+            var visited = 0
+            while let n = stack.popLast(), visited < 4000 {
+                visited += 1
+                if n.kind == "return_statement" { returns.append(n); if returns.count > 1 { return [] } }
+                if ["function_declaration", "function_expression", "function", "arrow_function", "generator_function", "generator_function_declaration", "method_definition", "class_declaration", "class"].contains(n.kind) { continue }
+                stack.append(contentsOf: n.kids)
+            }
+            guard returns.count == 1, let arg = returns[0].kids.first else { return [] }
+            if arg.kind == "object" { obj = arg } else if arg.kind == "parenthesized_expression", let o = arg.kids.first, o.kind == "object" { obj = o }
+        }
+        guard let o = obj, o.kids.allSatisfy({ ["pair", "method_definition", "shorthand_property_identifier"].contains($0.kind) }) else { return [] }
+        let members = objectMembers(o)
+        return members.count == o.kids.count ? members : []
+    }
+}
+
+
+extension NJSExtractor {
+    /// `<T>(a: number, b?: string): string` of a function-like node (parameters + type parameters + return annotation), whitespace collapsed.
+    func fnSig(_ fn: Node) -> String? {
+        guard let params = fn.field("parameters") ?? fn.field("parameter") else { return nil }
+        var start = params.start
+        if let tp = fn.field("type_parameters") { start = min(start, tp.start) }
+        var end = params.end
+        if let rt = fn.field("return_type") ?? (fn.kind == "construct_signature" ? fn.field("type") : nil) { end = max(end, rt.end) }
+        guard end > start, end - start < 600 else { return nil }
+        var t = ns.substring(with: NSRange(location: start, length: end - start)).replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        if params.kind == "identifier" { t = "(" + t + ")" }              // `x => ...`
+        return t
     }
 }

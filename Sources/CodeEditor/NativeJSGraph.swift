@@ -13,9 +13,13 @@ final class NJSFileScan {
     var stamp: Int64 = 0
     var edges: [NJSEdge] = []
     var exportsList = false     // `export { a }` / `export default someIdentifier`: may re-export an imported binding
+    var exportNames: [String] = []     // names this file exports (declarations and `export { a as b }`), for auto-import
+    var hasDefault = false
+    var defaultName = ""        // `export default function Foo` -> Foo; empty when anonymous
     var cfgStamp: Int64 = 0
     var resolved: [String?] = []
-    var cost: Int { 120 + edges.reduce(0) { $0 + $1.spec.utf8.count + 40 } }
+    var rechecked = false       // loaded from disk: unresolved specifiers were looked up again in this process
+    var cost: Int { 140 + edges.reduce(0) { $0 + $1.spec.utf8.count + 40 } + exportNames.reduce(0) { $0 + $1.utf8.count + 24 } }
 }
 
 enum NJSScanner {
@@ -71,13 +75,55 @@ enum NJSScanner {
             let c = b[i]
             if c == 101, i == 0 || !isIdent(b[i - 1]), has(b, at: i, "export") {          // export
                 var j = i + 6
-                while j < n, b[j] == 32 || b[j] == 9 || b[j] == 10 || b[j] == 13 { j += 1 }
-                if j < n, b[j] == 123 { out.exportsList = true }
-                else if has(b, at: j, "default") {
+                func skipSpace() { while j < n, b[j] == 32 || b[j] == 9 || b[j] == 10 || b[j] == 13 { j += 1 } }
+                func ident() -> String? {
+                    let st = j
+                    while j < n, isIdent(b[j]) { j += 1 }
+                    return j > st ? String(decoding: UnsafeBufferPointer(rebasing: b[st..<j]), as: UTF8.self) : nil
+                }
+                skipSpace()
+                if j < n, b[j] == 123 {                                                    // export { a, b as c } [from '...']
+                    out.exportsList = true
+                    j += 1
+                    var last: String?
+                    var guardN = 0
+                    while j < n, b[j] != 125, guardN < 2000 {
+                        guardN += 1
+                        skipSpace()
+                        if j >= n || b[j] == 125 { break }
+                        if let id = ident() { if id != "as" { last = id } }
+                        else if j < n, b[j] == 44 { if let l = last, l != "default", out.exportNames.count < 300 { out.exportNames.append(l) }; last = nil; j += 1 }
+                        else { j += 1 }
+                    }
+                    if let l = last, l != "default", out.exportNames.count < 300 { out.exportNames.append(l) }
+                } else if has(b, at: j, "default") {
                     j += 7
                     while j < n, b[j] == 32 || b[j] == 9 { j += 1 }
-                    if j < n, isIdent(b[j]), !(has(b, at: j, "function") || has(b, at: j, "class") || has(b, at: j, "async") || has(b, at: j, "abstract")
-                        || has(b, at: j, "interface") || has(b, at: j, "enum") || has(b, at: j, "await") || has(b, at: j, "new") || has(b, at: j, "typeof")) { out.exportsList = true }
+                    out.hasDefault = true
+                    var k = j
+                    func word(_ w: StaticString) -> Bool { if has(b, at: k, w) { k += w.utf8CodeUnitCount; return true }; return false }
+                    var named = false
+                    if word("async") { while k < n, b[k] == 32 { k += 1 } }
+                    if word("abstract") { while k < n, b[k] == 32 { k += 1 } }
+                    if word("function") { named = true; while k < n, b[k] == 32 || b[k] == 42 { k += 1 } } else if word("class") { named = true; while k < n, b[k] == 32 { k += 1 } }
+                    if named {
+                        j = k
+                        if let id = ident(), id != "extends", id != "implements" { out.defaultName = id }
+                    }
+                    if !named, j < n, isIdent(b[j]), !(has(b, at: j, "interface") || has(b, at: j, "enum") || has(b, at: j, "await") || has(b, at: j, "new") || has(b, at: j, "typeof")) { out.exportsList = true }
+                } else {
+                    // export [declare] [async|abstract] function|class|const|let|var|interface|type|enum|namespace Name
+                    var k = j
+                    func word(_ w: StaticString) -> Bool { if has(b, at: k, w) { k += w.utf8CodeUnitCount; return true }; return false }
+                    func space() { while k < n, b[k] == 32 || b[k] == 9 { k += 1 } }
+                    if word("declare") { space() }
+                    if word("async") { space() }
+                    if word("abstract") { space() }
+                    if word("function") || word("class") || word("const") || word("let") || word("var") || word("interface") || word("type") || word("enum") || word("namespace") {
+                        while k < n, b[k] == 32 || b[k] == 9 || b[k] == 42 { k += 1 }
+                        j = k
+                        if let id = ident(), out.exportNames.count < 300 { out.exportNames.append(id) }
+                    }
                 }
                 i += 6; continue
             }
@@ -138,7 +184,10 @@ final class NJSImportGraph {
     private var scans: [String: NJSFileScan] = [:]
     private var cost = 0
     var misses = 0
-    static let maxCost = 1_500_000
+    static let maxCost = 3_000_000
+
+    /// Snapshot of every scan held in memory (auto-import reads the export names).
+    func snapshot() -> [String: NJSFileScan] { lock.lock(); defer { lock.unlock() }; return scans }
 
     func clear() { lock.lock(); scans.removeAll(); cost = 0; built = nil; lock.unlock() }
     var count: Int { lock.lock(); defer { lock.unlock() }; return scans.count }
@@ -146,7 +195,14 @@ final class NJSImportGraph {
     func scan(_ path: String, stamp: Int64, live: NSString?, cfgStamp: Int64, modules: NJSModules) -> NJSFileScan? {
         if live == nil {
             lock.lock()
-            if let s = scans[path], s.stamp == stamp, s.cfgStamp == cfgStamp { lock.unlock(); return s }
+            if let s = scans[path], s.stamp == stamp, s.cfgStamp == cfgStamp {
+                lock.unlock()
+                if !s.rechecked {                  // a file added since the scan may satisfy a specifier that did not resolve then
+                    for (k, r) in s.resolved.enumerated() where r == nil { s.resolved[k] = modules.resolve(s.edges[k].spec, from: path) }
+                    s.rechecked = true
+                }
+                return s
+            }
             lock.unlock()
         }
         lock.lock(); misses += 1; lock.unlock()
@@ -180,22 +236,26 @@ final class NJSImportGraph {
         var viaBinding: Set<String>        // files importing a reachable module through a default / namespace / require binding
     }
 
-    /// Files that can refer to a symbol declared in `declFiles`. `members`: any import chain counts (a type can reach a file through
-    /// other modules' signatures); otherwise only re-exporting chains do.
     var dbg = (misses: 0, externals: 0, projectMs: 0.0, extMs: 0.0, bfsMs: 0.0, entries: 0)
 
     private var built: (key: Int, scanned: [String: NJSFileScan], reverse: [String: [(String, NJSEdge)]])?
+    private var loadedFromDisk = false
+    private var missesAtSave = 0
 
-    /// `stateKey` identifies the exact state of every file (stamps + live buffers): the built graph is reused while it is unchanged.
-    func candidates(declFiles: [String], members: Bool, files: [String], live: [String: NSString], modules: NJSModules, stateKey: Int) -> Candidates {
+    typealias Built = (scanned: [String: NJSFileScan], reverse: [String: [(String, NJSEdge)]])
+
+    /// The reverse import graph for the exact state `stateKey` (stamps + live buffers), built once and reused while it is unchanged.
+    /// The first build of a process starts from the on-disk scan cache, so a relaunch only stats the files.
+    func ensureBuilt(files: [String], live: [String: NSString], modules: NJSModules, stateKey: Int) -> Built {
         let cfg = modules.configStamp()
         var h = Hasher(); h.combine(stateKey); h.combine(cfg); h.combine(LaravelFS.mtime(modules.root + "/node_modules"))
         let key = h.finalize()
+        lock.lock(); let cached = built; let needLoad = !loadedFromDisk; loadedFromDisk = true; lock.unlock()
+        if let c = cached, c.key == key { return (c.scanned, c.reverse) }
+        if needLoad { loadFromDisk(root: modules.root) }
+        let t0 = NPStats.now()
         var scanned: [String: NJSFileScan] = [:]
         var reverse: [String: [(String, NJSEdge)]] = [:]
-        lock.lock(); let cached = built; lock.unlock()
-        let t0 = NPStats.now()
-        if let c = cached, c.key == key { scanned = c.scanned; reverse = c.reverse } else {
         // reading + scanning 600 files is I/O and byte crunching: split it over the cores
         let chunk = max(1, files.count / (ProcessInfo.processInfo.activeProcessorCount * 4))
         let chunks = (files.count + chunk - 1) / chunk
@@ -231,11 +291,17 @@ final class NJSImportGraph {
             for (k, e) in s.edges.enumerated() { if let t = s.resolved[k] { reverse[t, default: []].append((x, e)) } }
             if s.exportsList || s.edges.contains(where: { $0.reexport }) { enqueue(s) }      // only re-exporting files can lead further
         }
+        dbg.extMs = Double(NPStats.now() &- t1) / 1e6; dbg.entries = count
         lock.lock(); built = (key, scanned, reverse); lock.unlock()
-        }
+        saveToDiskIfNeeded(root: modules.root)
+        return (scanned, reverse)
+    }
+
+    /// Files that can refer to a symbol declared in `declFiles`. `members`: any import chain counts (a type can reach a file through
+    /// other modules' signatures); otherwise only re-exporting chains do.
+    func candidates(declFiles: [String], members: Bool, files: [String], live: [String: NSString], modules: NJSModules, stateKey: Int) -> Candidates {
+        let (scanned, reverse) = ensureBuilt(files: files, live: live, modules: modules, stateKey: stateKey)
         let t2 = NPStats.now()
-        let t1 = t2
-        dbg.extMs = Double(t2 &- t1) / 1e6; dbg.entries = count
         defer { dbg.bfsMs = Double(NPStats.now() &- t2) / 1e6 }
         var reach = Set(declFiles)
         var queue = declFiles
@@ -248,6 +314,94 @@ final class NJSImportGraph {
             }
         }
         return out
+    }
+
+    // MARK: on-disk scan cache (~/Library/Caches/CodeEditor/native-js/<project hash>.graph)
+
+    static let diskVersion: UInt32 = 2
+    static var cacheDirectory = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Caches/CodeEditor/native-js", isDirectory: true)
+
+    static func cacheFile(_ root: String) -> URL {
+        var h: UInt64 = 0xcbf29ce484222325                       // FNV-1a: stable across launches (Hasher is seeded per process)
+        for b in root.utf8 { h = (h ^ UInt64(b)) &* 0x100000001b3 }
+        return cacheDirectory.appendingPathComponent(String(h, radix: 16) + ".graph")
+    }
+
+    private func saveToDiskIfNeeded(root: String) {
+        lock.lock()
+        let fresh = misses - missesAtSave
+        missesAtSave = misses
+        let snapshot = scans
+        lock.unlock()
+        guard fresh > 0, !snapshot.isEmpty else { return }
+        DispatchQueue.global(qos: .utility).async {
+            var d = Data()
+            func u16(_ v: Int) { var x = UInt16(min(v, 65535)); withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+            func u32(_ v: UInt32) { var x = v; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+            func i64(_ v: Int64) { var x = v; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
+            func str(_ s: String) { let u = Array(s.utf8.prefix(65535)); u16(u.count); d.append(contentsOf: u) }
+            d.append(contentsOf: Array("NJG".utf8)); u32(NJSImportGraph.diskVersion); u32(UInt32(snapshot.count))
+            for (path, s) in snapshot {
+                str(path); i64(s.stamp); i64(s.cfgStamp); d.append(s.exportsList ? 1 : 0); u16(s.edges.count)
+                for (k, e) in s.edges.enumerated() {
+                    str(e.spec); d.append((e.reexport ? 1 : 0) | (e.binding ? 2 : 0))
+                    str(k < s.resolved.count ? (s.resolved[k] ?? "") : "")
+                }
+                u16(s.exportNames.count)
+                for nme in s.exportNames { str(nme) }
+                d.append(s.hasDefault ? 1 : 0); str(s.defaultName)
+            }
+            try? FileManager.default.createDirectory(at: NJSImportGraph.cacheDirectory, withIntermediateDirectories: true)
+            try? d.write(to: NJSImportGraph.cacheFile(root), options: .atomic)
+        }
+    }
+
+    private func loadFromDisk(root: String) {
+        guard let d = try? Data(contentsOf: NJSImportGraph.cacheFile(root), options: .alwaysMapped), d.count > 11 else { return }
+        var loaded: [String: NJSFileScan] = [:]
+        var cost = 0
+        d.withUnsafeBytes { raw in
+            let b = raw.bindMemory(to: UInt8.self)
+            var i = 0
+            func u16() -> Int? { guard i + 2 <= b.count else { return nil }; defer { i += 2 }; return Int(b[i]) | Int(b[i + 1]) << 8 }
+            func u32() -> UInt32? { guard i + 4 <= b.count else { return nil }; defer { i += 4 }; return UInt32(b[i]) | UInt32(b[i + 1]) << 8 | UInt32(b[i + 2]) << 16 | UInt32(b[i + 3]) << 24 }
+            func i64() -> Int64? {
+                guard i + 8 <= b.count else { return nil }
+                var v: UInt64 = 0
+                for k in 0..<8 { v |= UInt64(b[i + k]) << UInt64(8 * k) }
+                i += 8
+                return Int64(bitPattern: v)
+            }
+            func str() -> String? { guard let n = u16(), i + n <= b.count else { return nil }; defer { i += n }; return String(decoding: UnsafeBufferPointer(rebasing: b[i..<(i + n)]), as: UTF8.self) }
+            guard b.count > 11, b[0] == 78, b[1] == 74, b[2] == 71 else { return }
+            i = 3
+            guard u32() == NJSImportGraph.diskVersion, let n = u32() else { return }
+            for _ in 0..<Int(n) {
+                guard let path = str(), let stamp = i64(), let cfg = i64(), i < b.count else { return }
+                let s = NJSFileScan()
+                s.stamp = stamp; s.cfgStamp = cfg; s.exportsList = b[i] == 1; i += 1
+                guard let ec = u16() else { return }
+                for _ in 0..<ec {
+                    guard let spec = str(), i < b.count else { return }
+                    let f = b[i]; i += 1
+                    guard let r = str() else { return }
+                    s.edges.append(NJSEdge(spec: spec, reexport: f & 1 != 0, binding: f & 2 != 0))
+                    s.resolved.append(r.isEmpty ? nil : r)
+                }
+                guard let nc = u16() else { return }
+                for _ in 0..<nc { guard let nme = str() else { return }; s.exportNames.append(nme) }
+                guard i < b.count else { return }
+                s.hasDefault = b[i] == 1; i += 1
+                guard let dn = str() else { return }
+                s.defaultName = dn
+                // an edge that did not resolve may resolve today (a file was added): look those up again
+                loaded[path] = s
+                cost += s.cost
+            }
+        }
+        lock.lock()
+        if scans.isEmpty { scans = loaded; self.cost = cost; missesAtSave = misses }
+        lock.unlock()
     }
 }
 

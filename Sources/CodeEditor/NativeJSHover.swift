@@ -13,8 +13,8 @@ extension NJSEnv {
     func markdown(_ r: NJSRes, others: Int) -> String {
         let rel = r.path.hasPrefix(proj.root + "/") ? String(r.path.dropFirst(proj.root.count + 1)) : r.path
         if r.fileTop { return "```typescript\nmodule \"\(rel)\"\n```" }
-        guard let t = text(r.path), r.declStart >= 0, r.sigEnd <= t.length, r.declStart <= r.sigEnd else { return "" }
-        func slice(_ a: Int, _ b: Int) -> String { b > a ? t.substring(with: NSRange(location: a, length: b - a)) : "" }
+        guard let src = source(r.path), r.declStart >= 0, r.sigEnd <= src.length, r.declStart <= r.sigEnd else { return "" }
+        func slice(_ a: Int, _ b: Int) -> String { b > a ? src.sub(a, b) : "" }
         var label: String
         switch r.kind {
         case .variable, .constant:
@@ -36,7 +36,7 @@ extension NJSEnv {
         }
         if label.isEmpty { return "" }
         var md = "```typescript\n\(label)\n```"
-        if r.docStart >= 0, r.docEnd <= t.length, r.docEnd > r.docStart {
+        if r.docStart >= 0, r.docEnd <= src.length, r.docEnd > r.docStart {
             let d = NJSEnv.jsdoc(slice(r.docStart, r.docEnd))
             if !d.isEmpty { md += "\n\n" + d }
         }
@@ -47,16 +47,16 @@ extension NJSEnv {
 
     /// True when the declaration leaves its type to inference, so a TypeScript server (if running) has a better hover.
     func isInferred(_ r: NJSRes) -> Bool {
-        guard !r.fileTop, let t = text(r.path), r.sigEnd <= t.length, r.loc >= 0, r.loc <= r.sigEnd else { return false }
-        let tail = t.substring(with: NSRange(location: r.loc, length: r.sigEnd - r.loc))
+        guard !r.fileTop, let t = source(r.path), r.sigEnd <= t.length, r.loc >= 0, r.loc <= r.sigEnd else { return false }
+        let tail = t.sub(r.loc, r.sigEnd)
         switch r.kind {
         case .variable, .constant, .property:
             let head = tail.range(of: " = ").map { String(tail[..<$0.lowerBound]) } ?? tail
             return !head.contains(":")
         case .parameter:
-            return !t.substring(with: NSRange(location: r.declStart, length: max(0, r.sigEnd - r.declStart))).contains(":")
+            return !t.sub(r.declStart, max(r.declStart, r.sigEnd)).contains(":")
         case .function, .method, .getter:
-            let sig = t.substring(with: NSRange(location: r.declStart, length: max(0, r.sigEnd - r.declStart)))
+            let sig = t.sub(r.declStart, max(r.declStart, r.sigEnd))
             return sig.range(of: #"\)\s*:"#, options: .regularExpression) == nil
         default: return false
         }

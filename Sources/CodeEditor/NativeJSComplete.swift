@@ -221,6 +221,8 @@ final class NativeJSCompletionProvider: CompletionProvider {
                 items = names.filter { seen.insert($0.name).inserted }.map { CompletionItem(label: $0.name, insertText: $0.name, kind: NativeJSCompletion.kind($0.kind), detail: $0.kind?.label ?? "") }
             } else if prefix.location > 0, let dot = NativeJSProviderSupport.memberReceiver(snapshot, prefix) {
                 items = NativeJSProviderSupport.memberItems(proj: proj, file: file, text: snapshot, prefix: prefix, receiverEnd: dot)
+            } else if NativeJSAutoImport.enabled {
+                items = NativeJSProviderSupport.autoImportItems(proj: proj, file: file, text: snapshot, prefix: prefix)
             }
             guard self.token == mine else { return }
             deliver(items, false)

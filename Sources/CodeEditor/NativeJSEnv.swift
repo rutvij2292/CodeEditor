@@ -14,6 +14,11 @@ struct NJSRes {
     var keyword: String?
     var typeName: String?
     var initCall: String?
+    var aliasOf: String?
+    var valueMembers: [NJSMember] = []
+    var returnMembers: [NJSMember] = []
+    var sigText: String?
+    var overload = false
     var members: [NJSMember] = []
     var heritage: [String] = []
     var siblings: [NJSMember]?          // members of the enclosing namespace (heritage names resolve there first)
@@ -23,11 +28,11 @@ struct NJSRes {
 
     init(path: String, sym s: NJSSym) {
         self.path = path; name = s.name; kind = s.kind; loc = s.loc; len = s.len; declStart = s.declStart; sigEnd = s.sigEnd
-        docStart = s.docStart; docEnd = s.docEnd; keyword = s.keyword; typeName = s.typeName; initCall = s.initCall; members = s.members; heritage = s.heritage
+        docStart = s.docStart; docEnd = s.docEnd; keyword = s.keyword; typeName = s.typeName; initCall = s.initCall; aliasOf = s.aliasOf; valueMembers = s.valueMembers; returnMembers = s.returnMembers; sigText = s.sigText; overload = s.overload; members = s.members; heritage = s.heritage
     }
     init(path: String, member m: NJSMember, owner: String?, siblings: [NJSMember]? = nil) {
         self.path = path; name = m.name; kind = m.kind; loc = m.loc; len = m.len; declStart = m.declStart; sigEnd = m.sigEnd
-        docStart = m.docStart; docEnd = m.docEnd; typeName = m.typeName; members = m.sub ?? []; heritage = m.heritage
+        docStart = m.docStart; docEnd = m.docEnd; typeName = m.typeName; members = m.sub ?? []; heritage = m.heritage; sigText = m.sigText
         self.owner = owner; self.siblings = siblings
     }
     init(fileTop path: String) {
@@ -44,6 +49,8 @@ struct NJSTV {
     var res: [NJSRes]
     var isStatic: Bool
     var module: String?
+    var valueMembers: [NJSMember]?       // `ref({...})`: members of what `.value` holds
+    var valuePath: String?
 }
 
 /// Per-project state: serial queue, module resolver and a byte-capped LRU of file summaries (no trees are kept).
@@ -158,10 +165,33 @@ final class NJSEnv {
 
     init(proj: NJSProject, doc: NJSDoc) { self.proj = proj; self.doc = doc; path = doc.path }
 
-    func summary(_ p: String) -> NJSSummary? { p == path ? doc.summary : proj.summary(path: p) }
-    func text(_ p: String) -> NSString? { p == path ? doc.text : NJSTexts.text(p) }
+    func summary(_ p: String) -> NJSSummary? {
+        if p == path { return doc.summary }
+        if p.contains("#") { return ambientSummary(p) }                          // ambient module body
+        return NJSLib.isLibPath(p) ? nil : proj.summary(path: p)
+    }
+    func text(_ p: String) -> NSString? { p == path ? doc.text : NJSLib.isLibPath(p) ? nil : NJSTexts.text(NJSTypes.realPath(p)) }
 
-    static func isCode(_ p: String) -> Bool { NJSModules.codeExts.contains((p as NSString).pathExtension.lowercased()) }
+    /// Read access to a file's text by UTF-16 range; lib files are memory mapped and never turned into a string as a whole.
+    struct Source { let length: Int; let sub: (Int, Int) -> String }
+    func source(_ p: String) -> Source? {
+        if p != path, NJSLib.isLibPath(p), let f = NJSLib.file(forPath: p) { return Source(length: f.utf16Length, sub: { f.string(utf16: $0, $1) }) }
+        guard let t = text(NJSTypes.realPath(p)) else { return nil }
+        return Source(length: t.length, sub: { a, b in b > a && b <= t.length ? t.substring(with: NSRange(location: a, length: b - a)) : "" })
+    }
+
+    func lineCol(_ p: String, _ offset: Int) -> (line: Int, col: Int) {
+        if p != path, NJSLib.isLibPath(p), let f = NJSLib.file(forPath: p) { return f.lineCol(utf16: offset) }
+        return text(p).map { NPText.lineCol($0, offset) } ?? (1, 1)
+    }
+
+    static func isCode(_ p: String) -> Bool { NJSModules.codeExts.contains((NJSTypes.realPath(p) as NSString).pathExtension.lowercased()) }
+
+    /// A module specifier from `file`: a declared ambient module wins for bare names (as in tsc), then the file system.
+    func resolveModule(_ spec: String, from file: String) -> String? {
+        if !spec.hasPrefix("."), !spec.hasPrefix("/"), let a = ambientModule(spec) { return a }
+        return proj.modules.resolve(spec, from: NJSTypes.realPath(file))
+    }
 
     // MARK: top level / exports
 
@@ -171,8 +201,15 @@ final class NJSEnv {
         return resolveTopUncached(file, name, depth: depth)
     }
 
+    /// A name as seen from code in `file`: the file's own top level (imports followed), then the global scope of the program (the libs).
+    func resolveName(_ file: String, _ name: String) -> [NJSRes] {
+        let r = resolveTop(file, name)
+        return r.isEmpty ? libTop(name) : r
+    }
+
     private func resolveTopUncached(_ file: String, _ name: String, depth: Int) -> [NJSRes] {
         steps += 1
+        if !file.contains("#"), NJSLib.isLibPath(file) { return libTop(name) }       // inside a lib / @types file every name is global
         guard depth < 8, steps < 400, let s = summary(file), let syms = s.top[name] else { return [] }
         var out: [NJSRes] = []
         for sym in syms {
@@ -182,7 +219,7 @@ final class NJSEnv {
     }
 
     func followImport(_ sym: NJSSym, from file: String, depth: Int) -> [NJSRes] {
-        guard let spec = sym.impSource, let imp = sym.impName, let target = proj.modules.resolve(spec, from: file) else { return [] }
+        guard let spec = sym.impSource, let imp = sym.impName, let target = resolveModule(spec, from: file) else { return [] }
         if !NJSEnv.isCode(target) { return imp == "default" || imp == "*" || imp == "=" ? [NJSRes(fileTop: target)] : [] }
         if target.hasSuffix(".vue") { return imp == "default" || imp == "*" || imp == "=" ? [NJSRes(fileTop: target)] : exportOf(target, imp, depth: depth + 1) }
         switch imp {
@@ -223,13 +260,13 @@ final class NJSEnv {
                 let r = resolveTop(file, n, depth: depth + 1)
                 if !r.isEmpty { return r }
             case .reexport(let spec, let nm):
-                if let t = proj.modules.resolve(spec, from: file) {
+                if let t = resolveModule(spec, from: file) {
                     if !NJSEnv.isCode(t) { return nm == "default" ? [NJSRes(fileTop: t)] : [] }
                     return exportOf(t, nm, depth: depth + 1)
                 }
                 return []
             case .moduleNS(let spec):
-                return proj.modules.resolve(spec, from: file).map { [NJSRes(fileTop: $0)] } ?? []
+                return resolveModule(spec, from: file).map { [NJSRes(fileTop: $0)] } ?? []
             case .anon:
                 return [NJSRes(path: file, anon: e, name: name == "default" || name == "=" ? "default" : name)]
             }
@@ -237,11 +274,14 @@ final class NJSEnv {
         if let eq = s.exportEquals, name != "default" {                  // `export = NS`: the members of NS are the module's exports
             for base in resolveTop(file, eq, depth: depth + 1) {
                 if let m = base.members.first(where: { $0.name == name }) { return [NJSRes(path: base.path, member: m, owner: base.name, siblings: base.members)] }
+                if (base.kind == .variable || base.kind == .constant), let t = base.typeName {          // `const path: path.PlatformPath; export = path`
+                    for iface in resolveTypeRef(t, in: base.path) { let ms = members(of: iface, name: name, isStatic: false); if !ms.isEmpty { return ms } }
+                }
             }
         }
         if name != "default" {
             for star in s.stars {
-                guard let t = proj.modules.resolve(star, from: file), NJSEnv.isCode(t) else { continue }
+                guard let t = resolveModule(star, from: file), NJSEnv.isCode(t) else { continue }
                 let r = exportOf(t, name, depth: depth + 1)
                 if !r.isEmpty { return r }
             }
@@ -260,9 +300,9 @@ final class NJSEnv {
         guard let first = parts.first else { return [] }
         if parts.count == 1 {
             if let sib = siblings?.first(where: { $0.name == first }) { return [NJSRes(path: file, member: sib, owner: nil, siblings: siblings)] }
-            return resolveTop(file, first)
+            return resolveName(file, first)
         }
-        var cur = resolveTop(file, first)
+        var cur = resolveName(file, first)
         for part in parts.dropFirst() {
             var next: [NJSRes] = []
             for c in cur {
@@ -296,21 +336,23 @@ final class NJSEnv {
         var out: [NJSRes] = []
         var isStatic = false
         var module: String?
+        var valueM: [NJSMember]?, valueP: String?
         for r in res {
             if r.fileTop { module = r.path; continue }
             switch r.kind {
             case .class, .enum, .namespace: out.append(r); isStatic = true
             case .variable, .constant, .property, .parameter, .getter:
                 if let t = r.typeName { out += resolveTypeRef(t, in: r.path, siblings: r.siblings).filter { $0.kind != .function } }
-                else if !r.members.isEmpty { out.append(r) }
-                else if let c = r.initCall, let v = tvOfResult(resolveTypeRef(c, in: r.path)) { out += v.res }       // const x = f(): the declared return type of f
+                if !r.members.isEmpty { out.append(r) }             // properties declared by an object literal (also: the keys handed to a factory)
+                if !r.valueMembers.isEmpty { valueM = r.valueMembers; valueP = r.path }
+                if r.typeName == nil, let c = r.initCall, let v = tvOfResult(resolveTypeRef(c, in: r.path)) { out += v.res }       // const x = f(): the declared return type of f
             case .function, .method:
                 break
             default: break
             }
         }
-        if out.isEmpty && module == nil { return nil }
-        return NJSTV(res: out, isStatic: isStatic, module: module)
+        if out.isEmpty && module == nil && valueM == nil { return nil }
+        return NJSTV(res: out, isStatic: isStatic, module: module, valueMembers: valueM, valuePath: valueP)
     }
 
     func instance(of typeName: String, in file: String, siblings: [NJSMember]? = nil) -> NJSTV? {
@@ -329,8 +371,38 @@ final class NJSEnv {
     /// Vue's reactivity factories: whatever the overload, the result is a Ref family interface and `.value` is declared there.
     private static let vueRefs: [String: String] = ["ref": "Ref", "shallowRef": "ShallowRef", "toRef": "Ref", "customRef": "Ref", "computed": "ComputedRef"]
 
-    func tvOfResult(_ res: [NJSRes]) -> NJSTV? {
+    /// A synthetic holder of properties declared at some literal's keys.
+    static func container(_ path: String, _ members: [NJSMember]) -> NJSRes {
+        let sym = NJSSym(name: "(object)", kind: .variable, loc: 0, len: 0, declStart: 0, sigEnd: 0)
+        sym.members = members
+        return NJSRes(path: path, sym: sym)
+    }
+
+    /// `new X()` where X is `declare var X: XConstructor`: the return type of the constructor interface's `new` signature.
+    func constructed(_ res: [NJSRes]) -> NJSTV? {
+        for r in res where r.kind == .variable || r.kind == .constant {
+            guard let t = r.typeName else { continue }
+            for ctor in resolveTypeRef(t, in: r.path) {
+                for m in members(of: ctor, name: "new", isStatic: false) { if let tn = m.typeName, let v = instance(of: tn, in: m.path) { return v } }
+            }
+        }
+        return nil
+    }
+
+    /// A call of a variable typed by an interface with a call signature (`Number(x)`, `String(x)`): that signature's return type.
+    func calledResult(_ r: NJSRes) -> NJSTV? {
+        guard r.kind == .variable || r.kind == .constant, let t = r.typeName else { return nil }
+        for iface in resolveTypeRef(t, in: r.path) {
+            for m in members(of: iface, name: "()", isStatic: false) { if let tn = m.typeName, let v = instance(of: tn, in: m.path) { return v } }
+        }
+        return nil
+    }
+
+    func tvOfResult(_ res: [NJSRes], depth: Int = 0) -> NJSTV? {
         for r in res {
+            if let v = calledResult(r) { return v }
+            if !r.returnMembers.isEmpty { return NJSTV(res: [NJSEnv.container(r.path, r.returnMembers)], isStatic: false, module: nil) }
+            if let a = r.aliasOf, depth < 3, let v = tvOfResult(resolveName(r.path, a), depth: depth + 1) { return v }
             if let iface = NJSEnv.vueRefs[r.name], r.path.contains("/@vue/reactivity/"), let v = instance(of: iface, in: r.path) { return v }
             if let t = r.typeName, let v = instance(of: t, in: r.path, siblings: r.siblings) { return v }
         }
@@ -370,9 +442,10 @@ final class NJSEnv {
                 if b.typeName == nil, b.declNode.kind == "variable_declarator", b.declNode.field("name")?.kind == "identifier", let init_ = b.declNode.field("value"), init_.kind == "call_expression" { return typeOf(init_, depth: depth + 1) }
                 return nil
             }
-            return tv(of: resolveTop(path, name))
+            return tv(of: resolveName(path, name))
         case "member_expression":
             guard let o = n.field("object"), let p = n.field("property"), let base = typeOf(o, depth: depth + 1) else { return nil }
+            if p.text(doc.text) == "value", let vm = base.valueMembers, let vp = base.valuePath { return NJSTV(res: [NJSEnv.container(vp, vm)], isStatic: false, module: nil) }
             let found = memberOf(base, p.text(doc.text))
             return tv(of: found)
         case "call_expression":
@@ -381,7 +454,7 @@ final class NJSEnv {
             case "identifier":
                 let name = f.text(doc.text)
                 if let b = localBinding(name, from: f) { return tvOfResult([resolve(b)]) }
-                return tvOfResult(resolveTop(path, name))
+                return tvOfResult(resolveName(path, name))
             case "member_expression":
                 guard let o = f.field("object"), let p = f.field("property"), let base = typeOf(o, depth: depth + 1) else { return nil }
                 return tvOfResult(memberOf(base, p.text(doc.text)))
@@ -389,7 +462,8 @@ final class NJSEnv {
             }
         case "new_expression":
             guard let c = n.field("constructor"), c.kind == "identifier" || c.kind == "member_expression" else { return nil }
-            return instance(of: c.text(doc.text), in: path)
+            if let v = instance(of: c.text(doc.text), in: path) { return v }
+            return constructed(resolveName(path, c.text(doc.text)))
         case "parenthesized_expression", "non_null_expression":
             return n.kids.first.flatMap { typeOf($0, depth: depth + 1) }
         case "as_expression", "satisfies_expression", "type_assertion":
