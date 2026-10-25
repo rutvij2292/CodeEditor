@@ -96,7 +96,7 @@ extension NPResolver {
         for fqn in e.classes.prefix(3) {
             let h = ev.hierarchy(fqn)
             guard let k = h.first else { continue }
-            let (shortInsert, edits) = cur.map { FastEngine.importEdit(fqn, short: k.name, cur: $0) } ?? (k.name, [])
+            let (shortInsert, edits) = cur.map { FastEngine.importEdit(fqn, short: k.name, cur: $0, text: ns) } ?? (k.name, [])
             if k.kind == "enum" {
                 for cs in k.cases {
                     var it = CI.make("\(k.name)::\(cs)", .enumMember, detail: k.name, insert: "\(shortInsert)::\(cs)", sort: "0" + cs.lowercased(), range: range)

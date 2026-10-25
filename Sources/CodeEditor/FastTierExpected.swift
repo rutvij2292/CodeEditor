@@ -127,6 +127,8 @@ extension FTEval {
         if l.contains("int") || l == "id" || l == "foreignid" || l.hasPrefix("foreign") || l == "increments" || l == "bigincrements" { return "int" }
         if l.contains("string") || l == "text" || l == "char" || l.contains("text") || l == "uuid" || l == "ulid" || l == "enum" || l == "email" { return "string" }
         if l.contains("bool") { return "bool" }
+        if l == "array" || l == "collection" || l == "object" || l.contains("json") || l == "encrypted:array" { return "array" }
+        if l == "hashed" { return "string" }
         if l.contains("decimal") || l.contains("float") || l.contains("double") { return "float" }
         if l == "json" || l == "jsonb" { return "array" }
         if l.contains("date") || l.contains("timestamp") || l == "time" { return "Illuminate\\Support\\Carbon" }

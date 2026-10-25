@@ -740,12 +740,15 @@ final class FTEval {
                 let own = idx == 0 || (fromSameClass && k.kind == "trait")
                 func visible(_ vis: Int) -> Bool { vis == 0 || (vis == 1 && fromSameClass) || (vis == 2 && own && fromSameClass) }
                 for m in k.methods where visible(m.vis) && !m.name.hasPrefix("__") && (instance || m.isStatic || includeAll) {
-                    add(methodItem(m, sort: base + (m.isStatic == instance ? "b" : "a"), owner: k), prio: tierOf + (m.isStatic == instance ? 6 : 0))
+                    var mi = methodItem(m, sort: base + (m.isStatic == instance ? "b" : "a"), owner: k)
+                    if idx > 0 { mi.source = k.name }
+                    add(mi, prio: tierOf + (m.isStatic == instance ? 6 : 0))
                 }
                 if instance {
                     for p in k.props where !p.isStatic && visible(p.vis) {
                         var it = CI.make(p.name, .property, detail: p.type, sort: base + "a" + p.name.lowercased(), doc: k.fqn)
                         it.valueType = Self.valueType(p.type, owner: k)
+                        if idx > 0 { it.source = k.name }
                         add(it, prio: tierOf)
                     }
                 } else {
@@ -758,6 +761,16 @@ final class FTEval {
         func builderMembers(_ model: String?, base: String) {
             if let model {
                 for k in hierarchy(model) { for s in k.scopes { add(CI.make(s, .method, detail: "scope", insert: s + "($1)$0", snippet: true, sort: base + "a" + s.lowercased(), doc: "Eloquent scope on \(k.name)")) } }
+            }
+            if let model, let c = hierarchy(model).first, isModel(model) {
+                var seenWhere = 0
+                for col in fp.columns(of: c) where seenWhere < 80 {
+                    let studly = col.name.split(separator: "_").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined()
+                    guard !studly.isEmpty, let f = studly.unicodeScalars.first, CharacterSet.letters.contains(f) else { continue }
+                    seenWhere += 1
+                    add(CI.make("where" + studly, .method, detail: "dynamic where (" + col.name + ")", insert: "where\(studly)($1)$0", snippet: true, sort: base + "d" + studly.lowercased(), doc: "Dynamic `where` on column `\(col.name)`"),
+                        prio: (Int(base) ?? 0) * 10 + 9)
+                }
             }
             var found = false
             for b in [Self.eloquentBuilder, Self.queryBuilder] {
@@ -772,7 +785,13 @@ final class FTEval {
         case .instance(let f):
             classMembers(f, instance: true, includeAll: false, base: "0")
             if let c = hierarchy(f).first, isModel(f) {
-                for col in fp.columns(of: c) { var it = CI.make(col.name, .field, detail: col.type, sort: "0a" + col.name.lowercased(), doc: "Column of `\(fp.tableName(of: c))`"); it.valueType = Self.columnValueType(col.type); add(it) }
+                let casts = hierarchy(f).reduce(into: [String: String]()) { acc, k in for (n, t) in k.castTypes where acc[n] == nil { acc[n] = t } }
+                for col in fp.columns(of: c) {
+                    let cast = casts[col.name]
+                    var it = CI.make(col.name, .field, detail: cast ?? col.type, sort: "0a" + col.name.lowercased(), doc: "Column of `\(fp.tableName(of: c))`" + (cast.map { "\n\nCast: `\($0)`" } ?? ""))
+                    it.valueType = Self.columnValueType(cast ?? col.type)
+                    add(it)
+                }
                 for k in hierarchy(f) { for r in k.relations {
                     var it = CI.make(r.name, .property, detail: r.kind + (r.related.map { " " + (($0 as NSString).lastPathComponent) } ?? ""), sort: "0a" + r.name.lowercased(), doc: "Eloquent relation")
                     it.valueType = r.related.flatMap { rel in FTParser.singleRelations.contains(r.kind) ? rel : "Illuminate\\Database\\Eloquent\\Collection" }

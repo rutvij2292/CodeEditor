@@ -61,6 +61,7 @@ final class FTClass {
     var guarded: [String] = []
     var hidden: [String] = []
     var casts: [String] = []
+    var castTypes: [String: String] = [:]    // attribute -> cast type text ('datetime', 'boolean', 'array', 'decimal:2' ...)
     var appends: [String] = []
     var relations: [FTRelation] = []
     var scopes: [String] = []
@@ -71,6 +72,7 @@ final class FTClass {
         var n = 400 + fqn.utf8.count + name.utf8.count + ns.utf8.count
         for m in methods { n += 120 + m.name.utf8.count + m.params.utf8.count + m.ret.utf8.count }
         for p in props { n += 100 + p.name.utf8.count + p.type.utf8.count }
+        for (k, v) in castTypes { n += 60 + k.utf8.count + v.utf8.count }
         for s in traits + implements + consts + cases + fillable + guarded + hidden + casts + appends + scopes + accessors { n += 40 + s.utf8.count }
         for (k, v) in uses { n += 80 + k.utf8.count + v.utf8.count }
         n += useStmts.count * 100 + declLocs.count * 90 + relations.count * 120
@@ -352,7 +354,7 @@ enum FTParser {
         var values: [String] = []
         while i < end {
             if lex.toks[i].kind == .string {
-                if keysOnly { if lex.isPunct(i + 1, code: PHPTok.fat) { values.append(lex.strValue(i)) } }
+                if keysOnly { if lex.isPunct(i + 1, code: PHPTok.fat) { values.append(lex.strValue(i)); if i + 2 < end, lex.toks[i + 2].kind == .string { c.castTypes[lex.strValue(i)] = lex.strValue(i + 2) } } }
                 else { values.append(lex.strValue(i)) }
                 if keysOnly, lex.isPunct(i + 1, code: PHPTok.fat) { i += 2; continue }
             } else if lex.toks[i].kind == .punct, [40, 91, 123].contains(lex.toks[i].ch), lex.match[i] > i { i = lex.match[i] + 1; continue }
@@ -432,7 +434,10 @@ enum FTParser {
             if name == "casts", bodyFrom >= 0 {
                 var q2 = bodyFrom
                 while q2 < bodyTo {
-                    if lex.toks[q2].kind == .string, lex.isPunct(q2 + 1, code: PHPTok.fat) { c.casts.append(lex.strValue(q2)) }
+                    if lex.toks[q2].kind == .string, lex.isPunct(q2 + 1, code: PHPTok.fat) {
+                        c.casts.append(lex.strValue(q2))
+                        if q2 + 2 < bodyTo, lex.toks[q2 + 2].kind == .string { c.castTypes[lex.strValue(q2)] = lex.strValue(q2 + 2) }
+                    }
                     q2 += 1
                 }
             }

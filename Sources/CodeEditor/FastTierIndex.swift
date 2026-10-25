@@ -571,6 +571,7 @@ final class FastProject {
         prefetchLock.lock(); prefetched.removeAll(); prefetchLock.unlock()
         pathCache.removeAll(); shortCache.removeAll()
         usageTable = nil
+        FUsage.clearScanCache()
     }
 
     static func trimAll() {
@@ -657,7 +658,7 @@ final class FastProject {
         var cur: FTClass? = c
         var hops = 0
         while let k = cur, hops < 6 {
-            for n in k.fillable + k.casts + k.hidden + k.appends + k.accessors where seen.insert(n).inserted { out.append(FTColumn(name: n, type: "attribute")) }
+            for n in k.fillable + k.casts + k.hidden + k.appends + k.accessors where seen.insert(n).inserted { out.append(FTColumn(name: n, type: k.castTypes[n] ?? "attribute")) }
             cur = k.extends.flatMap { classInfo($0) }; hops += 1
         }
         return out

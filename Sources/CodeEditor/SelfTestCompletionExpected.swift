@@ -175,6 +175,21 @@ enum SelfTestCompletionExpected {
         let dd = CompletionRanker.rank(results: [([a1], false), ([a2], false)], text: "$d" as NSString, caret: 2, anchor: 0).ranked
         c("ranker: the same variable from two providers keeps the typed one", dd.count == 1 && dd[0].item.typeMatch == 1)
 
+        // auto-import coverage
+        let hd = "<?php\nnamespace App\\Http\\Controllers;\nuse App\\Models\\Cart;\nuse App\\Services\\Pricing;\nclass A {\n    /**\n     * "
+        let d1 = items(root, file, hd + "@param Mon§", manual: true)
+        let dm = d1.first { $0.label == "Money" }
+        c("docblock: `@param Mon` offers the class with its `use` edit", dm != nil && dm?.additionalEdits.first?.text == "use App\\Models\\Money;\n")
+        let useLine = (hd as NSString).range(of: "use App\\Services\\Pricing;").location
+        c("docblock: the import is sorted among the existing ones (before the Pricing line)", dm?.additionalEdits.first?.range.location == useLine)
+        c("docblock: generic argument position", items(root, file, hd + "@return Collection<int, Mon§", manual: true).contains { $0.label == "Money" })
+        c("docblock: description text after `$name` is not a type position", items(root, file, hd + "@param Cart $c some Mon§", manual: true).isEmpty)
+        c("docblock: plain comment text offers nothing", items(root, file, hd + "Mon§", manual: true).isEmpty)
+        let nm = items(root, file, "<?php\nnamespace App\\Http\\Controllers;\nuse App\\Models\\Cart;\nuse App\\Services\\Pricing;\nclass A { function f() { return new Mon§", manual: true).first { $0.label == "Money" }
+        c("import: `new Mon` brings one sorted use edit", nm?.additionalEdits.count == 1 && nm?.insertText == "Money")
+        let bl = items(root, "resources/views/x.blade.php", "<p>{{ new Mon§", manual: true).first { $0.label == "Money" }
+        c("blade: classes in {{ }} are inserted fully qualified, no edits", bl?.insertText == "\\App\\Models\\Money" && bl?.additionalEdits.isEmpty == true)
+
         // smart completion
         let s1 = head + "$pricing->format($cart->§"
         let sm1 = items(root, file, s1, manual: true, smart: true).filter { $0.typeMatch > 0 }

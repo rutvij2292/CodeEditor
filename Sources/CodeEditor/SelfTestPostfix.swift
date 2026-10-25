@@ -54,6 +54,16 @@ enum SelfTestPostfix {
         for ab in ["if", "ife", "elif", "for", "while", "sw", "try", "cls", "iface", "trait", "enum", "pubp", "prop", "inv", "get", "set", "strict"] {
             c("live template `\(ab)` exists for php", LiveTemplates.shared.has(ab, scopes: ["php"]))
         }
+        // popup rows
+        var m = CI.make("format", .method, detail: "(Money $m, array $o = ['a', 'b']): string")
+        var row = PopupRow.make(m, matches: [0])
+        c("popup row: parameter list after the name, return type right-aligned", row.params == "(Money $m, array $o = ['a', 'b'])" && row.detail == "string")
+        m.source = "Model"
+        row = PopupRow.make(m, matches: [])
+        c("popup row: inherited member shows its declaring class in the detail", row.detail == "string  Model")
+        row = PopupRow.make(CI.make("name", .property, detail: "string"), matches: [])
+        c("popup row: properties keep their type as detail, no params", row.detail == "string" && row.params.isEmpty)
+        c("popup row: deprecated flag passes through", { var d = CI.make("old", .method, detail: "()"); d.deprecated = true; return PopupRow.make(d, matches: []).deprecated }())
         c("live template `if` expands to a block", LiveTemplates.shared.lookup("if", scopes: ["php"]).map { SnippetParser.parse(LiveTemplates.snippet($0, fileURL: nil)).text.hasPrefix("if (") } == true)
     }
 }
