@@ -336,6 +336,13 @@ extension LSPSession {
             popup.setContent(LSPMarkdown.render(parts.joined(separator: "\n\n")))
             popup.show(for: self, anchor: self.screenRect(forCharacterRange: anchorRange))
         }
+        if docs, NativeJS.handles(url) {           // native JS / TS first, the TypeScript server only when it has no answer
+            NativeJS.lookupAsync(url: url, text: text as NSString, offset: offset) { [weak self] hit in
+                guard let self, token == self.hoverToken else { return }
+                if let md = hit?.markdown, !md.isEmpty { present(md) } else { self.lspHover(at: offset, docs: docs, present: present) }
+            }
+            return
+        }
         if docs, NativePHP.handles(url) {          // native PHP first, Intelephense only when it has no answer
             NativePHP.lookupAsync(url: url, text: text as NSString, offset: offset) { [weak self] hit in
                 guard let self, token == self.hoverToken else { return }

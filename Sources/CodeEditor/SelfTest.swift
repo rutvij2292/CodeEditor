@@ -21,6 +21,7 @@ enum SelfTest {
     }
 
     private static func runChecks(app: AppDelegate) {
+        SelfTestNativeJS.devHooks()
         // Hermetic: the host's battery / Low Power Mode must not switch the saver features these checks exercise.
         Prefs.powerSaver = "off"
         PowerState.shared.recompute()
@@ -88,6 +89,7 @@ enum SelfTest {
                     SelfTestNativePHPSig.run()
                     SelfTestNativePHPMisses.run()
                     SelfTestModuleRoot.run()
+                    SelfTestNativeJS.run()
                     SelfTestNativePHPStubs.run()
                     SelfTestNativePHPRefs.run(w: w)
                     SelfTestNativePHPDiag.run()
