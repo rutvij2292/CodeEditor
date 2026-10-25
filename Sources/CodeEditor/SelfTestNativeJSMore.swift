@@ -88,6 +88,56 @@ extension SelfTestNativeJS {
         check("infer: a destructured binding is not the whole value", ihit("d1.email", 0, plus: 3) == "nil")
         check("infer: top-level const x = f()", ihit("email }") == "src/util.ts:17")
 
+        put(root, "node_modules/vuealias/package.json", "{\"name\":\"vuealias\",\"types\":\"index.d.ts\"}")
+        put(root, "node_modules/vuealias/index.d.ts", "import { computed as computed$1 } from '@vue/reactivity'\ndeclare const computed: typeof computed$1\nexport { computed }\n")
+        let aliased = "import { computed } from 'vuealias'\nconst c = computed(() => 1)\nc.value\n"
+        put(root, "src/alias.ts", aliased)
+        check("infer: `declare const f: typeof g` has the type of g (Vue's runtime-core re-declares computed this way)",
+              NativeJS.lookup(url: root.appendingPathComponent("src/alias.ts"), text: aliased as NSString, offset: off(aliased, "value", 0, plus: 1), root: root.path)?.targets.first?.line == 2)
+
+        let rs = "import { ref } from 'vue'\nfunction mk(a: number) { return { hours: a, minutes: 2 } }\nconst arrow = () => ({ x: 1 })\nconst t = mk(1)\nt.hours\nconst ar = arrow()\nar.x\nconst r = ref({ to: null })\nr.value.to\nfunction two(a: number) { if (a) { return { k: 1 } } return { k: 2 } }\nconst tw = two(1)\ntw.k\nasync function asy() { return { z: 1 } }\nconst az = asy()\naz.z\n"
+        put(root, "src/rs.ts", rs)
+        func rhit(_ needle: String, _ nth: Int = 0) -> Int? {
+            NativeJS.lookup(url: root.appendingPathComponent("src/rs.ts"), text: rs as NSString, offset: off(rs, needle, nth, plus: 1), root: root.path)?.targets.first?.line
+        }
+        check("infer: a function whose only return is an object literal gives its keys", rhit("hours\nconst ar") == 2)
+        check("infer: arrow function returning ({...})", rhit("x\nconst r") == 3)
+        check("infer: ref({...}).value.key", rhit("to\nfunction") == 8)
+        check("infer: several returns / async functions are left to the server", rhit("k\nasync") == nil && rhit("z\n") == nil)
+
+        // opt-in 'native only': default off, never for Vue projects
+        let keepNative = NativeJS.nativeOnly
+        check("native only is off by default", UserDefaults.standard.object(forKey: NativeJS.nativeOnlyKey) != nil || !NativeJS.nativeOnly)
+        NativeJS.nativeOnly = true
+        put(root, "pkg-plain/package.json", "{\"name\":\"plain\"}")
+        put(root, "pkg-vue/package.json", "{\"dependencies\":{\"vue\":\"^3\"}}")
+        check("native only: a plain project gets no TypeScript server", NativeJS.suppressesTypeScriptServer(root: root.appendingPathComponent("pkg-plain")) && LanguageServerLaunch.typescript(root: root.appendingPathComponent("pkg-plain"), manager: .shared) == nil)
+        check("native only: a Vue project keeps its server", !NativeJS.suppressesTypeScriptServer(root: root.appendingPathComponent("pkg-vue")))
+        NativeJS.nativeOnly = false
+        check("native only off: nothing is suppressed", !NativeJS.suppressesTypeScriptServer(root: root.appendingPathComponent("pkg-plain")))
+        NativeJS.nativeOnly = keepNative
+
+        // factory shapes: defineProps / reactive / useForm declare their members at the literal's keys
+        put(root, "node_modules/@inertiajs/vue3/package.json", "{\"name\":\"@inertiajs/vue3\",\"types\":\"types/index.d.ts\"}")
+        put(root, "node_modules/@inertiajs/vue3/types/index.d.ts", "export declare function useForm<T>(d: T): InertiaForm<T>;\nexport type InertiaForm<T> = T & InertiaFormProps;\nexport interface InertiaFormProps { post(url: string): void; processing: boolean }\n")
+        let sfc = "<script setup lang=\"ts\">\nimport { reactive } from 'vue'\nimport { useForm } from '@inertiajs/vue3'\nconst props = defineProps({ perPage: { type: Number }, user: Object })\nconst state = reactive({ count: 0, name: 'x' })\nconst form = useForm({ email: '', pw: '' })\nprops.perPage\nstate.count\nform.email\nform.post('/x')\nconst p2 = withDefaults(defineProps<{ title: string }>(), {})\np2.title\nfunction inner() { const local = reactive({ deep: 1 }); return local.deep }\n</script>\n"
+        put(root, "src/Shape.vue", sfc)
+        let su = root.appendingPathComponent("src/Shape.vue")
+        func shit(_ needle: String, _ nth: Int = 0, plus: Int = 1) -> String {
+            let h = NativeJS.lookup(url: su, text: sfc as NSString, offset: off(sfc, needle, nth, plus: plus), root: root.path)
+            guard let t = h?.targets.first else { return "nil" }
+            return "\(t.path.hasPrefix(root.path + "/") ? String(t.path.dropFirst(root.path.count + 1)) : t.path):\(t.line)"
+        }
+        check("shape: defineProps({...}) members are the literal's keys", shit("perPage\nstate") == "src/Shape.vue:4")
+        check("shape: reactive({...}).key", shit("count\nform") == "src/Shape.vue:5")
+        check("shape: useForm({...}).key", shit("email\nform.post") == "src/Shape.vue:6")
+        check("shape: useForm(...).post falls to InertiaForm's intersected props", shit("post('/x')") == "node_modules/@inertiajs/vue3/types/index.d.ts:3")
+        check("shape: withDefaults(defineProps<{...}>()).title", shit("title\nfunction") == "src/Shape.vue:11")
+        check("shape: a reactive() local inside a function", shit("deep }") == "src/Shape.vue:13")
+        let shadow = sfc.replacingOccurrences(of: "import { reactive } from 'vue'", with: "const reactive = (x: any) => ({ other: 1 })")
+        put(root, "src/Shape2.vue", shadow)
+        check("shape: reactive that is not Vue's is not trusted", NativeJS.lookup(url: root.appendingPathComponent("src/Shape2.vue"), text: shadow as NSString, offset: off(shadow, "count\nform", 0, plus: 1), root: root.path) == nil)
+
         // completion: specifiers
         let spec = "import a from './models/"
         let t1 = complete(root.appendingPathComponent("src/x.ts"), spec, caretAfter: "./models/")

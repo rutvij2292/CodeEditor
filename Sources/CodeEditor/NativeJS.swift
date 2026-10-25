@@ -13,6 +13,19 @@ enum NativeJS {
         set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
     }
 
+    static let nativeOnlyKey = "js.nativeOnly"
+
+    /// OPT-IN (default off): do not start the TypeScript server for plain JS / TS projects. Native then answers go to definition, hover,
+    /// find usages, import / member completion and the two diagnostics; not available: rename, type errors, completion of inferred
+    /// members, lib / dependency hover with inferred types, signature help, code actions. Vue projects always keep their server (Volar
+    /// talks to tsserver). Takes effect for projects opened afterwards.
+    static var nativeOnly: Bool {
+        get { UserDefaults.standard.object(forKey: nativeOnlyKey) as? Bool ?? false }
+        set { UserDefaults.standard.set(newValue, forKey: nativeOnlyKey) }
+    }
+
+    static func suppressesTypeScriptServer(root: URL) -> Bool { enabled && nativeOnly && !LanguageServerLaunch.isVueProject(root) }
+
     static let extensions: Set<String> = ["js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "vue"]
 
     static func handles(_ url: URL) -> Bool { enabled && extensions.contains(url.pathExtension.lowercased()) }

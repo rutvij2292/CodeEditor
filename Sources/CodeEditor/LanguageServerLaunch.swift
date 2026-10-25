@@ -128,6 +128,7 @@ enum LanguageServerLaunch {
     }
 
     static func typescript(root: URL, manager: LanguageServerManager) -> LSPLaunch? {
+        if NativeJS.suppressesTypeScriptServer(root: root), !manager.vueRoots.contains(root.path) { return nil }      // opt-in: native JS / TS only (Settings > Languages)
         let env = AppEnv.value("CE_TS_MODE")
         let forceNode = env == "tsserver" || UserDefaults.standard.bool(forKey: "lsp.typescript.preferTsserver")
             || manager.vueRoots.contains(root.path) || isVueProject(root)

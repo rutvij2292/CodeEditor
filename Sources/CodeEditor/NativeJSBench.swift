@@ -115,6 +115,14 @@ enum NativeJSBench {
         dtimes.sort()
         fputs("BENCH diagnostics: \(files.count) files, p50=\(f1(pct(dtimes, 0.5))) p95=\(f1(pct(dtimes, 0.95))) max=\(f1(dtimes.last ?? 0)) ms; module-not-found=\(dn) \(missing.prefix(8))\n", stderr)
 
+        // CE_NJS_PREWARM=1: what the project-open warm-up costs (it runs at utility QoS in the background in the app)
+        if AppEnv.value("CE_NJS_PREWARM") != nil {
+            let t = Date()
+            var trunc = false
+            let list = NJSRefs.files(root, cancel: nil, truncated: &trunc)
+            _ = proj.graph.ensureBuilt(files: list, live: [:], modules: proj.modules, stateKey: NJSRefs.listingDigest(list, [:]))
+            fputs("BENCH project-open warm-up (listing + import graph, \(list.count) files): \(f1(ms(t))) ms, scan misses \(proj.graph.misses)\n", stderr)
+        }
         // find usages on the most imported top-level names
         var usageTimes: [Double] = []
         var usageOut: [String: Any] = [:]

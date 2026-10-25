@@ -162,6 +162,15 @@ extension NJSEnv {
         if let body = d.field("body"), d.kind != "variable_declarator" { sym.sigEnd = body.start }
         let ex = NJSExtractor(doc: doc)
         if d.kind == "variable_declarator", let v = d.field("value"), v.kind == "object" { sym.members = ex.objectMembers(v) }
+        else if d.kind == "variable_declarator", d.field("name")?.kind == "identifier", let v = d.field("value"), v.kind == "call_expression",
+                let sh = ex.shape(of: v, imported: { n in
+                    guard self.localBinding(n, from: v) == nil, let i = self.doc.summary.top[n]?.first(where: { $0.kind == .import }), let s = i.impSource, let nm = i.impName else { return nil }
+                    return (s, nm)
+                }) {
+            sym.members = sh.members
+            sym.valueMembers = sh.valueMembers
+            if sym.typeName == nil { sym.typeName = sh.typeName }
+        }
         else if b.kind == .class || b.kind == .interface || b.kind == .enum, let made = ex.syms(for: d, outer: d, ambient: false).first {
             sym.members = made.members; sym.heritage = made.heritage
         }

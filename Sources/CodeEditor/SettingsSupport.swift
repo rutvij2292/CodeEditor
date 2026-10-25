@@ -166,6 +166,7 @@ enum SettingsDefaults {
         UserDefaults.standard.removeObject(forKey: NativeWeb.enabledKey)
         UserDefaults.standard.removeObject(forKey: NativeWeb.nativeOnlyKey)
         UserDefaults.standard.removeObject(forKey: NativeJS.enabledKey)
+        UserDefaults.standard.removeObject(forKey: NativeJS.nativeOnlyKey)
         UserDefaults.standard.removeObject(forKey: NativeJSDiag.enabledKey)
     }
 
