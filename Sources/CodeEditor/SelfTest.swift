@@ -32,6 +32,7 @@ enum SelfTest {
             finish()
         }
         if AppEnv.value("CE_WEB_ONLY") != nil || AppEnv.value("CE_WEB_BENCH") != nil || AppEnv.value("CE_WEB_LOCATE") != nil { if let p = AppEnv.value("CE_WEB_BENCH") { NativeWebBench.run(p); exit(0) }; SelfTestNativeWeb.run(); SelfTestNativeWebPerf.run(); finish() }   // dev aid: just the native web checks
+        SelfTestNativeJS.devHooks()
         // Hermetic: the host's battery / Low Power Mode must not switch the saver features these checks exercise.
         Prefs.powerSaver = "off"
         PowerState.shared.recompute()
@@ -99,6 +100,7 @@ enum SelfTest {
                     SelfTestNativePHPSig.run()
                     SelfTestNativePHPMisses.run()
                     SelfTestModuleRoot.run()
+                    SelfTestNativeJS.run(); SelfTestNativeJS.runRefs(); SelfTestNativeJS.runExtras()
                     SelfTestNativePHPStubs.run()
                     SelfTestNativePHPRefs.run(w: w)
                     SelfTestNativePHPDiag.run()

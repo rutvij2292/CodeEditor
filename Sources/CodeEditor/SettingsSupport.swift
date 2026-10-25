@@ -165,6 +165,8 @@ enum SettingsDefaults {
         PyDiagGroup.resetPrefs()
         UserDefaults.standard.removeObject(forKey: NativeWeb.enabledKey)
         UserDefaults.standard.removeObject(forKey: NativeWeb.nativeOnlyKey)
+        UserDefaults.standard.removeObject(forKey: NativeJS.enabledKey)
+        UserDefaults.standard.removeObject(forKey: NativeJSDiag.enabledKey)
     }
 
     static func restoreTerminal() {

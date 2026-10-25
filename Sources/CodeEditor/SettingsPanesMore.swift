@@ -75,6 +75,22 @@ final class LanguagesPane: SettingsPane {
         webOnly.setAccessibilityLabel("Use native HTML CSS Tailwind only")
         onRefresh { webOnly.state = NativeWeb.nativeOnly ? .on : .off }
         row(nil, webOnly, help: "Does not start the HTML, CSS and Tailwind language servers (the Tailwind server alone is about 200 MB). Diagnostics and formatting from those servers are unavailable meanwhile.")
+        section("JavaScript / TypeScript")
+        let nativeJS = NSButton(checkboxWithTitle: "Native JavaScript / TypeScript engine", target: nil, action: nil)
+        nativeJS.target = action { c in NativeJS.enabled = (c as? NSButton)?.state == .on; NativeJS.trimMemory() }
+        nativeJS.action = #selector(SettingsAction.fire(_:))
+        nativeJS.setAccessibilityLabel("Native JavaScript and TypeScript engine")
+        onRefresh { nativeJS.state = NativeJS.enabled ? .on : .off }
+        row(nil, nativeJS, help: "Go to definition, hover, find usages, import and member completion come from Kode's built-in parser first (tsconfig paths, node_modules, re-exports, classes); the TypeScript server answers whatever native cannot be certain about. Turn off to leave everything to the server.")
+        let nativeJSDiag = NSButton(checkboxWithTitle: "Native JS / TS diagnostics (missing relative imports, unused imports)", target: nil, action: nil)
+        nativeJSDiag.target = action { c in
+            NativeJSDiag.enabled = (c as? NSButton)?.state == .on
+            for ctl in NativeJSDiagController.controllers.values { ctl.schedule(initial: true) }
+        }
+        nativeJSDiag.action = #selector(SettingsAction.fire(_:))
+        nativeJSDiag.setAccessibilityLabel("Native JavaScript and TypeScript diagnostics")
+        onRefresh { nativeJSDiag.state = NativeJSDiag.enabled ? .on : .off }
+        row(nil, nativeJSDiag, help: nil)
 
         section("Language servers")
         for server in LanguageServers.serverIds {

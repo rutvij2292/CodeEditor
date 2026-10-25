@@ -15,6 +15,7 @@ struct NPHit {
     var targets: [NPTarget]
     var markdown: String
     var kind: String         // class, method, property, const, case, function, constant, variable, column, relation, ...
+    var inferred = false     // JS / TS: the hover text is only the declaration as written (the real type is inferred): a running server may do better
 }
 
 /// A resolved class member (or Eloquent virtual member).
