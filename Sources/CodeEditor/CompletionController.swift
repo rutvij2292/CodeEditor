@@ -239,6 +239,7 @@ final class CompletionController: NSObject {
         let text = textView.string
         let ns = text as NSString
         let caret = min(sel.location, ns.length)
+        if !manual, MarkupGate.isPlainText(ns, caret: caret, ext: ext) { close(); return }     // typing text between tags: no popup
         let start = CompletionLex.runStart(ns, caret, CompletionLex.isIdent)
         var ctx = CompletionContext(text: text, caret: caret, fileURL: url, fileExtension: ext, triggerCharacter: trigger,
                                     isManual: manual, prefixRange: NSRange(location: start, length: caret - start))

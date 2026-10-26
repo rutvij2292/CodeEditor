@@ -76,7 +76,7 @@ final class FastProject {
     func beginRequest() {
         flagLock.lock()
         let now = Date()
-        let revalidate = dirty || now.timeIntervalSince(lastCheck) > 1.5
+        let revalidate = dirty || now.timeIntervalSince(lastCheck) > 60      // FSEvents (FastTier.invalidate) marks dirty; the timer is only a safety net: re-walking every directory every 1.5 s while typing kept the serial queue busy in big modular apps
         if revalidate { lastCheck = now; dirty = false; epoch += 1 }
         flagLock.unlock()
         drainPrefetched()

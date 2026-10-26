@@ -7,6 +7,8 @@ final class CodeTextView: NSTextView {
     var commentStyle: CommentStyle = .line("//")
     var indentUnit = "    "
     var useTabs = false
+    /// File extension of the document ("vue", "html", ...), lets typing `>` close a tag (MarkupGate).
+    var markupExtension = ""
     var tabColumns = 4
 
     // Hooks for language features (completion popup, LSP actions). Set through EditorEvents.onOpen.
@@ -1011,7 +1013,8 @@ final class CodeTextView: NSTextView {
         let ls = s.lineRange(for: NSRange(location: sel.location, length: 0)).location
         var ws = ls
         while ws < sel.location, isBlank(s.character(at: ws)) { ws += 1 }
-        let indent = s.substring(with: NSRange(location: ls, length: ws - ls))
+        var indent = s.substring(with: NSRange(location: ls, length: ws - ls))
+        if indent.isEmpty, ws == sel.location, lineIsBlank(from: ls), ls > 0 { indent = previousCodeIndent(before: ls) }   // Return on an empty line keeps the surrounding indent
         var p = sel.location
         while p > ls, isBlank(s.character(at: p - 1)) { p -= 1 }
         let prev: unichar? = p > ls ? s.character(at: p - 1) : nil
@@ -1024,6 +1027,44 @@ final class CodeTextView: NSTextView {
             if sel.upperBound < s.length, s.character(at: sel.upperBound) == close { text += lineEnding + indent }
         }
         return (text, caretOffset)
+    }
+
+    /// The line starting at `ls` holds nothing but blanks.
+    private func lineIsBlank(from ls: Int) -> Bool {
+        let s = ns
+        var i = ls
+        while i < s.length {
+            let c = s.character(at: i)
+            if c == 10 || c == 13 { return true }
+            if !isBlank(c) { return false }
+            i += 1
+        }
+        return true
+    }
+
+    /// Leading whitespace of the nearest non-blank line above the line starting at `ls` ("" when there is none).
+    private func previousCodeIndent(before ls: Int) -> String {
+        let (indent, opens) = previousCodeLine(before: ls)
+        return opens ? indent + indentUnit : indent
+    }
+
+    /// Indent of the nearest non-blank line above `ls`, and whether that line ends by opening a block (`{`, `(`, `[`).
+    private func previousCodeLine(before ls: Int) -> (indent: String, opens: Bool) {
+        let s = ns
+        var end = ls
+        while end > 0 {
+            let r = s.lineRange(for: NSRange(location: end - 1, length: 0))
+            var ws = r.location
+            while ws < NSMaxRange(r), isBlank(s.character(at: ws)) { ws += 1 }
+            if ws < NSMaxRange(r), s.character(at: ws) != 10, s.character(at: ws) != 13 {
+                var ce = NSMaxRange(r)
+                while ce > ws, [10, 13, 32, 9].contains(s.character(at: ce - 1)) { ce -= 1 }
+                let last = s.character(at: ce - 1)
+                return (s.substring(with: NSRange(location: r.location, length: ws - r.location)), last == 123 || last == 40 || last == 91)
+            }
+            end = r.location
+        }
+        return ("", false)
     }
 
     override func insertNewline(_ sender: Any?) {
@@ -1106,6 +1147,11 @@ final class CodeTextView: NSTextView {
         let s = ns
         let sel = selectedRange()
         let next: unichar? = sel.upperBound < s.length ? s.character(at: sel.upperBound) : nil
+        if c == 62, selectedRange().length == 0, let name = MarkupGate.tagToClose(s, caret: selectedRange().location, ext: markupExtension) {
+            let at = selectedRange().location
+            grouped { if replace(NSRange(location: at, length: 0), with: "></" + name + ">") { setSelectedRange(NSRange(location: at + 1, length: 0)) } }
+            return
+        }
         let isQuote = c == 34 || c == 39 || c == 96
         let isCloser = c == 41 || c == 93 || c == 125
 

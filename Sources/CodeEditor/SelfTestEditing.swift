@@ -34,7 +34,122 @@ extension SelfTest {
             let ls4 = (tv.string as NSString).lineRange(for: NSRange(location: c4, length: 0)).location
             check("edit \(ext): second Backspace joins the previous line (\(c4 - ls4))", c4 - ls4 == 10 && (tv.string as NSString).length == len3 - 1)
         }
+        markupChecks(w: w, dir: dir)
+        phpReturnCheck(w: w, dir: dir)
         typingProbe(w: w)
+        typingLatencyProbe(w: w)
+    }
+
+    /// CE_TYPE_FILE=<file>: types 120 characters (and 10 Returns) in the middle of the file through the real controller and reports the
+    /// main-thread time per keystroke, including the debounced hooks that run between keys (CE_BENCH=1 adds per-task totals).
+    private static func typingLatencyProbe(w: ProjectWindow) {
+        guard let path = AppEnv.value("CE_TYPE_FILE") else { return }
+        w.open(URL(fileURLWithPath: path))
+        guard let ed = w.current else { fputs("TYPE no editor\n", stderr); return }
+        let tv = ed.textView
+        func pump(_ t: Double) { RunLoop.current.run(until: Date().addingTimeInterval(t)) }
+        pump(1.5)
+        let ns = tv.string as NSString
+        let line = Int(AppEnv.value("CE_TYPE_LINE") ?? "") ?? 58
+        var loc = 0, n = 1
+        while n < line, loc < ns.length { loc = NSMaxRange(ns.lineRange(for: NSRange(location: loc, length: 0))); n += 1 }
+        tv.setSelectedRange(NSRange(location: loc, length: 0))
+        _ = Perf.drain()
+        func cpu() -> Double { var u = rusage(); getrusage(RUSAGE_SELF, &u); return Double(u.ru_utime.tv_sec + u.ru_stime.tv_sec) + Double(u.ru_utime.tv_usec + u.ru_stime.tv_usec) / 1e6 }
+        let idle0 = cpu()
+        for _ in 0..<40 { pump(0.05) }
+        fputs(String(format: "TYPE idle CPU per 50 ms: %.2f ms\n", (cpu() - idle0) / 40 * 1000), stderr)
+        let cpu0 = cpu()
+        let ctl = CompletionSystem.controller(for: ed)
+        var worst = 0.0, total = 0.0
+        let text = Array("$value = $this->service->find($id); // typing")
+        var count = 0
+        for i in 0..<(Int(AppEnv.value("CE_TYPE_N") ?? "") ?? 130) {
+            let t0 = CFAbsoluteTimeGetCurrent()
+            if i % 13 == 12 { tv.insertNewline(nil) }
+            else {
+                let ch = String(text[i % text.count])
+                if let ev = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                             characters: ch, charactersIgnoringModifiers: ch, isARepeat: false, keyCode: 0) { _ = ctl?.handleKey(ev) }
+                tv.insertText(ch, replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+            let tKey = CFAbsoluteTimeGetCurrent() - t0
+            let t1 = CFAbsoluteTimeGetCurrent()
+            pump(0.05)                                   // debounced work lands here; sleeping time is not counted below
+            _ = t1
+            worst = max(worst, tKey); total += tKey; count += 1
+        }
+        fputs(String(format: "TYPE %@ line %d: keystroke avg %.2f ms, worst %.2f ms\n", (path as NSString).lastPathComponent, line, total / Double(count) * 1000, worst * 1000), stderr)
+        fputs(String(format: "TYPE process CPU per keystroke (all threads, incl. debounced work): %.2f ms\n", (cpu() - cpu0) / Double(count) * 1000), stderr)
+        for (k, v) in Perf.drain().sorted(by: { $0.value.total > $1.value.total }) {
+            fputs(String(format: "TYPE   %@ n=%d total %.1f ms max %.1f ms\n", k, v.count, v.total * 1000, v.max * 1000), stderr)
+        }
+        // Return at the end of every line (bottom up): where does the caret land?
+        let lines = (tv.string as NSString).components(separatedBy: "\n")
+        var starts: [Int] = [], pos = 0
+        for l in lines { starts.append(pos); pos += (l as NSString).length + 1 }
+        for idx in stride(from: lines.count - 1, through: 0, by: -1) {
+            let l = lines[idx] as NSString
+            let indent = l.length - (lines[idx].drop(while: { $0 == " " || $0 == "\t" }) as Substring).utf16.count
+            tv.setSelectedRange(NSRange(location: starts[idx] + l.length, length: 0))
+            tv.insertNewline(nil)
+            pump(0.03)
+            let cc = tv.selectedRange().location
+            let lls = (tv.string as NSString).lineRange(for: NSRange(location: cc, length: 0)).location
+            let col = cc - lls
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+            if col == 0, trimmed.isEmpty == false || idx > 0 { fputs("TYPE RETURN col 0 after line \(idx + 1) (indent \(indent)): \(lines[idx])\n", stderr) }
+        }
+    }
+
+    /// Return in the middle of a PHP method keeps the indent, and the caret is still there after the editor's async hooks ran.
+    private static func phpReturnCheck(w: ProjectWindow, dir: URL) {
+        let url = dir.appendingPathComponent("UserController.php")
+        let src = "<?php\n\nclass UserController\n{\n    public function index()\n    {\n        $a = 1;\n        $b = 2;\n    }\n}\n"
+        try? src.write(to: url, atomically: true, encoding: .utf8)
+        w.open(url)
+        guard let ed = w.current else { check("php return: opens", false); return }
+        let tv = ed.textView
+        let ns = tv.string as NSString
+        tv.setSelectedRange(NSRange(location: ns.range(of: "$a = 1;").upperBound, length: 0))
+        tv.insertNewline(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.8))
+        let c = tv.selectedRange().location
+        let ls = (tv.string as NSString).lineRange(for: NSRange(location: c, length: 0)).location
+        check("php return: caret keeps the indent after async hooks (\(c - ls))", c - ls == 8)
+    }
+
+    private static func markupChecks(w: ProjectWindow, dir: URL) {
+        for ext in ["vue", "html"] {
+            let url = dir.appendingPathComponent("markup.\(ext)")
+            let src = "<template>\n    <div>\n        \n\n    </div>\n</template>\n<script>\nconst a = 1 <b\n</script>\n"
+            try? src.write(to: url, atomically: true, encoding: .utf8)
+            w.open(url)
+            guard let ed = w.current else { check("markup \(ext): opens", false); continue }
+            let tv = ed.textView
+            let ns0 = tv.string as NSString
+            let blank = ns0.range(of: "        \n\n").location
+            tv.setSelectedRange(NSRange(location: blank + 8, length: 0))
+            for ch in "<h1>" { tv.insertText(String(ch), replacementRange: NSRange(location: NSNotFound, length: 0)) }
+            check("markup \(ext): typing `>` adds the end tag", tv.string.contains("        <h1></h1>\n"))
+            check("markup \(ext): caret sits between the tags", (tv.string as NSString).substring(from: tv.selectedRange().location).hasPrefix("</h1>"))
+            let ns = tv.string as NSString
+            let inText = tv.selectedRange().location
+            check("markup \(ext): no auto popup in element text", MarkupGate.isPlainText(ns, caret: inText, ext: ext))
+            check("markup \(ext): popup still allowed after `<`", !MarkupGate.isPlainText("<template><di" as NSString, caret: 13, ext: ext))
+            check("markup \(ext): popup allowed in an attribute", !MarkupGate.isPlainText("<template><div cl" as NSString, caret: 17, ext: ext))
+            check("markup \(ext): popup allowed inside {{ }}", !MarkupGate.isPlainText("<template><p>{{ us" as NSString, caret: 18, ext: ext))
+            check("markup \(ext): no end tag for void / self-closed", MarkupGate.tagToClose("<template><br" as NSString, caret: 13, ext: ext) == nil && MarkupGate.tagToClose("<template><x /" as NSString, caret: 14, ext: ext) == nil)
+            // Return on an empty line keeps the surrounding indent
+            let ns2 = tv.string as NSString
+            let emptyLine = ns2.range(of: "</div>").location - 5       // the empty line above `    </div>`
+            tv.setSelectedRange(NSRange(location: emptyLine, length: 0))
+            tv.insertNewline(nil)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+            let c = tv.selectedRange().location
+            let ls = (tv.string as NSString).lineRange(for: NSRange(location: c, length: 0)).location
+            check("markup \(ext): Return on an empty line keeps the indent (\(c - ls))", c - ls == 8)
+        }
     }
 
     /// CE_TOA_FILE=<php file with `Request $request`>: types `$request->toA` through the real controller and prints the popup list.

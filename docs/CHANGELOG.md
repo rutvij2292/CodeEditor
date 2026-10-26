@@ -2,6 +2,12 @@
 
 Version is `0.<commit count>` (see build-app.sh); the installer is `dist/Kode-<version>.dmg`.
 
+## 0.263
+- Return on an empty line keeps the surrounding indent (the caret no longer jumps to column 0); after a line ending in `{`, `(` or `[` it indents one level.
+- HTML / Vue: typing `>` adds the end tag with the caret between; component completion adds the end tag too.
+- HTML / Vue: no auto popup while typing text between tags (Ctrl-Space still works); `{ }`, attributes and tag names still complete.
+- Typing stays light in big modular Laravel apps: the project index re-walked every directory every 1.5 s while typing; now only when files change (FSEvents), with a 60 s safety net.
+
 ## 0.262
 - New Window (File menu, Shift-Cmd-N, and the Dock icon menu): an empty window with the project picker.
 - The native JS/TS engine is off by default (Settings > Languages); native Python stays off.

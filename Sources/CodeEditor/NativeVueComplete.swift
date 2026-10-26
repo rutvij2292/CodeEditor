@@ -85,7 +85,10 @@ enum NVComplete {
         func add(_ name: String, detail: String, sort: String, doc: String = "", edits: [(range: NSRange, text: String)] = []) {
             let pn = VSName.pascal(name)
             guard !pn.isEmpty, seen.insert(pn).inserted else { return }
-            var it = CI.make(label(pn), .class, detail: detail, sort: sort + pn, doc: doc, filter: pn + " " + VSName.kebab(pn), range: range)
+            let nextIsGT = NSMaxRange(range) < ns.length && ns.character(at: NSMaxRange(range)) == 62
+            let shown = label(pn)
+            var it = nextIsGT ? CI.make(shown, .class, detail: detail, sort: sort + pn, doc: doc, filter: pn + " " + VSName.kebab(pn), range: range)
+                              : CI.make(shown, .class, detail: detail, insert: shown + ">$0</" + shown + ">", snippet: true, sort: sort + pn, doc: doc, filter: pn + " " + VSName.kebab(pn), range: range)
             it.additionalEdits = edits
             out.append(it)
         }

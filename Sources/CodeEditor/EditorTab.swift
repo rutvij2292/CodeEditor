@@ -333,6 +333,7 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         indent = IndentSettings.resolve(for: url, text: text)
         paragraph = Self.paragraphStyle(for: indent)
         textView.indentUnit = indent.unit
+        textView.markupExtension = url.pathExtension
         textView.useTabs = indent.useTabs
         textView.tabColumns = indent.size
         textView.defaultParagraphStyle = paragraph
