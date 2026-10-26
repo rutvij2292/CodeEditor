@@ -21,6 +21,7 @@ enum SelfTest {
     }
 
     private static func runChecks(app: AppDelegate) {
+        NativeJS.enabled = true       // off by default in the app; the JS / TS checks exercise the engine itself
         if let p = AppEnv.value("CE_COMPLETION_BENCH"), !p.isEmpty { CompletionBench.run(p) }   // headless completion quality / latency harness
         if AppEnv.value("CE_SELFTEST") == "py" {          // CE_SELFTEST=py: only the native Python checks (fast loop)
             let pyDir = FileManager.default.temporaryDirectory.appendingPathComponent("ce-selftest-py-\(getpid())")

@@ -7,9 +7,9 @@ import AppKit
 enum NativeJS {
     static let enabledKey = "js.native"
 
-    /// Settings > Languages: 'Native JavaScript / TypeScript engine' (default ON; OFF leaves everything to the TypeScript server).
+    /// Settings > Languages: 'Native JavaScript / TypeScript engine' (default OFF; OFF leaves everything to the TypeScript server).
     static var enabled: Bool {
-        get { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
+        get { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? false }
         set { UserDefaults.standard.set(newValue, forKey: enabledKey) }
     }
 

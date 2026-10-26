@@ -47,6 +47,7 @@ enum MainMenu {
         recentMenu.delegate = a
         recent.submenu = recentMenu
         main.addItem(menu("File", [
+            item("New Window", #selector(AppDelegate.newProjectWindow(_:)), "n", [.command, .shift], target: a),
             item("New File…", #selector(NewFileSupport.show(_:)), "n", target: NewFileSupport.shared),
             item("Open Project…", #selector(AppDelegate.openProjectPanel(_:)), "o", [.command, .control], target: a),
             recent,

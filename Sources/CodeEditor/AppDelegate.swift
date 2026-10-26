@@ -239,8 +239,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         if panel.runModal() == .OK, let url = panel.url { openProjectRouted(url) }
     }
 
+    /// File > New Window / Dock "New Window": an empty window with the project picker over it. Picking a project fills that window
+    /// (or, with "open projects in new instance", its own process); cancelling leaves an empty window to close.
+    @objc func newProjectWindow(_ sender: Any?) {
+        presentRecentProjects(over: newWindow())
+    }
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let m = NSMenu()
+        m.addItem(NSMenuItem(title: "New Window", action: #selector(newProjectWindow(_:)), keyEquivalent: ""))
+        m.items.forEach { $0.target = self }
+        return m
+    }
+
     @objc func showRecentProjects(_ sender: Any?) {
-        let host = active ?? newWindow()
+        presentRecentProjects(over: active ?? newWindow())
+    }
+
+    private func presentRecentProjects(over host: ProjectWindow) {
         var items = RecentProjects.all.map { url in
             PickerItem(title: url.lastPathComponent, detail: (url.path as NSString).abbreviatingWithTildeInPath,
                        symbol: "folder.fill", key: url.path) { [weak self] in self?.openProjectRouted(url) }

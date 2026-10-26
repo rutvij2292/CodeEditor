@@ -123,7 +123,7 @@ enum SelfTestNativeEngines {
         for k in keys { d.set(k == NativePHPDiag.classSeverityKey ? 1 : (k == NativePy.enabledKey), forKey: k) }
         NativeEngines.resetPrefs()
         check("reset removes every engine key", keys.allSatisfy { d.object(forKey: $0) == nil })
-        check("reset restores the defaults", !NativePy.enabled && NativeJS.enabled && NativeVue.enabled && NativeJS.nativeOnly && NativeVue.nativeOnly
+        check("reset restores the defaults", !NativePy.enabled && !NativeJS.enabled && NativeVue.enabled && NativeJS.nativeOnly && NativeVue.nativeOnly
               && NativePHP.nativeOnly && NativeWeb.enabled && NativeWeb.nativeOnly && NativeJSDiag.enabled && NativePHPDiag.classSeverity == 2)
 
         // Settings rows: same sections, labels and order as the hand-written pane.
