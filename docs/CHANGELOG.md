@@ -2,6 +2,10 @@
 
 Version is `0.<commit count>` (see build-app.sh); the installer is `dist/Kode-<version>.dmg`.
 
+## 0.274
+- Single-tab mode no longer shows an empty strip row: the strip collapses to zero height (it returns with several tabs or a split); the unsaved dot moves to the window's close button.
+- Hot updates for the Vue / web engines: saving a file no longer rebuilds their file lists or memos (a `.js` / `.ts` save rebuilds only globals and routes); creating / deleting files refreshes the lists.
+
 ## 0.272
 - One editor tab by default: only the active file's tab is shown, the other files stay open for Cmd-E / Cmd-[ ]. View > Multiple Editor Tabs brings the full strip back.
 
