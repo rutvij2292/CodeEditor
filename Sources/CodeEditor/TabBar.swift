@@ -141,6 +141,7 @@ final class TabHost: NSView {
         hint.translatesAutoresizingMaskIntoConstraints = false
         restyle()
         NotificationCenter.default.addObserver(self, selector: #selector(themeChanged), name: Theme.didChange, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(prefsChanged(_:)), name: Prefs.didChange, object: nil)
         strip.orientation = .horizontal
         strip.spacing = 2
         strip.alignment = .centerY
@@ -195,7 +196,7 @@ final class TabHost: NSView {
 
     var isOverflowing: Bool { strip.fittingSize.width > scroll.bounds.width + 0.5 }
 
-    private func updateOverflow() { overflow.isHidden = entries.isEmpty || !isOverflowing }
+    private func updateOverflow() { overflow.isHidden = entries.isEmpty || !Prefs.multipleTabs || !isOverflowing }
 
     @objc private func themeChanged() {
         restyle()
@@ -346,6 +347,17 @@ final class TabHost: NSView {
     private func refreshItem(_ id: String) {
         guard let e = entries.first(where: { $0.id == id }) else { return }
         items[id]?.configure(title: e.title, dirty: e.isDirty, selected: id == selectedID, tint: e.tint)
+        items[id]?.isHidden = !Prefs.multipleTabs && id != selectedID && id != split?.left && id != split?.right      // one tab: the active file only
+        updateOverflow()
+    }
+
+    /// Test hook: ids of the tabs currently shown in the strip.
+    var visibleTabIDs: [String] { entries.map(\.id).filter { items[$0]?.isHidden == false } }
+
+    @objc private func prefsChanged(_ n: Notification) {
+        guard (n.userInfo?["key"] as? String) == "multipleTabs" else { return }
+        for e in entries { refreshItem(e.id) }
+        needsLayout = true
     }
 
     func remove(_ id: String) {

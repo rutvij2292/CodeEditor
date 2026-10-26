@@ -231,6 +231,7 @@ enum MainMenu {
             sep,
             toggleItem("Toolbar", "showToolbar", a),
             toggleItem("Tool Window Icons", "showToolStrip", a),
+            toggleItem("Multiple Editor Tabs", "multipleTabs", a),
             toggleItem("Breadcrumbs", "showBreadcrumbs", a),
             toggleItem("Inline Git Blame", "inlineBlame", a),
             toggleItem("Indent Guides", "showIndentGuides", a),

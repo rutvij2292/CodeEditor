@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         "showToolbar": ({ Prefs.showToolbar }, { Prefs.showToolbar = $0 }),
         "showToolStrip": ({ Prefs.showToolStrip }, { Prefs.showToolStrip = $0 }),
         "showBreadcrumbs": ({ Prefs.showBreadcrumbs }, { Prefs.showBreadcrumbs = $0 }),
+        "multipleTabs": ({ Prefs.multipleTabs }, { Prefs.multipleTabs = $0 }),
         "inlineBlame": ({ Prefs.inlineBlame }, { Prefs.inlineBlame = $0 }),
         "showIndentGuides": ({ Prefs.showIndentGuides }, { Prefs.showIndentGuides = $0 }),
         "highlightCurrentLine": ({ Prefs.highlightCurrentLine }, { Prefs.highlightCurrentLine = $0 }),

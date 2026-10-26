@@ -36,6 +36,7 @@ extension SelfTest {
         }
         markupChecks(w: w, dir: dir)
         tabbedPickerChecks(w: w)
+        singleTabChecks(w: w, dir: dir)
         phpReturnCheck(w: w, dir: dir)
         typingProbe(w: w)
         typedCompletionProbe(w: w)
@@ -151,6 +152,21 @@ extension SelfTest {
             check("php return: caret is drawn 8 columns in (\(String(describing: tv.trailingBlankCaretX())) vs \(want))", abs((tv.trailingBlankCaretX() ?? -1) - want) < 0.5)
             _ = r; _ = x0; _ = cw
         }
+    }
+
+    /// One visible tab by default; every open file stays open (Cmd-E), and the View toggle brings the full strip back.
+    private static func singleTabChecks(w: ProjectWindow, dir: URL) {
+        let was = Prefs.multipleTabs
+        defer { Prefs.multipleTabs = was }
+        let urls = ["one.txt", "two.txt", "three.txt"].map { dir.appendingPathComponent($0) }
+        for u in urls { try? "x\n".write(to: u, atomically: true, encoding: .utf8); w.open(u) }
+        Prefs.multipleTabs = false
+        check("tabs: one visible tab by default (\(w.tabs.visibleTabIDs.count))", w.tabs.visibleTabIDs == [urls[2].standardizedFileURL.path])
+        check("tabs: the other files stay open", urls.allSatisfy { u in w.tabs.entries.contains { $0.id == u.standardizedFileURL.path } })
+        w.open(urls[0])
+        check("tabs: switching shows the new active tab only", w.tabs.visibleTabIDs == [urls[0].standardizedFileURL.path])
+        Prefs.multipleTabs = true
+        check("tabs: multiple-tabs mode shows every tab", Set(urls.map { $0.standardizedFileURL.path }).isSubset(of: Set(w.tabs.visibleTabIDs)))
     }
 
     /// Search Everywhere's tabbed picker: tabs switch the provider, and the non-project switch reaches it.
