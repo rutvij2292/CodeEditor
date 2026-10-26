@@ -117,6 +117,37 @@ extension SelfTest {
         let c = tv.selectedRange().location
         let ls = (tv.string as NSString).lineRange(for: NSRange(location: c, length: 0)).location
         check("php return: caret keeps the indent after async hooks (\(c - ls))", c - ls == 8)
+        // the DRAWN caret: its x must be 8 columns right of the line start (stale layout drew it at column 0)
+        if let lm = tv.layoutManager, let tc = tv.textContainer {
+            if let m = AppEnv.value("CE_LBM"), let st = tv.textStorage {
+                let ps = NSMutableParagraphStyle(); ps.setParagraphStyle(tv.defaultParagraphStyle ?? .default)
+                ps.lineBreakMode = m == "clip" ? .byClipping : .byCharWrapping
+                st.addAttribute(.paragraphStyle, value: ps, range: NSRange(location: 0, length: st.length))
+                lm.ensureLayout(forCharacterRange: NSRange(location: 0, length: st.length))
+            }
+            fputs("CARET storage para attr at line: \(String(describing: tv.textStorage?.attribute(.paragraphStyle, at: ls, effectiveRange: nil)))\n", stderr)
+            if let m = AppEnv.value("CE_ENSURE") {
+                let full = tv.string as NSString
+                let lr = full.lineRange(for: NSRange(location: ls, length: 0))
+                if m == "A" { lm.ensureLayout(forCharacterRange: lr) }
+                if m == "B" { lm.ensureLayout(for: tc) }
+                if m == "C" { lm.ensureGlyphs(forCharacterRange: lr); lm.ensureLayout(forGlyphRange: lm.glyphRange(forCharacterRange: lr, actualCharacterRange: nil)) }
+                if m == "D" { lm.invalidateLayout(forCharacterRange: lr, actualCharacterRange: nil); lm.ensureLayout(forCharacterRange: lr) }
+            }
+            let gi = lm.glyphIndexForCharacter(at: max(0, c - 1))
+            let r = lm.boundingRect(forGlyphRange: NSRange(location: gi, length: 1), in: tc)
+            let x0 = lm.boundingRect(forGlyphRange: NSRange(location: lm.glyphIndexForCharacter(at: ls), length: 1), in: tc).minX
+            let cw = ("M" as NSString).size(withAttributes: [.font: tv.font ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)]).width
+            for k in 0...min(9, (tv.string as NSString).length - ls - 1) {
+                let g = lm.glyphIndexForCharacter(at: ls + k)
+                fputs("CARET glyph \(k): char \((tv.string as NSString).character(at: ls + k)) loc \(lm.location(forGlyphAt: g)) used \(lm.lineFragmentUsedRect(forGlyphAt: g, effectiveRange: nil)) notShown \(lm.notShownAttribute(forGlyphAt: g))\n", stderr)
+            }
+            fputs("CARET container \(tc.size) tracks \(tc.widthTracksTextView) padding \(tc.lineFragmentPadding) tv frame \(tv.frame) nonContig \(lm.allowsNonContiguousLayout) para \(String(describing: tv.defaultParagraphStyle?.lineBreakMode.rawValue))\n", stderr)
+            fputs("CARET layout: caret-1 glyph minX \(r.minX), line start \(x0), char width \(cw), insertion rect \(tv.firstRect(forCharacterRange: NSRange(location: c, length: 0), actualRange: nil))\n", stderr)
+            let want = tv.textContainerOrigin.x + tc.lineFragmentPadding + 8 * tv.charWidth
+            check("php return: caret is drawn 8 columns in (\(String(describing: tv.trailingBlankCaretX())) vs \(want))", abs((tv.trailingBlankCaretX() ?? -1) - want) < 0.5)
+            _ = r; _ = x0; _ = cw
+        }
     }
 
     private static func markupChecks(w: ProjectWindow, dir: URL) {

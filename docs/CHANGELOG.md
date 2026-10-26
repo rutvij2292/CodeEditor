@@ -2,6 +2,9 @@
 
 Version is `0.<commit count>` (see build-app.sh); the installer is `dist/Kode-<version>.dmg`.
 
+## 0.264
+- Fixed the caret being drawn at column 0 after Return on an indented line (TextKit lays out line-end blanks with zero width; the caret x is now computed from the column).
+
 ## 0.263
 - Return on an empty line keeps the surrounding indent (the caret no longer jumps to column 0); after a line ending in `{`, `(` or `[` it indents one level.
 - HTML / Vue: typing `>` adds the end tag with the caret between; component completion adds the end tag too.

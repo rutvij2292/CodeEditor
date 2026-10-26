@@ -362,10 +362,30 @@ final class CodeTextView: NSTextView {
         ctx.restoreGState()
     }
 
+    /// TextKit lays out blanks at the END of a line with zero advance, so a caret after trailing spaces / tabs (Return on an indented
+    /// line leaves only the indent) was drawn at the line start although the insertion point is further right. The x for that case,
+    /// computed from the monospaced column; nil when the layout's own answer is right.
+    func trailingBlankCaretX() -> CGFloat? {
+        let sel = selectedRange()
+        let s = ns
+        guard sel.length == 0, sel.location > 0, sel.location <= s.length, isBlank(s.character(at: sel.location - 1)) else { return nil }
+        let loc = sel.location
+        if loc < s.length { let c = s.character(at: loc); guard c == 10 || c == 13 else { return nil } }
+        let ls = s.lineRange(for: NSRange(location: loc - 1, length: 0)).location
+        var col = 0
+        let tab = max(1, tabColumns)
+        for i in ls..<loc {
+            let c = s.character(at: i)
+            if c == 9 { col += tab - col % tab } else if isBlank(c) { col += 1 } else { return nil }    // only an all-blank line prefix
+        }
+        return textContainerOrigin.x + (textContainer?.lineFragmentPadding ?? 5) + CGFloat(col) * charWidth
+    }
+
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
         if multiCaretActive { return }      // multiple carets are drawn by drawExtraCarets
         var r = rect
         r.size.width = 2
+        if let x = trailingBlankCaretX() { r.origin.x = x }
         super.drawInsertionPoint(in: r, color: color, turnedOn: flag)
     }
 
