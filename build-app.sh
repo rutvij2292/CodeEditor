@@ -58,5 +58,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$APP"
+# Stable local identity (login item, privacy permissions and Keychain approvals survive rebuilds); ad-hoc if the cert is missing.
+SIGN_ID="CustomApp Local Signing"
+security find-certificate -c "$SIGN_ID" >/dev/null 2>&1 || { echo "note: '$SIGN_ID' certificate not found, signing ad-hoc"; SIGN_ID="-"; }
+codesign --force --deep --sign "$SIGN_ID" "$APP"
 echo "Built $APP"

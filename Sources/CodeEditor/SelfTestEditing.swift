@@ -26,12 +26,13 @@ extension SelfTest {
             tv.deleteBackward(nil)
             let c3 = tv.selectedRange().location
             let after3 = tv.string as NSString
+            let len3 = after3.length
             let ls3 = after3.lineRange(for: NSRange(location: c3, length: 0)).location
             check("edit \(ext): Backspace on a blank line clears its indentation at once (\(c3 - ls3))", c3 - ls3 == 0)
             tv.deleteBackward(nil)
             let c4 = tv.selectedRange().location
             let ls4 = (tv.string as NSString).lineRange(for: NSRange(location: c4, length: 0)).location
-            check("edit \(ext): second Backspace joins the previous line (\(c4 - ls4))", c4 - ls4 == 11 || (tv.string as NSString).length == after3.length - 1)
+            check("edit \(ext): second Backspace joins the previous line (\(c4 - ls4))", c4 - ls4 == 10 && (tv.string as NSString).length == len3 - 1)
         }
         typingProbe(w: w)
     }
