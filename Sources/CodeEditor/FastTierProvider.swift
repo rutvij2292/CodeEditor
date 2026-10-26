@@ -21,6 +21,19 @@ enum FastTier {
         rootCache = rootCache.filter { $0.value == "" ? false : true }
     }
 
+    private static let webLikeExtensions: Set<String> = ["css", "scss", "less", "pcss", "html", "htm", "vue", "svelte", "astro", "twig", "phtml",
+                                                         "js", "jsx", "ts", "tsx", "mjs", "cjs", "json"]
+
+    /// Hot update from an FSEvents batch: the changed paths decide what is re-checked (see FastProject.noteChanged). Saving a PHP
+    /// file costs one cached class; the web / Vue / JS engines are only told when a file of theirs changed.
+    static func invalidate(root: URL, paths: [String]) {
+        FastProject.existing(root: root)?.noteChanged(paths)
+        if paths.contains(where: { webLikeExtensions.contains(($0 as NSString).pathExtension.lowercased()) || $0.hasSuffix(".blade.php") }) {
+            NativeEngines.invalidate(root: root)
+        }
+        rootCache = rootCache.filter { $0.value == "" ? false : true }
+    }
+
     /// Project root for a file: the Laravel root, else the nearest directory with composer.json.
     static func root(for file: URL) -> String? {
         var dir = file.deletingLastPathComponent().standardizedFileURL.path

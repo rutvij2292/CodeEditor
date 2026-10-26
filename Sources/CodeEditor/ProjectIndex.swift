@@ -51,7 +51,7 @@ final class ProjectIndex {
     init(root: URL) { self.root = root }
 
     /// Benchmark / test hook: replaces the file list (e.g. a synthetic 100k-file project).
-    func setFilesForBenchmark(_ list: [String]) { files = list }
+    func setFilesForBenchmark(_ list: [String]) { files = list; fileSet = nil; dirSet = nil }
 
     private func rebuildBlob() {
         let (b, st) = Self.makeBlob(files)
@@ -70,9 +70,78 @@ final class ProjectIndex {
         return (b, st)
     }
 
-    /// Rescans unless a scan is running or the last one is fresh.
+    /// Files known by relative path / their directories; built on the first incremental update, dropped by every full scan.
+    private var fileSet: Set<String>?
+    private var dirSet: Set<String>?
+
+    struct Delta { var added: [String] = []; var removed: [String] = []; var touched: [String] = [] }
+
+    /// Hot update from an FSEvents batch: only the reported paths are looked at (an `exists` check each). A modified file changes
+    /// nothing here; a created / deleted / renamed file is inserted into / removed from the sorted list, and a directory that
+    /// appeared or vanished is expanded / dropped. nil = too much changed (checkout, install): the caller does a full `refresh`.
+    func applyChanges(_ paths: [String]) -> Delta? {
+        guard !scanning, lastScan != .distantPast, paths.count <= 300, !vendorLazy else { return nil }
+        if fileSet == nil || dirSet == nil {
+            let set = Set(files)
+            var dirs = Set<String>()
+            for f in files { var d = (f as NSString).deletingLastPathComponent; while !d.isEmpty, dirs.insert(d).inserted { d = (d as NSString).deletingLastPathComponent } }
+            fileSet = set; dirSet = dirs
+        }
+        let base = VCSKind.canonical(root.path)
+        var delta = Delta()
+        let fm = FileManager.default
+        for p in paths {
+            let cp = VCSKind.canonical(p)
+            guard cp.hasPrefix(base + "/") else { continue }
+            let rel = String(cp.dropFirst(base.count + 1))
+            if Self.isSkipped(relativePath: rel) { continue }
+            var isDir: ObjCBool = false
+            let exists = fm.fileExists(atPath: cp, isDirectory: &isDir)
+            if exists, !isDir.boolValue {
+                delta.touched.append(rel)
+                if fileSet!.insert(rel).inserted { delta.added.append(rel); var d = (rel as NSString).deletingLastPathComponent; while !d.isEmpty, dirSet!.insert(d).inserted { d = (d as NSString).deletingLastPathComponent } }
+            } else if !exists {
+                if fileSet!.remove(rel) != nil { delta.removed.append(rel); delta.touched.append(rel) }
+                else if dirSet!.contains(rel) {                                  // a directory was deleted or moved away
+                    let pre = rel + "/"
+                    let gone = files.filter { $0.hasPrefix(pre) }
+                    for g in gone { fileSet!.remove(g) }
+                    dirSet = dirSet!.filter { $0 != rel && !$0.hasPrefix(pre) }
+                    delta.removed += gone; delta.touched += gone
+                }
+            } else if !dirSet!.contains(rel) {                                   // a directory appeared (created, moved in)
+                dirSet!.insert(rel)
+                var buf = [CChar](repeating: 0, count: Int(PATH_MAX))
+                let realDir = realpath(cp, &buf) != nil ? String(cString: buf) : cp      // the enumerator reports resolved paths (/private/var)
+                if let en = fm.enumerator(at: URL(fileURLWithPath: realDir), includingPropertiesForKeys: [.isDirectoryKey], options: [], errorHandler: { _, _ in true }) {
+                    for case let url as URL in en {
+                        guard url.path.hasPrefix(realDir + "/") else { continue }
+                        let r = rel + "/" + String(url.path.dropFirst(realDir.count + 1))
+                        let sub = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                        if Self.isSkipped(relativePath: r) { if sub { en.skipDescendants() }; continue }
+                        if sub { dirSet!.insert(r); continue }
+                        if fileSet!.insert(r).inserted { delta.added.append(r); delta.touched.append(r) }
+                        if delta.added.count > 5000 { return nil }
+                    }
+                }
+            }
+        }
+        guard !delta.added.isEmpty || !delta.removed.isEmpty else { return delta }
+        var list = files
+        if !delta.removed.isEmpty { let gone = Set(delta.removed); list.removeAll { gone.contains($0) } }
+        for a in delta.added {                                                   // same order as a full scan: localized standard compare
+            var lo = 0, hi = list.count
+            while lo < hi { let mid = (lo + hi) / 2; if list[mid].localizedStandardCompare(a) == .orderedAscending { lo = mid + 1 } else { hi = mid } }
+            list.insert(a, at: lo)
+        }
+        files = list
+        return delta
+    }
+
+    /// Rescans unless a scan is running or an earlier one exists (FSEvents keep the list current through `applyChanges`; the
+    /// timed rescan is only a long safety net for projects without a working watcher).
     func refresh(force: Bool = false, completion: (() -> Void)? = nil) {
-        guard !scanning, force || Date().timeIntervalSince(lastScan) > 10 else { completion?(); return }
+        guard !scanning, force || lastScan == .distantPast || Date().timeIntervalSince(lastScan) > 900 else { completion?(); return }
         scanning = true
         let root = self.root
         let wantVendor = Self.includeVendor
@@ -108,6 +177,7 @@ final class ProjectIndex {
                 self.suppressBlob = false
                 self.blob = built.0; self.starts = built.1
                 self.lastScan = Date()
+                self.fileSet = nil; self.dirSet = nil
                 self.scanning = false
                 completion?()
             }

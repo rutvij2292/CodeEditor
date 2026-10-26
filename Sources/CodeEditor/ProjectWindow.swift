@@ -260,13 +260,23 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             VendorIndex.invalidate(root: root)
         }
         if content {
-            if let root { LaravelNavigator.invalidate(root: root); FastTier.invalidate(root: root) }
+            let changed = Array(paths.filter { !$0.contains("/.git/") })
+            if let root { LaravelNavigator.invalidate(root: root); FastTier.invalidate(root: root, paths: changed) }
             tree.refreshIfAffected(paths)
-            index?.refresh(force: true) { [weak self] in self?.symbols?.rebuild() }
+            applyIndexChanges(changed)
             changeReview?.noteChanges(Array(paths))   // before the reload: clean buffers still hold the pre-agent text
             editors.values.forEach { $0.reloadIfChangedOnDisk() }
         }
         if content || gitMeta { refreshGitStatus() }
+    }
+
+    /// Hot update of the file list and symbol table from the changed paths; a full rescan only when a batch is too big for that.
+    private func applyIndexChanges(_ changed: [String]) {
+        if let delta = index?.applyChanges(changed) {
+            symbols?.update(files: delta.touched)
+        } else {
+            index?.refresh(force: true) { [weak self] in self?.symbols?.rebuild() }
+        }
     }
 
     /// Manual "synchronize": same work as a file-system event batch, over the whole project.

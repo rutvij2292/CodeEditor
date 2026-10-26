@@ -21,6 +21,7 @@ enum SelfTest {
     }
 
     private static func runChecks(app: AppDelegate) {
+        if let trial = AppEnv.value("CE_INDEX_TRIAL") { DispatchQueue.global().async { indexTrial(root: trial); DispatchQueue.main.async { finish() } }; return }
         NativeJS.enabled = true       // off by default in the app; the JS / TS checks exercise the engine itself
         if let p = AppEnv.value("CE_COMPLETION_BENCH"), !p.isEmpty { CompletionBench.run(p) }   // headless completion quality / latency harness
         if AppEnv.value("CE_SELFTEST") == "py" {          // CE_SELFTEST=py: only the native Python checks (fast loop)

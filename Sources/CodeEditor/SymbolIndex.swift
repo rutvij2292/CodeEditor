@@ -75,6 +75,22 @@ final class SymbolIndex {
         }
     }
 
+    /// Re-reads exactly these files (changed, created or deleted); everything else keeps its parsed symbols.
+    func update(files relativePaths: [String], completion: (() -> Void)? = nil) {
+        let list = relativePaths.filter { Self.extensions.contains(($0 as NSString).pathExtension.lowercased()) }
+        guard !list.isEmpty else { completion?(); return }
+        SymbolExtractor.prime()
+        queue.async { [self] in
+            var parsed: [(String, FileSymbols?)] = []
+            for p in list { parsed.append((p, autoreleasepool { parse(p, known: nil) })) }
+            lock.lock()
+            for (p, r) in parsed { perFile[p] = r }
+            flat = nil
+            lock.unlock()
+            completion?()
+        }
+    }
+
     func update(file relativePath: String) {
         guard Self.extensions.contains((relativePath as NSString).pathExtension.lowercased()) else { return }
         SymbolExtractor.prime()

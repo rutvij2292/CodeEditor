@@ -9,9 +9,12 @@ struct FTColumn { var name: String; var type: String }
 struct FTClassRef { var short: String; var fqn: String }
 struct FTName { var name: String; var detail: String }
 
-final class FTSection<T> {
+protocol FTDirtyable: AnyObject { var dirty: Bool { get set } }
+
+final class FTSection<T>: FTDirtyable {
     fileprivate var stamp: Int64 = .min
-    fileprivate var checkedEpoch = -1
+    /// Set when a changed path may affect this section; only then is its stamp (a walk over its directories) looked at again.
+    var dirty = true
     fileprivate(set) var value: T
     init(_ initial: T) { value = initial }
     var built: Bool { stamp != .min }
@@ -49,7 +52,17 @@ final class FastProject {
         queue = DispatchQueue(label: "fasttier.\(path)", qos: .utility)
     }
 
+    /// Everything may have changed (manual reload, composer.json, module list): re-check every section and cached class.
     func markDirty() { flagLock.lock(); dirty = true; usageDirty = true; flagLock.unlock() }
+
+    /// Hot update: the paths an FSEvents batch reported. Nothing is re-scanned here; `beginRequest` (on the queue) decides which
+    /// sections the paths can affect, so saving an ordinary file touches only that file's cached class.
+    func noteChanged(_ paths: [String]) {
+        flagLock.lock(); pendingPaths.append(contentsOf: paths); usageDirty = true; flagLock.unlock()
+    }
+    private var pendingPaths: [String] = []
+    private var knownClassFiles = Set<String>()      // absolute paths behind the class list (queue only)
+    private var classRoots: [String] = []            // PSR-4 directories behind it (queue only)
 
     // Usage statistics (FastTierUsage.swift): built lazily on the queue, dropped on memory trim, refreshed only when stale AND a file changed.
     private var usageTable: FUsageTable?
@@ -72,24 +85,60 @@ final class FastProject {
     var usageBytes: Int { usageTable?.approxBytes ?? 0 }
     var usageBuilt: Bool { usageTable != nil }
 
-    /// Start of every request (on `queue`): decide whether sections re-check their stamps.
+    /// Start of every request (on `queue`): turns what FSEvents reported into the smallest possible re-check.
     func beginRequest() {
         flagLock.lock()
-        let now = Date()
-        let revalidate = dirty      // only when files changed (FSEvents -> FastTier.invalidate); never on a timer
-        if revalidate { lastCheck = now; dirty = false; epoch += 1 }
+        let all = dirty; dirty = false
+        let pending = pendingPaths; pendingPaths = []
         flagLock.unlock()
-        drainPrefetched()
-        if revalidate {
-            classCache = classCache.filter { LaravelFS.mtime($0.key) == $0.value.stamp }.mapValues { var e = $0; e.epoch = epoch; return e }
-            classBytes = classCache.values.reduce(0) { $0 + $1.bytes }
-            pathCache.removeAll()
+        if all {
+            epoch += 1
+            sections.forEach { $0.dirty = true }
+            revalidateClassCache()
+        } else if !pending.isEmpty {
+            applyChanges(pending)
         }
+        drainPrefetched()
+    }
+
+    private var sections: [FTDirtyable] { [routesSec, viewsSec, compSec, inertiaSec, configSec, envSec, langSec, schemaSec, classesSec] }
+
+    private func revalidateClassCache() {
+        classCache = classCache.filter { LaravelFS.mtime($0.key) == $0.value.stamp }.mapValues { var e = $0; e.epoch = epoch; return e }
+        classBytes = classCache.values.reduce(0) { $0 + $1.bytes }
+        pathCache.removeAll()
+    }
+
+    private func applyChanges(_ paths: [String]) {
+        var classesTouched = false, classListChanged = false
+        let fm = FileManager.default
+        for p in paths {
+            let l = p.lowercased()
+            if l.hasSuffix("/composer.json") || l.hasSuffix("modules_statuses.json") || l.hasSuffix("/module.json") {
+                sections.forEach { $0.dirty = true }; classListChanged = true; classesTouched = true; continue
+            }
+            if l.hasSuffix(".php") {
+                classesTouched = true
+                if classesSec.built, !classListChanged, classRoots.contains(where: { p.hasPrefix($0) }) {
+                    if fm.fileExists(atPath: p) != knownClassFiles.contains(p) { classListChanged = true }       // created, deleted or renamed
+                }
+            }
+            if l.contains("/migrations/") { schemaSec.dirty = true }
+            if l.contains("/routes/") { routesSec.dirty = true }
+            if l.contains("/config/") { configSec.dirty = true }
+            if l.hasSuffix(".env") || l.hasSuffix(".env.example") { envSec.dirty = true }
+            if l.contains("/lang/") { langSec.dirty = true }
+            if l.contains("/resources/views") { viewsSec.dirty = true; compSec.dirty = true }
+            if l.contains("/view/components/") || l.contains("/livewire/") { compSec.dirty = true }
+            if l.contains("/pages/") { inertiaSec.dirty = true }
+        }
+        if classListChanged { classesSec.dirty = true; pathCache.removeAll(); shortCache.removeAll() }
+        if classesTouched { epoch += 1; revalidateClassCache() }
     }
 
     @inline(__always) private func section<T>(_ s: FTSection<T>, stamp: () -> Int64, build: () -> T) -> T {
-        if s.built && s.checkedEpoch == epoch { return s.value }
-        s.checkedEpoch = epoch
+        if s.built && !s.dirty { return s.value }
+        s.dirty = false
         let st = stamp()
         if s.built && st == s.stamp { return s.value }
         s.value = build()
@@ -411,6 +460,8 @@ final class FastProject {
             var roots: [String] = []
             for (_, dirs) in psr4 { for d in dirs where !d.contains("/vendor/") && LaravelFS.isDir(d) { roots.append(d) } }
             let listed = Self.parallelMap(roots, { Self.files(in: $0, ext: ".php") })
+            classRoots = roots
+            knownClassFiles = Set(zip(roots, listed).flatMap { r, fs in fs.map { r + "/" + $0 } })
             var k = 0
             for (prefix, dirs) in psr4 {
                 for d in dirs where !d.contains("/vendor/") && LaravelFS.isDir(d) {
