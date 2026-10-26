@@ -2,6 +2,9 @@
 
 Version is `0.<commit count>` (see build-app.sh); the installer is `dist/Kode-<version>.dmg`.
 
+## 0.272
+- One editor tab by default: only the active file's tab is shown, the other files stay open for Cmd-E / Cmd-[ ]. View > Multiple Editor Tabs brings the full strip back.
+
 ## 0.270
 - Scrolling no longer jumps: files up to 6,000 lines are laid out in full on open, so the scroll bar is exact; bigger files fill in their layout in the background.
 - The terminal (and Claude Code in it) no longer opens when a project opens; it starts when you ask for it. Settings keep "reopen terminal on launch" off.
