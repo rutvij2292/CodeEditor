@@ -1122,8 +1122,34 @@ final class CodeTextView: NSTextView {
         return out.sorted { $0.st < $1.st }
     }
 
+    /// Tab after a tag name that starts a line in markup text (`h1`, `div`) expands it: `<h1>|</h1>`, void tags `<br>`.
+    private func expandTagAbbreviation() -> Bool {
+        guard !markupExtension.isEmpty, MarkupGate.extensions.contains(markupExtension.lowercased()), selectedRanges.count == 1 else { return false }
+        let sel = selectedRange()
+        guard sel.length == 0, sel.location > 0 else { return false }
+        let s = ns
+        var i = sel.location
+        while i > 0, CompletionLex.isIdent(s.character(at: i - 1)) || s.character(at: i - 1) == 45 { i -= 1 }
+        guard i < sel.location else { return false }
+        let ls = s.lineRange(for: NSRange(location: i, length: 0)).location
+        var k = ls
+        while k < i, isBlank(s.character(at: k)) { k += 1 }
+        guard k == i else { return false }                                          // the name is the first thing on its line
+        if sel.location < s.length { let c = s.character(at: sel.location); guard c == 10 || c == 13 || isBlank(c) else { return false } }
+        let name = s.substring(with: NSRange(location: i, length: sel.location - i))
+        guard CompletionData.htmlTags.contains(name), MarkupGate.isPlainText(s, caret: i, ext: markupExtension) else { return false }
+        let range = NSRange(location: i, length: sel.location - i)
+        if CompletionData.voidTags.contains(name) {
+            grouped { if replace(range, with: "<\(name)>") { setSelectedRange(NSRange(location: i + name.utf16.count + 2, length: 0)) } }
+        } else {
+            grouped { if replace(range, with: "<\(name)></\(name)>") { setSelectedRange(NSRange(location: i + name.utf16.count + 2, length: 0)) } }
+        }
+        return true
+    }
+
     override func insertTab(_ sender: Any?) {
         guard !hasMarkedText() else { super.insertTab(sender); return }
+        if expandTagAbbreviation() { return }
         let s = ns
         let ranges = currentRanges.sorted { $0.location < $1.location }
         let n = max(1, tabColumns)
@@ -1331,8 +1357,14 @@ final class CodeTextView: NSTextView {
 
     override func moveToBeginningOfDocument(_ sender: Any?) { if singleSelection { navigate(extend: false) { _ in 0 } } else { super.moveToBeginningOfDocument(sender) } }
     override func moveToEndOfDocument(_ sender: Any?) { if singleSelection { navigate(extend: false) { _ in ns.length } } else { super.moveToEndOfDocument(sender) } }
-    override func moveToBeginningOfDocumentAndModifySelection(_ sender: Any?) { if singleSelection { navigate(extend: true) { _ in 0 } } else { super.moveToBeginningOfDocumentAndModifySelection(sender) } }
-    override func moveToEndOfDocumentAndModifySelection(_ sender: Any?) { if singleSelection { navigate(extend: true) { _ in ns.length } } else { super.moveToEndOfDocumentAndModifySelection(sender) } }
+    /// Home / End (fn + Left / Right on a laptop) are line keys in an IDE; Cmd-Shift-Up / Down keep selecting to the document edge.
+    private var homeEndKey: Bool {
+        guard let e = NSApp.currentEvent, e.type == .keyDown else { return false }
+        if e.keyCode == 115 || e.keyCode == 119 { return true }
+        return (e.keyCode == 123 || e.keyCode == 124) && e.modifierFlags.contains(.function) && !e.modifierFlags.contains(.command)
+    }
+    override func moveToBeginningOfDocumentAndModifySelection(_ sender: Any?) { if singleSelection, homeEndKey { navigate(extend: true) { smartHome(from: $0) } } else if singleSelection { navigate(extend: true) { _ in 0 } } else { super.moveToBeginningOfDocumentAndModifySelection(sender) } }
+    override func moveToEndOfDocumentAndModifySelection(_ sender: Any?) { if singleSelection, homeEndKey { navigate(extend: true) { rowBounds(containing: $0).end } } else if singleSelection { navigate(extend: true) { _ in ns.length } } else { super.moveToEndOfDocumentAndModifySelection(sender) } }
 
     /// Home / End keys move the caret like PhpStorm (they only scroll in a stock NSTextView).
     override func scrollToBeginningOfDocument(_ sender: Any?) { if singleSelection { navigate(extend: false) { smartHome(from: $0) } } else { super.scrollToBeginningOfDocument(sender) } }

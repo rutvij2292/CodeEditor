@@ -119,6 +119,7 @@ final class CompletionController: NSObject {
         guard textView.selectedRanges.count == 1, !textView.multiCaretActive, sel.length == 0 else { close(); return }
         let grew = len > lastLength
         let ns = textView.string as NSString
+        if AppEnv.value("CE_COMPL_DEBUG") != nil { fputs("COMPL-DBG textChanged open=\(isOpen) typed=\(typed) grew=\(grew) caret=\(caret) anchor=\(anchor) lastCaret=\(lastCaret)\n", stderr) }
         if isOpen {
             guard caret >= anchor else { close(); return }
             if !grew { refilter(); return }
@@ -142,7 +143,13 @@ final class CompletionController: NSObject {
     private func selectionChanged() {
         guard !applying else { return }
         let sel = textView.selectedRange()
-        if isOpen, sel.location != lastCaret || sel.length > 0 { close() }
+        // The selection notification can arrive before the text one when a key is typed: the caret moving one place right while a
+        // printable key is being handled is typing, and `textChanged` decides what the popup does about it.
+        let typingStep = pendingTyped && sel.length == 0 && sel.location == lastCaret + 1
+        if isOpen, !typingStep, sel.location != lastCaret || sel.length > 0 {
+            if AppEnv.value("CE_COMPL_DEBUG") != nil { fputs("COMPL-DBG selectionChanged closes: sel=\(sel) lastCaret=\(lastCaret)\n", stderr) }
+            close()
+        }
         if let s = session, let first = s.stops.map(\.range.location).min(), let last = s.stops.map(\.range.upperBound).max(),
            sel.location < first || sel.upperBound > last { endSession() }
         lastCaret = sel.location
@@ -298,6 +305,7 @@ final class CompletionController: NSObject {
     private func presentImpl() {
         let previous = ranked.indices.contains(selected) ? ranked[selected].item.label + ranked[selected].item.kind.rawValue : nil
         ranked = rank()
+        if AppEnv.value("CE_COMPL_DEBUG") != nil { fputs("COMPL-DBG present anchor=\(anchor) caret=\(textView.selectedRange().location) providers=\(results.map { $0?.items.count ?? -1 }) ranked=\(ranked.count)\n", stderr) }
         if ranked.isEmpty { hidePopup(); return }
         if ranked.count == 1, ranked[0].query == ranked[0].item.label, !lastRequestManual { hidePopup(); return }
         selected = previous.flatMap { p in ranked.firstIndex { $0.item.label + $0.item.kind.rawValue == p } } ?? 0

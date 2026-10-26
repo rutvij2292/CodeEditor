@@ -61,6 +61,8 @@ enum Prefs {
     static func setViewerMode(_ kind: String, _ mode: String) { set("viewerMode." + kind, mode) }
 
     // MARK: Terminal
+    /// Reopen the terminal when a project opens and it was open last time. Off by default: it starts on demand (Option-F12).
+    static var reopenTerminal: Bool { get { get("reopenTerminal", false) } set { set("reopenTerminal", newValue) } }
     /// Where the terminal lives: "right" (docked beside the editor) or "bottom" (tab in the bottom panel).
     static var terminalDock: String { get { get("terminalDock", "right") } set { set("terminalDock", newValue == "bottom" ? "bottom" : "right") } }
     static var terminalFontName: String { get { get("terminalFontName", "") } set { set("terminalFontName", newValue) } }

@@ -42,7 +42,10 @@ enum SelfTestPerf {
             if let rep = tab.view.bitmapImageRepForCachingDisplay(in: tab.view.bounds) { tab.view.cacheDisplay(in: tab.view.bounds, to: rep) }
         }
         let openMs = ms(CACurrentMediaTime() - t0)
-        SelfTest.check("perf: layout is non-contiguous", layoutOnOpen)
+        SelfTest.check("perf: a 5k-line file is laid out in full (exact scroll height, no jump)", !layoutOnOpen)
+        let huge = dir.appendingPathComponent("huge.php")
+        try? phpSource(lines: EditorTab.contiguousLines + 1000).write(to: huge, atomically: true, encoding: .utf8)
+        SelfTest.check("perf: a file over the threshold stays lazily (non-contiguous) laid out", EditorTab(url: huge)?.textView.layoutManager?.allowsNonContiguousLayout ?? false)
         SelfTest.check("perf: opening a 5k-line file takes < \(Int(120 * slack)) ms (was \(String(format: "%.0f", openMs)))", openMs < 120 * slack)
 
         // 2. Keystrokes: insertText must not scan the whole document synchronously.

@@ -60,6 +60,10 @@ enum SelfTestCompletionQuality {
         let c = SelfTest.check
         // match classes
         let order = rank([item("createFromFormat"), item("create"), item("Create"), item("recreate"), item("c_r_e_a")], "$x->cre|")
+        let po = rank([item("dispatchToRoute"), item("apiResources"), item("middlewarePriority"), item("post"), item("str_replace"), item("pushMiddlewareToGroup")], "Route::po|")
+        c("rank: `po` offers post first and never scattered middle-of-word hits (\(po))", po.first == "post" && !po.contains("dispatchToRoute") && !po.contains("apiResources"))
+        let rep = rank([item("str_replace"), item("preg_replace"), item("replaceAll")], "x = replace|")
+        c("rank: a query that starts a later word still matches (str_replace for `replace`)", rep.contains("str_replace") && rep.contains("preg_replace"))
         c("rank: case-sensitive prefix, then case-insensitive prefix, then hump, then fuzzy", order == ["create", "createFromFormat", "Create", "c_r_e_a", "recreate"])
         c("rank: camel hump `cff` finds createFromFormat ahead of plain fuzzy", rank([item("cxfxfx"), item("createFromFormat")], "cff|").first == "createFromFormat")
         c("rank: hump matches a word start (`format` -> createFromFormat) above a scattered subsequence", rank([item("fxoxrxmxaxt"), item("createFromFormat")], "format|").first == "createFromFormat")

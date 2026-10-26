@@ -576,6 +576,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             }
             guard let editor = EditorTab(url: url, options: options) else { showLoadProblem(url); return }
             editors[id] = editor
+            editor.completeLayoutGradually()
             editor.onDirtyChange = { [weak self, weak editor] in
                 guard let self, let editor else { return }
                 self.tabs.setDirty(editor.isDirty, for: editor.url.standardizedFileURL.path)

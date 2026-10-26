@@ -554,7 +554,7 @@ extension SelfTest {
         if let lm = mdTab.textView.layoutManager, let tc = mdTab.textView.textContainer { lm.ensureLayout(for: tc) }   // exact editor line Y (no estimates settling mid-test)
         guard let m = mc.markdown, let root = w.window.contentView else { check("scroll: preview exists", false); done(); return }
         let tv = m.textView, sv = m.scroll
-        let probe = root.convert(NSPoint(x: tv.bounds.midX, y: 100), from: tv)
+        let probe = root.convert(NSPoint(x: tv.visibleRect.midX, y: tv.visibleRect.minY + 100), from: tv)     // a point that is on screen
         check("scroll: hit-test inside the preview lands on its text view", root.hitTest(probe) === tv)
         check("scroll: preview text view grows taller than the viewport for a long doc (maxSize not pinned)",
               tv.frame.height > sv.contentSize.height * 3 && tv.maxSize.height > 1e6)

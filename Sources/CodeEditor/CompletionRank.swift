@@ -167,7 +167,30 @@ enum CompletionRanker {
             return (2, 100 + max(0, min(f, 500)) / 2 - pen)
         }
         guard let f = Fuzzy.score(q.chars, in: t) else { return nil }
+        // scattered letters only count when the first one starts a word of the name (`replace` -> str_replace, `po` -> middlewarePriority),
+        // never spread through the middle of one: `po` must not offer dispatchToRoute or apiResources
+        if q.ascii, q.qb.count >= 2, !startsAWord(q.qb, in: Array(t.utf8)), !tl.contains(q.ql) { return nil }      // (a plain substring is still fine)
         return (1, 100 + max(0, min(f, 500)) / 2 - pen)
+    }
+
+    /// Some word start of `t` (its beginning, after `_` `-` `$` `\` `.` `:` or a space, a lower-to-upper hump, or a letter after a digit)
+    /// carries the query's first letter, and the rest of the query follows as a subsequence.
+    static func startsAWord(_ q: [UInt8], in t: [UInt8]) -> Bool {
+        @inline(__always) func lower(_ c: UInt8) -> UInt8 { c >= 65 && c <= 90 ? c + 32 : c }
+        @inline(__always) func isUpper(_ c: UInt8) -> Bool { c >= 65 && c <= 90 }
+        @inline(__always) func isLower(_ c: UInt8) -> Bool { c >= 97 && c <= 122 }
+        @inline(__always) func isDigit(_ c: UInt8) -> Bool { c >= 48 && c <= 57 }
+        guard let first = q.first, !t.isEmpty else { return false }
+        for i in 0..<t.count where lower(t[i]) == first {
+            let boundary = i == 0 || !(isUpper(t[i - 1]) || isLower(t[i - 1]) || isDigit(t[i - 1]))
+                || (isUpper(t[i]) && isLower(t[i - 1])) || (isUpper(t[i]) && isUpper(t[i - 1]) && i + 1 < t.count && isLower(t[i + 1]))
+                || (!isDigit(t[i]) && isDigit(t[i - 1]))
+            guard boundary else { continue }
+            var qi = 1, j = i + 1
+            while qi < q.count, j < t.count { if lower(t[j]) == q[qi] { qi += 1 }; j += 1 }
+            if qi == q.count { return true }
+        }
+        return false
     }
 
     /// Same label + same group = the same suggestion offered twice (a CSS class from the stylesheet scan and from the Tailwind theme, ...).

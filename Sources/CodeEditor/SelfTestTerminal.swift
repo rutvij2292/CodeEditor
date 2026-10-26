@@ -245,8 +245,13 @@ extension SelfTest {
         check("old session files without a terminal key still load", legacy != nil && legacy?.terminal == nil)
         tw.hideTerminal()
         tw.restoreTerminalState(Session.TerminalState(dock: "bottom", width: 500, visible: true))
-        check("restore: dock side, visibility and width come back",
-              tw.terminalDockSide == "bottom" && tw.isTerminalVisible && tw.termDock.width == 500 && term.shellPIDs == [pid])
+        check("restore: dock side and width come back, the terminal stays closed by default",
+              tw.terminalDockSide == "bottom" && !tw.isTerminalVisible && tw.termDock.width == 500 && term.shellPIDs == [pid])
+        Prefs.reopenTerminal = true
+        tw.restoreTerminalState(Session.TerminalState(dock: "bottom", width: 500, visible: true))
+        check("restore: with 'reopen terminal' on, it comes back", tw.terminalDockSide == "bottom" && tw.isTerminalVisible && term.shellPIDs == [pid])
+        Prefs.reopenTerminal = false
+        tw.hideTerminal()
         tw.restoreTerminalState(Session.TerminalState(dock: "right", width: 500, visible: false))
         check("restore: hidden right dock", tw.terminalDockSide == "right" && !tw.isTerminalVisible && alive(pid))
         tw.showTerminalPanel(focus: false)

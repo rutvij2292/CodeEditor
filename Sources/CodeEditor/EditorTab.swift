@@ -289,6 +289,28 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         return eol == .crlf ? lf.replacingOccurrences(of: "\n", with: "\r\n") : lf
     }
 
+    static var contiguousLines: Int { Int(AppEnv.value("CE_CONTIGUOUS_LINES") ?? "") ?? 6_000 }
+    static let maxBackgroundLayoutLines = 60_000
+    private var completesLayoutLazily = false
+
+    /// A lazily laid out file (non-contiguous) gets the rest of its layout in small slices while the app is idle, so the scroll bar's
+    /// length settles within a moment instead of jumping when the user reaches the unlaid part.
+    func completeLayoutGradually() {
+        guard completesLayoutLazily, textView.layoutManager != nil else { return }
+        var pos = 0
+        func step(_ tab: EditorTab?) {
+            guard let tab, let lm = tab.textView.layoutManager, !PowerState.shared.saver else { return }
+            let total = tab.storage.length
+            guard pos < total else { return }
+            let len = min(40_000, total - pos)
+            lm.ensureLayout(forCharacterRange: NSRange(location: pos, length: len))
+            pos += len
+            if AppEnv.value("CE_LAYOUT_DEBUG") != nil { fputs("LAYOUT slice to \(pos)/\(total) height \(tab.textView.layoutManager?.usedRect(for: tab.textView.textContainer!).height ?? 0)\n", stderr) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak tab] in step(tab) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in step(self) }
+    }
+
     init?(url: URL, options: OpenOptions = OpenOptions()) {
         self.url = url
         guard case .success(let loaded) = Self.read(url, options: options) else { return nil }
@@ -308,8 +330,12 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
         storage.addLayoutManager(layout)
         self.storage = storage
         layout.addTextContainer(container)
-        // Non-contiguous layout: only the visible region is laid out on open/jump (the rest is estimated), instead of the whole file.
-        layout.allowsNonContiguousLayout = loaded.large || LayerTuning.nonContiguous
+        // Non-contiguous layout lays out only the visible region on open (the rest is estimated), but its estimate of the document height
+        // is ~40% off, so the scroll bar reaches the end and more lines pop in (trial on 2k and 10k line files). Files up to
+        // `Self.contiguousLines` lines are laid out in full on open (tens of ms); bigger ones stay lazy and are completed in the background.
+        let lineCount = text.utf8.reduce(0) { $1 == 10 ? $0 + 1 : $0 }
+        layout.allowsNonContiguousLayout = loaded.large || (LayerTuning.nonContiguous && lineCount > Self.contiguousLines)
+        completesLayoutLazily = layout.allowsNonContiguousLayout && !loaded.large && lineCount <= Self.maxBackgroundLayoutLines
         if let bg = LayerTuning.backgroundLayout { layout.backgroundLayoutEnabled = bg }
         textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
         super.init()

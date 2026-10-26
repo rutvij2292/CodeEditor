@@ -2,6 +2,13 @@
 
 Version is `0.<commit count>` (see build-app.sh); the installer is `dist/Kode-<version>.dmg`.
 
+## 0.270
+- Scrolling no longer jumps: files up to 6,000 lines are laid out in full on open, so the scroll bar is exact; bigger files fill in their layout in the background.
+- The terminal (and Claude Code in it) no longer opens when a project opens; it starts when you ask for it. Settings keep "reopen terminal on launch" off.
+- Tab after a tag name at the start of a line in Vue / HTML (`h1`, `div`) expands it to `<h1></h1>` with the caret between.
+- Shift-Home / Shift-End (fn + Shift + Left / Right) select to the line start / end.
+- Completion: the popup no longer closes on the first letter typed after `::` or `->`, and scattered middle-of-word fuzzy hits (`po` offering dispatchToRoute) are gone; a query that starts any word of a name (`replace` for str_replace) still matches.
+
 ## 0.268
 - Hot index updates: a saved, created, deleted or moved file updates the file list, the symbol table and the PHP completion index from the changed paths only; no project rescans. Large batches (checkout, install) and Reload from Disk still do a full scan.
 - Go to File no longer rescans the project every time it opens.

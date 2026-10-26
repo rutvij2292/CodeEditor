@@ -304,6 +304,7 @@ extension ProjectWindow {
         guard let state, terminalPanel != nil else { return }
         applyTerminalDock(to: state.dock == "bottom" ? "bottom" : "right")
         if state.width >= Double(TerminalDockMath.minTerminal) { termDock.width = CGFloat(state.width) }
-        if state.visible { showTerminalPanel(focus: false) } else if isTerminalVisible { hideTerminal() }
+        // The terminal (a shell, often Claude Code) is started when asked for, never just because the project opens (Prefs.reopenTerminal).
+        if state.visible, Prefs.reopenTerminal { showTerminalPanel(focus: false) } else if isTerminalVisible { hideTerminal() }
     }
 }

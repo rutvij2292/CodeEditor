@@ -38,6 +38,8 @@ extension SelfTest {
         tabbedPickerChecks(w: w)
         phpReturnCheck(w: w, dir: dir)
         typingProbe(w: w)
+        typedCompletionProbe(w: w)
+        openLayoutTrial(w: w)
         typingLatencyProbe(w: w)
     }
 
@@ -187,6 +189,16 @@ extension SelfTest {
             check("markup \(ext): popup allowed in an attribute", !MarkupGate.isPlainText("<template><div cl" as NSString, caret: 17, ext: ext))
             check("markup \(ext): popup allowed inside {{ }}", !MarkupGate.isPlainText("<template><p>{{ us" as NSString, caret: 18, ext: ext))
             check("markup \(ext): no end tag for void / self-closed", MarkupGate.tagToClose("<template><br" as NSString, caret: 13, ext: ext) == nil && MarkupGate.tagToClose("<template><x /" as NSString, caret: 14, ext: ext) == nil)
+            // Tab expands a tag name that starts a line
+            do {
+                let t = tv.string as NSString
+                tv.setSelectedRange(NSRange(location: t.length, length: 0))
+                tv.insertText("\n        h2", replacementRange: NSRange(location: NSNotFound, length: 0))
+                tv.insertTab(nil)
+                let after = tv.string as NSString
+                check("markup \(ext): Tab expands `h2` to <h2></h2>", after.range(of: "        <h2></h2>", options: .backwards).location != NSNotFound)
+                check("markup \(ext): the caret is between the tags", after.substring(from: tv.selectedRange().location).hasPrefix("</h2>"))
+            }
             // Return on an empty line keeps the surrounding indent
             let ns2 = tv.string as NSString
             let emptyLine = ns2.range(of: "</div>").location - 5       // the empty line above `    </div>`
@@ -208,6 +220,53 @@ extension SelfTest {
                 check("markup \(ext): the caret is on the indented middle line (\(cc - l0))", cc - l0 == 12)
             }
         }
+    }
+
+    /// CE_OPEN_TRIAL=<file>: open cost and the document height the scroller sees right after opening vs after a full layout. The
+    /// difference is the "scroll bar reaches the end, then more lines pop in" jump.
+    private static func openLayoutTrial(w: ProjectWindow) {
+        guard let path = AppEnv.value("CE_OPEN_TRIAL") else { return }
+        let t0 = CFAbsoluteTimeGetCurrent()
+        w.open(URL(fileURLWithPath: path))
+        guard let ed = w.current, let lm = ed.textView.layoutManager else { return }
+        for _ in 0..<5 { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        let openMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        let before = ed.textView.frame.height
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {      // (queued work only runs once this block returns)
+            ed.textView.sizeToFit()
+            fputs("OPENTRIAL height 4 s after open (background layout): \(ed.textView.frame.height)\n", stderr)
+            exit(0)
+        }
+        let t1 = CFAbsoluteTimeGetCurrent()
+        if AppEnv.value("CE_OPEN_NOFORCE") == nil { lm.ensureLayout(for: ed.textView.textContainer!) }
+        let layoutMs = (CFAbsoluteTimeGetCurrent() - t1) * 1000
+        ed.textView.sizeToFit()
+        let after = ed.textView.frame.height
+        let lines = (ed.textView.string as NSString).components(separatedBy: "\n").count
+        fputs(String(format: "OPENTRIAL %@ lines %d nonContiguous %@: open %.0f ms, height at open %.0f, after full layout %.0f (error %.1f%%), full layout %.0f ms\n",
+                     (path as NSString).lastPathComponent, lines, lm.allowsNonContiguousLayout ? "ON" : "off", openMs, before, after, abs(after - before) / max(after, 1) * 100, layoutMs), stderr)
+    }
+
+    /// CE_COMPL_FILE=<php file> CE_COMPL_TEXT=<text>: appends the text at the end of the file one key at a time (like typing) and prints the
+    /// popup after each key. Shows what the user sees for e.g. `Route::po`.
+    private static func typedCompletionProbe(w: ProjectWindow) {
+        guard let path = AppEnv.value("CE_COMPL_FILE"), let text = AppEnv.value("CE_COMPL_TEXT") else { return }
+        w.open(URL(fileURLWithPath: path))
+        guard let ed = w.current, let c = CompletionSystem.controller(for: ed) else { fputs("COMPL no controller\n", stderr); return }
+        let tv = ed.textView
+        func pump(_ t: Double) { RunLoop.current.run(until: Date().addingTimeInterval(t)) }
+        pump(1.0)
+        tv.setSelectedRange(NSRange(location: (tv.string as NSString).length, length: 0))
+        tv.insertText("\n", replacementRange: NSRange(location: NSNotFound, length: 0))
+        for ch in text.map(String.init) {
+            if let ev = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: ch.first!.isUppercase ? [.shift] : [], timestamp: 0, windowNumber: 0, context: nil,
+                                         characters: ch, charactersIgnoringModifiers: ch.lowercased(), isARepeat: false, keyCode: 0) { _ = c.handleKey(ev) }
+            tv.insertText(ch, replacementRange: NSRange(location: NSNotFound, length: 0))
+            pump(Double(AppEnv.value("CE_COMPL_PUMP") ?? "") ?? 0.9)
+            fputs("COMPL after '\(ch)': open=\(c.isOpen) [\(c.candidateLabels.prefix(10).joined(separator: ", "))]\n", stderr)
+        }
+        pump(1.5)
+        fputs("COMPL settled: open=\(c.isOpen) [\(c.candidateLabels.prefix(10).joined(separator: ", "))]\n", stderr)
     }
 
     /// CE_TOA_FILE=<php file with `Request $request`>: types `$request->toA` through the real controller and prints the popup list.
