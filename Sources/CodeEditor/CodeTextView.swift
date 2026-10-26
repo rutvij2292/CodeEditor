@@ -1506,6 +1506,10 @@ extension CodeTextView {
         guard ls < loc else { return nil }
         var i = ls
         while i < loc { let c = s.character(at: i); if c != 32 && c != 9 { return nil }; i += 1 }
+        // blank line, caret at its end: one Backspace clears the whole indentation (the next one joins the previous line)
+        var e = loc
+        while e < s.length, s.character(at: e) == 32 || s.character(at: e) == 9 { e += 1 }
+        if e >= s.length || s.character(at: e) == 10 || s.character(at: e) == 13 { return NSRange(location: ls, length: loc - ls) }
         if s.character(at: loc - 1) == 9 { return NSRange(location: loc - 1, length: 1) }
         let n = max(1, tabColumns)
         var col = 0

@@ -189,7 +189,7 @@ enum MainMenu {
             item("Resolve Pull Request Conflicts…", #selector(AppDelegate.resolvePullRequest(_:)), "p", [.command, .option, .shift], target: a),
             item("Show History for File", #selector(AppDelegate.showFileHistory(_:)), "", target: a),
             item("Annotate with Git Blame", #selector(AppDelegate.toggleBlameAnnotations(_:)), "a", [.command, .option], target: a),
-            toggleItem("Toggle Inline Blame", "inlineBlame", a),
+            toggleItem("Toggle Inline Blame", "inlineBlame", a, key: "b", mods: [.control, .option]),
             item("Review Diff with Claude…", #selector(AppDelegate.reviewDiffWithClaude(_:)), "", target: a),
             sep,
             item("Show Git Panel", #selector(AppDelegate.toggleGit(_:)), "9", target: a),
@@ -250,8 +250,8 @@ enum MainMenu {
     }
 
     /// A View/Git menu checkmark item bound to a `Prefs` Boolean (see `AppDelegate.togglePreference`).
-    private static func toggleItem(_ title: String, _ key: String, _ a: AppDelegate) -> NSMenuItem {
-        let i = item(title, #selector(AppDelegate.togglePreference(_:)), target: a)
+    private static func toggleItem(_ title: String, _ key: String, _ a: AppDelegate, key shortcut: String = "", mods: NSEvent.ModifierFlags = [.command]) -> NSMenuItem {
+        let i = item(title, #selector(AppDelegate.togglePreference(_:)), shortcut, mods, target: a)
         i.representedObject = key
         return i
     }

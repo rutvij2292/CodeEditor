@@ -344,6 +344,8 @@ final class BlameController {
             hideChip(); inlineText = nil; return
         }
         let lineRange = text.lineRange(for: NSRange(location: loc, length: 0))
+        // Blank / whitespace-only line: the chip would sit on the caret and Tab / indent would appear to jump.
+        if text.substring(with: lineRange).allSatisfy({ $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r" }) { hideChip(); inlineText = nil; return }
         if Blame.suppressInline?(tab, lineRange) == true { hideChip(); inlineText = nil; return }
         let state = info(forBufferLine: line)
         let string: String

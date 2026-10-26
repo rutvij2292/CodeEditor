@@ -97,6 +97,7 @@ enum SelfTest {
                 laterChecks(w: w, a: a, dir: dir)
                 projectChecks(app: app, w: w, dir: dir) {
                     multiCaretChecks(w: w, dir: fm.temporaryDirectory)
+                    editingChecks(w: w, dir: fm.temporaryDirectory)
                     fastTierChecks()
                     SelfTestNativePHP.run()
                     SelfTestNativePHPSig.run()

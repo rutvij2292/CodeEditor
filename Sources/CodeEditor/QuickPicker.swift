@@ -56,8 +56,9 @@ private final class PickerRowCell: NSView {
         let h = bounds.height, pad: CGFloat = 16
         icon.frame = NSRect(x: pad, y: (h - 16) / 2, width: 18, height: 16)
         let x0 = pad + 18 + 8, avail = bounds.width - x0 - pad, gap: CGFloat = 12
-        let tNat = ceil(title.attributedStringValue.size().width) + 8
-        let dNat = detail.stringValue.isEmpty ? 0 : ceil(detail.attributedStringValue.size().width) + 2
+        // measured from the raw strings: a truncating label's own size() can report the already-truncated text
+        let tNat = ceil(NSAttributedString(string: title.stringValue, attributes: [.font: NSFont.systemFont(ofSize: 14, weight: .bold)]).size().width) + 8
+        let dNat = detail.stringValue.isEmpty ? 0 : ceil((detail.stringValue as NSString).size(withAttributes: [.font: detail.font ?? NSFont.systemFont(ofSize: 12)]).width) + 6
         var tw = min(tNat, avail)
         var dw = max(0, min(dNat, avail - tw - gap))
         if dNat > 0 && dw < avail * 0.3 {

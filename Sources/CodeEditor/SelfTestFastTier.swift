@@ -187,11 +187,23 @@ extension SelfTest {
         check("fast: new migration column picked up", labels(fast(root, "app/a.php", "<?php\nuse App\\Models\\Post;\nPost::where('|")).contains("views_count"))
         check("fast: new routes file picked up", labels(fast(root, "app/a.php", "<?php\nroute('|")).contains("api.ping"))
 
+        // typing more of a member name must keep the member (`$request->to` -> `$request->toA`)
+        put(root, "vendor/laravel/framework/src/Illuminate/Http/Request.php", "<?php\nnamespace Illuminate\\Http;\nclass Request {\n    public function toArray() { return []; }\n    public function toJson() { return ''; }\n    public function touch() {}\n    public function validationData() {}\n    public function getPayload() {}\n}\n")
+        FastTier.invalidate(root: root)
+        for typed in ["to", "toA", "toAr", "toArray"] {
+            let body = "<?php\nuse Illuminate\\Http\\Request;\nclass C {\n    public function f(Request $request) {\n        $request->\(typed)|\n    }\n}\n"
+            let its = fast(root, "app/a.php", body)
+            let clean = body.replacingOccurrences(of: "|", with: "")
+            let out = CompletionRanker.rank(results: [(its, false)], text: clean as NSString, caret: (body as NSString).range(of: "|").location, anchor: 0)
+            check("fast: `->\(typed)` lists toArray first among prefix matches", typed == "toArray" || out.ranked.first?.item.label == "toArray")
+        }
+
         // robustness
         _ = fast(root, "app/a.php", "<?php\n$x = $a->b(->c((( $d->|")
         _ = fast(root, "app/a.php", "<?php\nRoute::get(|")
         check("fast: garbage input does not crash", true)
         try? fm.removeItem(at: root)
+        memberPrefixProbe()
         fastTierBench()
     }
 
@@ -200,6 +212,36 @@ extension SelfTest {
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
         let kr = withUnsafeMutablePointer(to: &info) { $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count) } }
         return kr == KERN_SUCCESS ? Double(info.resident_size) / 1_048_576 : 0
+    }
+
+    /// CE_TOA_FILE=<php file with `Request $request`>: prints, per provider, what `$request->to` / `->toA` yields (diagnostic).
+    private static func memberPrefixProbe() {
+        guard let path = AppEnv.value("CE_TOA_FILE"), let src = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+        let ns0 = src as NSString
+        let r = ns0.range(of: "Request $request")
+        guard r.location != NSNotFound else { fputs("PROBE no Request $request\n", stderr); return }
+        let brace = ns0.range(of: "{", range: NSRange(location: r.location, length: ns0.length - r.location))
+        let url = URL(fileURLWithPath: path)
+        for typed in ["to", "toA"] {
+            let text = ns0.replacingCharacters(in: NSRange(location: brace.location + 1, length: 0), with: "\n        $request->\(typed)")
+            let caret = brace.location + 1 + ("\n        $request->" + typed).utf16.count
+            let ns = text as NSString
+            let start = caret - typed.utf16.count
+            let ctx = CompletionContext(text: text, caret: caret, fileURL: url, fileExtension: "php", triggerCharacter: nil, isManual: false,
+                                        prefixRange: NSRange(location: start, length: typed.utf16.count))
+            var results: [(items: [CompletionItem], incomplete: Bool)?] = []
+            let providers = CompletionRegistry.providers(forExtension: "php")
+            for p in providers {
+                let sem = DispatchSemaphore(value: 0)
+                var got: ([CompletionItem], Bool) = ([], false)
+                p.complete(ctx) { got = ($0, $1); sem.signal() }
+                while sem.wait(timeout: .now() + 0.01) == .timedOut { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+                results.append(got)
+                fputs("PROBE \(typed) \(type(of: p)): \(got.0.count) items, toArray=\(got.0.contains { $0.label == "toArray" }) incomplete=\(got.1)\n", stderr)
+            }
+            let out = CompletionRanker.rank(results: results, text: ns, caret: caret, anchor: start)
+            fputs("PROBE \(typed) top: \(out.ranked.prefix(8).map { $0.item.label + "/" + String($0.cls) }.joined(separator: ", "))\n", stderr)
+        }
     }
 
     /// CE_FASTTIER_BENCH=<laravel root>: read-only measurements on a real project, printed to stderr.

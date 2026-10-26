@@ -46,7 +46,8 @@ enum Prefs {
     static var powerSaver: String { get { get("powerSaver", "auto") } set { set("powerSaver", ["auto", "always", "off"].contains(newValue) ? newValue : "auto") } }
     /// Asynchronous text drawing: "auto" (big files, never in power saver / occluded, self-disables if slower), "on" or "off". See GPUAssist.
     static var gpuAssist: String { get { get("gpuAssist", "auto") } set { set("gpuAssist", ["auto", "on", "off"].contains(newValue) ? newValue : "auto") } }
-    static var inlineBlame: Bool { get { get("inlineBlame", true) } set { set("inlineBlame", newValue) } }
+    /// Off by default; toggled with Ctrl-Option-B (Git menu).
+    static var inlineBlame: Bool { get { get("inlineBlame", false) } set { set("inlineBlame", newValue) } }
     /// Default indentation when neither .editorconfig nor the file's own content decides.
     static var defaultIndentSize: Int { get { get("defaultIndentSize", 4) } set { set("defaultIndentSize", min(8, max(1, newValue))) } }
     static var defaultIndentUsesTabs: Bool { get { get("defaultIndentUsesTabs", false) } set { set("defaultIndentUsesTabs", newValue) } }
