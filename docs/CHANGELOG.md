@@ -2,6 +2,11 @@
 
 Version is `0.<commit count>` (see build-app.sh); the installer is `dist/Kode-<version>.dmg`.
 
+## 0.266
+- Double Shift opens the tabbed Search Everywhere: All, Classes, Files, Symbols, Actions, Text; Tab / Shift-Tab switch tabs, "Include non-project items" adds vendor classes, files and members, the footer shows the full path, Shift-Return opens in a right split. The Text tab searches file contents.
+- Return after an open tag indents one level; Return between `<div>|</div>` expands onto three lines.
+- The project index no longer re-scans on a timer: only when files change.
+
 ## 0.264
 - Fixed the caret being drawn at column 0 after Return on an indented line (TextKit lays out line-end blanks with zero width; the caret x is now computed from the column).
 

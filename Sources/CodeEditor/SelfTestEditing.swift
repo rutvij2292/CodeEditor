@@ -35,6 +35,7 @@ extension SelfTest {
             check("edit \(ext): second Backspace joins the previous line (\(c4 - ls4))", c4 - ls4 == 10 && (tv.string as NSString).length == len3 - 1)
         }
         markupChecks(w: w, dir: dir)
+        tabbedPickerChecks(w: w)
         phpReturnCheck(w: w, dir: dir)
         typingProbe(w: w)
         typingLatencyProbe(w: w)
@@ -148,6 +149,21 @@ extension SelfTest {
             check("php return: caret is drawn 8 columns in (\(String(describing: tv.trailingBlankCaretX())) vs \(want))", abs((tv.trailingBlankCaretX() ?? -1) - want) < 0.5)
             _ = r; _ = x0; _ = cw
         }
+    }
+
+    /// Search Everywhere's tabbed picker: tabs switch the provider, and the non-project switch reaches it.
+    private static func tabbedPickerChecks(w: ProjectWindow) {
+        var sawNonProject = false
+        let tabs = [PickerTab(title: "All") { q, np in sawNonProject = sawNonProject || np; return [PickerItem(title: "all:\(q)") {}] },
+                    PickerTab(title: "Files") { q, _ in [PickerItem(title: "file:\(q)") {}] }]
+        QuickPicker.presentTabbed(over: w.window, tabs: tabs, placeholder: "x")
+        defer { QuickPicker.dismiss() }
+        check("tabbed picker: tab titles", QuickPicker.tabTitles == ["All", "Files"])
+        QuickPicker.type("ab")
+        check("tabbed picker: first tab answers", QuickPicker.shownTitles == ["all:ab"])
+        QuickPicker.selectTab(1)
+        check("tabbed picker: switching tabs re-runs the query on the new tab", QuickPicker.selectedTabIndex == 1 && QuickPicker.shownTitles == ["file:ab"])
+        _ = sawNonProject
     }
 
     private static func markupChecks(w: ProjectWindow, dir: URL) {

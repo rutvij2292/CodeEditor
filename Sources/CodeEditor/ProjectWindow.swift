@@ -34,7 +34,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     let termDock = TerminalDockState()
     var problemsObserver: NSObjectProtocol?
     var projectFiles: [String] { index?.files ?? [] }
-    private var symbols: SymbolIndex?
+    private(set) var symbols: SymbolIndex?
     private var watcher: FSWatcher?
     private var fallbackTimer: Timer?
     private var git: GitPanelController?
@@ -1051,15 +1051,25 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         return String(url.path.dropFirst(root.path.count + 1))
     }
 
-    private func fileItem(_ rel: String) -> PickerItem {
+    func fileItem(_ rel: String) -> PickerItem {
         let url = URL(fileURLWithPath: rel, relativeTo: root).standardizedFileURL
         let dir = (rel as NSString).deletingLastPathComponent
-        return PickerItem(title: url.lastPathComponent, detail: dir, symbol: FileIcon.symbol(forExtension: url.pathExtension),
-                          key: rel) { [weak self] in self?.open(url) }
+        var item = PickerItem(title: url.lastPathComponent, detail: dir, symbol: FileIcon.symbol(forExtension: url.pathExtension),
+                              key: rel) { [weak self] in self?.open(url) }
+        item.footer = (url.path as NSString).abbreviatingWithTildeInPath
+        item.runSplit = { [weak self] in self?.openInRightSplit(url) }
+        return item
+    }
+
+    /// Shift-Return in Search Everywhere: open the file next to the tab that was active.
+    func openInRightSplit(_ url: URL, line: Int? = nil) {
+        let was = tabs.selectedID
+        open(url, line: line)
+        if let was, was != tabs.selectedID { splitEditorRight(with: was) }
     }
 
     /// Open tabs (most recent first), then files opened in earlier sessions.
-    private func recentRelativePaths() -> [String] {
+    func recentRelativePaths() -> [String] {
         guard let root else { return [] }
         var seen = Set<String>(), result: [String] = []
         for path in mru + RecentFiles.all(for: root) where path.hasPrefix(root.path + "/") && seen.insert(path).inserted {
@@ -1108,26 +1118,10 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         QuickPicker.present(over: window, placeholder: "Find action…", items: actionItems())
     }
 
-    func showSearchEverywhere() {
-        let actions = actionItems()
-        let recents = recentRelativePaths()
-        QuickPicker.present(over: window, placeholder: "Search everywhere…", items: [], provider: { [weak self] query in
-            guard let self else { return [] }
-            let trimmed = query.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty { return recents.prefix(12).map(self.fileItem) }
-            let q = Array(trimmed.lowercased().filter { !$0.isWhitespace })
-            var scored: [(Int, PickerItem)] = []
-            for hit in self.index?.search(query, limit: 12) ?? [] { scored.append((hit.score, self.fileItem(hit.path))) }
-            for item in actions {
-                if let s = Fuzzy.score(q, in: item.key) { scored.append((s - 10, item)) }
-            }
-            scored.sort { $0.0 > $1.0 }
-            return scored.prefix(30).map(\.1)
-        })
-    }
+    func showSearchEverywhere(tab: Int = 0) { SearchEverywhere.present(in: self, tab: tab) }
 
     /// Every enabled menu command, as picker rows ("Code › Duplicate Line   ⌘D").
-    private func actionItems() -> [PickerItem] {
+    func actionItems() -> [PickerItem] {
         NSApp.mainMenu?.update()
         var items: [PickerItem] = []
         func walk(_ menu: NSMenu, path: [String]) {

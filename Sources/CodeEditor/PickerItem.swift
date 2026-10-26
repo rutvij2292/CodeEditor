@@ -7,6 +7,9 @@ struct PickerItem {
     var symbol: String          // SF Symbol name shown at the left
     var key: String             // text fuzzy-matched against the query (defaults to title)
     var run: () -> Void
+    /// Search Everywhere: the full path shown in the footer, and the alternative for Shift-Return ("Open In Right Split").
+    var footer = ""
+    var runSplit: (() -> Void)?
 
     init(title: String, detail: String = "", symbol: String = "doc.text", key: String? = nil,
          run: @escaping () -> Void) {
@@ -16,4 +19,10 @@ struct PickerItem {
         self.key = key ?? title
         self.run = run
     }
+}
+
+/// One tab of the tabbed picker (Search Everywhere): its rows for a query; the flag is "Include non-project items".
+struct PickerTab {
+    let title: String
+    let provider: (_ query: String, _ includeNonProject: Bool) -> [PickerItem]
 }

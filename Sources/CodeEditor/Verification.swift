@@ -27,7 +27,7 @@ enum Verification {
             case "actions": w.showFindAction()
             case "artisan": w.showArtisanPalette()
             case "routes": w.showRouteBrowser()
-            case "everywhere": w.showSearchEverywhere()
+            case "everywhere": w.showSearchEverywhere(tab: Int(AppEnv.value("CE_TAB") ?? "") ?? 0); if let q = AppEnv.value("CE_QUERY") { QuickPicker.type(q) }
             case "projects": app.showRecentProjects(nil)
             case "git": w.toggleGitPanel()
             case "git-log": w.showGitLog()

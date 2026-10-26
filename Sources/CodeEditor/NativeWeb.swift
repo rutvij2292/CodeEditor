@@ -251,7 +251,7 @@ final class NWProject {
     static let cssExts: Set<String> = ["css", "scss", "less", "pcss", "postcss"]
     static let markupExts: Set<String> = ["html", "htm", "vue", "phtml", "svelte", "astro", "twig", "jsx", "tsx", "js", "ts", "mjs"]
     static let maxListed = 6000
-    private static let listTTL: TimeInterval = 600     // safety net only: FSEvents batches call markDirty()
+    private static let listTTL: TimeInterval = .infinity     // never on a timer: FSEvents batches call markDirty()
 
     private(set) var cssFiles: [String] = []        // absolute paths
     private(set) var markupFiles: [String] = []     // absolute paths (blade.php included)

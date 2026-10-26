@@ -105,6 +105,32 @@ final class QuickPicker: NSObject, NSTextFieldDelegate, NSTableViewDataSource, N
     static var selectedRow: Int { current?.table.selectedRow ?? -1 }
 
     private static let rowHeight: CGFloat = 28, fieldHeight: CGFloat = 52, maxRows = 10, maxShown = 200
+    private static let tabBarHeight: CGFloat = 44, footerHeight: CGFloat = 30
+
+    /// Tabbed mode (Search Everywhere): All / Classes / Files / ... with an "Include non-project items" switch and a footer.
+    private var tabs: [PickerTab] = []
+    private var tabIndex = 0
+    private var includeNonProject = false
+    private var tabButtons: [NSButton] = []
+    private let tabUnderline = NSView()
+    private let nonProjectBox = NSButton(checkboxWithTitle: "Include non-project items", target: nil, action: nil)
+    private let footerPath = NSTextField(labelWithString: "")
+    private let footerHint = NSTextField(labelWithString: "")
+    private var tabbed: Bool { !tabs.isEmpty }
+
+    static func presentTabbed(over window: NSWindow, tabs: [PickerTab], placeholder: String, selectedTab: Int = 0) {
+        dismiss()
+        let p = QuickPicker(parent: window, placeholder: placeholder, items: [], preselect: 0, initialQuery: "", provider: nil)
+        p.tabs = tabs
+        p.tabIndex = min(max(selectedTab, 0), tabs.count - 1)
+        p.buildTabChrome()
+        current = p
+        p.show()
+    }
+
+    static var tabTitles: [String] { current?.tabs.map(\.title) ?? [] }
+    static var selectedTabIndex: Int { current?.tabIndex ?? -1 }
+    static func selectTab(_ i: Int) { current?.switchTab(to: i) }
 
     private weak var parent: NSWindow?
     private var items: [PickerItem]
@@ -194,6 +220,7 @@ final class QuickPicker: NSObject, NSTextFieldDelegate, NSTableViewDataSource, N
     }
 
     private func restyle() {
+        restyleTabs()
         root.layer?.backgroundColor = Theme.background.cgColor
         root.layer?.borderColor = Theme.gutter.withAlphaComponent(0.35).cgColor
         divider.layer?.backgroundColor = Theme.gutter.withAlphaComponent(0.3).cgColor
@@ -234,7 +261,9 @@ final class QuickPicker: NSObject, NSTextFieldDelegate, NSTableViewDataSource, N
     private func refilter(initial: Bool = false) {
         let text = field.stringValue
         query = Array(text.lowercased().filter { !$0.isWhitespace })
-        if let provider {
+        if tabbed {
+            shown = Array(tabs[tabIndex].provider(text, includeNonProject).prefix(Self.maxShown))
+        } else if let provider {
             shown = Array(provider(text).prefix(Self.maxShown))
         } else if query.isEmpty {
             shown = Array(items.prefix(Self.maxShown))
@@ -322,10 +351,11 @@ final class QuickPicker: NSObject, NSTextFieldDelegate, NSTableViewDataSource, N
 
     private func resize(animated: Bool) {
         guard let parent else { return }
-        let w = min(640, parent.frame.width - 40)
+        let w = min(tabbed ? 760 : 640, parent.frame.width - 40)
         let rows = min(shown.count, Self.maxRows)
         let listH = shown.isEmpty ? 44 : CGFloat(rows) * Self.rowHeight + 8
-        let h = Self.fieldHeight + 1 + listH
+        let chrome: CGFloat = tabbed ? Self.tabBarHeight + Self.footerHeight : 0
+        let h = Self.fieldHeight + 1 + listH + chrome
         let pf = parent.frame
         let frame = NSRect(x: pf.midX - w / 2, y: pf.maxY - 90 - h, width: w, height: h)
         empty.isHidden = !shown.isEmpty
@@ -337,13 +367,92 @@ final class QuickPicker: NSObject, NSTextFieldDelegate, NSTableViewDataSource, N
 
     private func layoutContent(width w: CGFloat, height h: CGFloat, listH: CGFloat) {
         root.frame = NSRect(x: 0, y: 0, width: w, height: h)
-        field.frame = NSRect(x: 18, y: h - Self.fieldHeight + 12, width: w - 36, height: 28)
-        divider.frame = NSRect(x: 0, y: h - Self.fieldHeight - 1, width: w, height: 1)
-        scroll.frame = NSRect(x: 0, y: 4, width: w, height: listH - 8)
-        empty.frame = NSRect(x: 0, y: (listH - 18) / 2, width: w, height: 18)
+        let top = tabbed ? Self.tabBarHeight : 0, bottom = tabbed ? Self.footerHeight : 0
+        field.frame = NSRect(x: 18, y: h - top - Self.fieldHeight + 12, width: w - 36, height: 28)
+        divider.frame = NSRect(x: 0, y: h - top - Self.fieldHeight - 1, width: w, height: 1)
+        scroll.frame = NSRect(x: 0, y: bottom + 4, width: w, height: listH - 8)
+        empty.frame = NSRect(x: 0, y: bottom + (listH - 18) / 2, width: w, height: 18)
+        if tabbed { layoutTabChrome(width: w, height: h) }
         table.tableColumns[0].width = w
         table.setFrameSize(NSSize(width: w, height: table.frame.height))
         root.layoutSubtreeIfNeeded()
+    }
+
+    // MARK: tabbed chrome
+
+    private func buildTabChrome() {
+        for (i, t) in tabs.enumerated() {
+            let b = NSButton(title: t.title, target: self, action: #selector(tabClicked(_:)))
+            b.isBordered = false
+            b.tag = i
+            b.setButtonType(.momentaryChange)
+            tabButtons.append(b)
+            root.addSubview(b)
+        }
+        tabUnderline.wantsLayer = true
+        nonProjectBox.target = self
+        nonProjectBox.action = #selector(nonProjectToggled)
+        nonProjectBox.font = .systemFont(ofSize: 13)
+        footerPath.font = .systemFont(ofSize: 12)
+        footerPath.lineBreakMode = .byTruncatingHead
+        footerHint.font = .systemFont(ofSize: 12)
+        footerHint.alignment = .right
+        for v in [tabUnderline, nonProjectBox, footerPath, footerHint] { root.addSubview(v) }
+        restyleTabs()
+    }
+
+    private func restyleTabs() {
+        guard tabbed else { return }
+        for (i, b) in tabButtons.enumerated() {
+            b.attributedTitle = NSAttributedString(string: tabs[i].title, attributes: [
+                .font: NSFont.systemFont(ofSize: 14, weight: i == tabIndex ? .semibold : .regular),
+                .foregroundColor: i == tabIndex ? Theme.foreground : Theme.gutter])
+        }
+        tabUnderline.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        nonProjectBox.attributedTitle = NSAttributedString(string: "Include non-project items", attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: Theme.foreground])
+        footerPath.textColor = Theme.gutter
+        footerHint.textColor = NSColor.controlAccentColor
+    }
+
+    private func layoutTabChrome(width w: CGFloat, height h: CGFloat) {
+        var x: CGFloat = 16
+        let y = h - Self.tabBarHeight + 8
+        for (i, b) in tabButtons.enumerated() {
+            b.sizeToFit()
+            let bw = b.frame.width + 8
+            b.frame = NSRect(x: x, y: y, width: bw, height: 26)
+            if i == tabIndex { tabUnderline.frame = NSRect(x: x + 4, y: y - 3, width: bw - 8, height: 2.5) }
+            x += bw + 8
+        }
+        nonProjectBox.sizeToFit()
+        let bw = nonProjectBox.frame.width
+        nonProjectBox.frame = NSRect(x: max(x + 8, w - bw - 16), y: y + 1, width: bw, height: 24)
+        footerPath.frame = NSRect(x: 16, y: 6, width: w * 0.62, height: 18)
+        footerHint.frame = NSRect(x: w * 0.62 + 16, y: 6, width: w - w * 0.62 - 32, height: 18)
+    }
+
+    @objc private func tabClicked(_ sender: NSButton) { switchTab(to: sender.tag) }
+
+    @objc private func nonProjectToggled() {
+        includeNonProject = nonProjectBox.state == .on
+        refilter()
+    }
+
+    private func switchTab(to i: Int) {
+        guard tabbed, i >= 0, i < tabs.count else { return }
+        tabIndex = i
+        restyleTabs()
+        refilter()
+        panel.makeFirstResponder(field)
+    }
+
+    private func updateFooter() {
+        guard tabbed else { return }
+        let r = table.selectedRow
+        guard r >= 0, r < shown.count else { footerPath.stringValue = ""; footerHint.stringValue = ""; return }
+        let it = shown[r]
+        footerPath.stringValue = it.footer.isEmpty ? it.detail : it.footer
+        footerHint.stringValue = it.runSplit != nil ? "Open In Right Split  \u{21E7}\u{21A9}" : ""
     }
 
     // MARK: selection and running
@@ -353,12 +462,13 @@ final class QuickPicker: NSObject, NSTextFieldDelegate, NSTableViewDataSource, N
         let r = min(max(row, 0), shown.count - 1)
         table.selectRowIndexes([r], byExtendingSelection: false)
         table.scrollRowToVisible(r)
+        updateFooter()
     }
 
-    private func runSelected(row: Int? = nil) {
+    private func runSelected(row: Int? = nil, split: Bool = false) {
         let r = row ?? table.selectedRow
         guard r >= 0, r < shown.count else { return }
-        let run = shown[r].run
+        let run = split ? (shown[r].runSplit ?? shown[r].run) : shown[r].run
         let parent = self.parent
         close(refocus: true)
         if AppEnv.headless { DispatchQueue.main.async { run() }; return }
@@ -385,6 +495,9 @@ final class QuickPicker: NSObject, NSTextFieldDelegate, NSTableViewDataSource, N
         case #selector(NSResponder.pageDown(_:)), Selector(("movePageDown:")),
              #selector(NSResponder.scrollPageDown(_:)): select(table.selectedRow + page)
         case #selector(NSResponder.insertNewline(_:)): runSelected()
+        case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)): if tabbed { runSelected(split: true) } else { runSelected() }
+        case #selector(NSResponder.insertTab(_:)): if tabbed { switchTab(to: (tabIndex + 1) % tabs.count) } else { return false }
+        case #selector(NSResponder.insertBacktab(_:)): if tabbed { switchTab(to: (tabIndex + tabs.count - 1) % tabs.count) } else { return false }
         case #selector(NSResponder.cancelOperation(_:)): close(refocus: true)
         default: return false
         }
