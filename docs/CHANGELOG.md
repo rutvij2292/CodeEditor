@@ -2,6 +2,10 @@
 
 Version is `0.<commit count>` (see build-app.sh); the installer is `dist/Kode-<version>.dmg`.
 
+## 0.268
+- Hot index updates: a saved, created, deleted or moved file updates the file list, the symbol table and the PHP completion index from the changed paths only; no project rescans. Large batches (checkout, install) and Reload from Disk still do a full scan.
+- Go to File no longer rescans the project every time it opens.
+
 ## 0.266
 - Double Shift opens the tabbed Search Everywhere: All, Classes, Files, Symbols, Actions, Text; Tab / Shift-Tab switch tabs, "Include non-project items" adds vendor classes, files and members, the footer shows the full path, Shift-Return opens in a right split. The Text tab searches file contents.
 - Return after an open tag indents one level; Return between `<div>|</div>` expands onto three lines.
