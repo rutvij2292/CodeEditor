@@ -2,6 +2,10 @@
 
 Version is `0.<commit count>` (see build-app.sh); the installer is `dist/Kode-<version>.dmg`.
 
+## 0.262
+- New Window (File menu, Shift-Cmd-N, and the Dock icon menu): an empty window with the project picker.
+- The native JS/TS engine is off by default (Settings > Languages); native Python stays off.
+
 ## 0.258
 - Native engines are the default for PHP, JS/TS, Vue, HTML/CSS and Tailwind. The TypeScript server and Volar are off; Python is opt-in.
 - Engine registry: each language engine has its own switches in Settings.
