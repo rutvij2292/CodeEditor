@@ -21,16 +21,11 @@ enum FastTier {
         rootCache = rootCache.filter { $0.value == "" ? false : true }
     }
 
-    private static let webLikeExtensions: Set<String> = ["css", "scss", "less", "pcss", "html", "htm", "vue", "svelte", "astro", "twig", "phtml",
-                                                         "js", "jsx", "ts", "tsx", "mjs", "cjs", "json"]
-
     /// Hot update from an FSEvents batch: the changed paths decide what is re-checked (see FastProject.noteChanged). Saving a PHP
-    /// file costs one cached class; the web / Vue / JS engines are only told when a file of theirs changed.
+    /// file costs one cached class; each of the other engines only reacts to the paths that can affect it.
     static func invalidate(root: URL, paths: [String]) {
         FastProject.existing(root: root)?.noteChanged(paths)
-        if paths.contains(where: { webLikeExtensions.contains(($0 as NSString).pathExtension.lowercased()) || $0.hasSuffix(".blade.php") }) {
-            NativeEngines.invalidate(root: root)
-        }
+        NativeEngines.invalidate(root: root, paths: paths)
         rootCache = rootCache.filter { $0.value == "" ? false : true }
     }
 
@@ -210,6 +205,7 @@ enum FastEngine {
     private static func stringItems(_ ctx: CompletionContext, _ ns: NSString, open: Int, caret: Int, blade: Bool, fp: FastProject) -> Result {
         let range = NSRange(location: open + 1, length: caret - open - 1)
         if !blade, let r = FastRules.items(ns, open: open, caret: caret, fp: fp) { return r }      // validation rules / casts
+        if !blade, let r = arrayCallableItems(ns, open: open, caret: caret, fp: fp) { return r }   // [Foo::class, '|'] / [$this, '|']
         guard let call = LaravelResolver.callContext(ns, openAbs: open) else { return Result(items: []) }
         let key = call.key
         var method = key.components(separatedBy: CharacterSet(charactersIn: ":->")).last(where: { !$0.isEmpty }) ?? key
@@ -260,6 +256,52 @@ enum FastEngine {
             uv.apply(&items, kind: kind)
         }
         return Result(items: items)
+    }
+
+    /// `[LoginController::class, '|']` and `[$this, '|']`: the public methods of the class named just before (own methods first,
+    /// inherited ones after). Route actions, middleware / event callables and `Route::resource`-style arrays all use this shape.
+    private static func arrayCallableItems(_ ns: NSString, open: Int, caret: Int, fp: FastProject) -> Result? {
+        if AppEnv.value("CE_COMPL_DEBUG") != nil { fputs("COMPL-DBG arrayCallable open=\(open) caret=\(caret) before=\(ns.substring(with: NSRange(location: max(0, open - 30), length: min(30, open))))\n", stderr) }
+        func skipBlanks(_ i: Int) -> Int { var j = i; while j >= 0, [32, 9, 10, 13].contains(ns.character(at: j)) { j -= 1 }; return j }
+        var j = skipBlanks(open - 1)
+        guard j >= 0, ns.character(at: j) == 44 else { return nil }                       // `,` before the quote
+        j = skipBlanks(j - 1)
+        var written: String?
+        let end = j + 1
+        if end >= 6, ns.substring(with: NSRange(location: end - 7 >= 0 ? end - 7 : 0, length: end - (end - 7 >= 0 ? end - 7 : 0))).hasSuffix("::class") {
+            var k = end - 7
+            let nameEnd = k
+            while k > 0, CompletionLex.isIdent(ns.character(at: k - 1)) || ns.character(at: k - 1) == 92 { k -= 1 }
+            guard nameEnd > k else { return nil }
+            written = ns.substring(with: NSRange(location: k, length: nameEnd - k))
+            j = skipBlanks(k - 1)
+        } else if end >= 5, ns.substring(with: NSRange(location: end - 5, length: 5)) == "$this" {
+            written = "$this"
+            j = skipBlanks(end - 6)
+        } else { return nil }
+        guard j >= 0, ns.character(at: j) == 91, let written else { return nil }           // the array's `[`
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let lex = PHPLex(ns)
+        guard let cur = FTParser.parse(ns, lex: lex) else { return nil }
+        if AppEnv.value("CE_COMPL_DEBUG") != nil { fputs("COMPL-DBG arrayCallable lex+parse \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)) ms\n", stderr) }
+        let fqn = written == "$this" ? cur.fqn : cur.resolve(written)
+        guard !fqn.isEmpty else { return nil }
+        let ev = FTEval(fp: fp, text: ns, lex: lex, cur: cur)
+        let range = NSRange(location: open + 1, length: caret - open - 1)
+        var items: [CompletionItem] = []
+        var seen = Set<String>()
+        if AppEnv.value("CE_COMPL_DEBUG") != nil { fputs("COMPL-DBG arrayCallable fqn=\(fqn) classes=\(ev.hierarchy(fqn).map { "\($0.fqn):\($0.methods.map { "\($0.name)/\($0.vis)" })" })\n", stderr) }
+        for (depth, k) in ev.hierarchy(fqn).enumerated() {
+            let base = k.fqn.hasSuffix("\\Controller") && depth > 0                   // the framework's base controller adds nothing useful
+            for m in k.methods where m.vis == 0 && !m.name.hasPrefix("__") && seen.insert(m.name).inserted {
+                var it = CI.make(m.name, .method, detail: "(" + m.params + ")" + (m.ret.isEmpty ? "" : ": " + m.ret),
+                                 sort: (depth == 0 ? "0" : (base ? "2" : "1")) + m.name.lowercased(), doc: "\(k.name)::\(m.name)", range: range)
+                it.priority = depth == 0 ? 10 : (base ? 60 : 30)
+                items.append(it)
+            }
+        }
+        if AppEnv.value("CE_COMPL_DEBUG") != nil { fputs("COMPL-DBG arrayCallable done \(items.count) items in \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)) ms\n", stderr) }
+        return items.isEmpty ? nil : Result(items: items)
     }
 
     private static func usageKind(key: String, method: String, argIndex: Int, view: Bool) -> FUsageKind? {

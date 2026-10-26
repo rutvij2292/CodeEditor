@@ -580,6 +580,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             editor.onDirtyChange = { [weak self, weak editor] in
                 guard let self, let editor else { return }
                 self.tabs.setDirty(editor.isDirty, for: editor.url.standardizedFileURL.path)
+                self.window.isDocumentEdited = self.current?.isDirty ?? false
             }
             editor.onSave = { [weak self, weak editor] in if let editor { self?.fileSaved(editor.url) } }
             editor.onDropURLs = { [weak self] urls in self?.handleDrop(urls) }
@@ -686,6 +687,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             window.title = root.lastPathComponent
         }
         window.representedURL = root
+        window.isDocumentEdited = current?.isDirty ?? false          // the unsaved dot (the tab strip is hidden in single-tab mode)
     }
 
     var symbolEntries: [SymbolIndex.Entry] { symbols?.entries ?? [] }

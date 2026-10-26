@@ -116,3 +116,10 @@ enum GoToLineInput {
         return (line, 1)
     }
 }
+
+/// Membership in an ascending, plainly sorted `[String]` (the engines' file lists): O(log n), no allocation.
+func sortedContains(_ list: [String], _ x: String) -> Bool {
+    var lo = 0, hi = list.count
+    while lo < hi { let mid = (lo + hi) / 2; if list[mid] < x { lo = mid + 1 } else { hi = mid } }
+    return lo < list.count && list[lo] == x
+}

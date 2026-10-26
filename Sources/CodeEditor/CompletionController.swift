@@ -273,6 +273,7 @@ final class CompletionController: NSObject {
     }
 
     private func deliver(_ index: Int, _ items: [CompletionItem], _ incomplete: Bool, _ g: Int) {
+        if AppEnv.value("CE_COMPL_DEBUG") != nil { fputs("COMPL-DBG deliver provider=\(index) items=\(items.count) g=\(g) generation=\(generation)\n", stderr) }
         guard g == generation, index < results.count else { return }
         results[index] = (items, incomplete)
         if requestingNow { deliveredDuringRequest = true } else { present() }

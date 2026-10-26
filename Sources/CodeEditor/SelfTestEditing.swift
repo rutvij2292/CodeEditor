@@ -37,6 +37,7 @@ extension SelfTest {
         markupChecks(w: w, dir: dir)
         tabbedPickerChecks(w: w)
         singleTabChecks(w: w, dir: dir)
+        engineHotChecks(dir: dir)
         phpReturnCheck(w: w, dir: dir)
         typingProbe(w: w)
         typedCompletionProbe(w: w)
@@ -154,6 +155,31 @@ extension SelfTest {
         }
     }
 
+    /// Hot updates of the Vue / web file lists: saving changes nothing, creating / deleting a file does.
+    private static func engineHotChecks(dir: URL) {
+        let fm = FileManager.default
+        let root = dir.appendingPathComponent("hot-\(getpid())")
+        try? fm.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+        func put(_ rel: String) { try? "<template><div/></template>\n".write(to: root.appendingPathComponent(rel), atomically: true, encoding: .utf8) }
+        put("src/A.vue"); put("src/app.css")
+        let rp = root.standardizedFileURL.path
+        let vue = NVProject.shared(root: rp), web = NWProject.shared(root: rp)
+        let a = rp + "/src/A.vue", b = rp + "/src/B.vue", css = rp + "/src/app.css", css2 = rp + "/src/b.css"
+        check("hot: vue list starts with A", vue.vueFiles.map { ($0 as NSString).lastPathComponent } == ["A.vue"])
+        _ = web.allCSSFiles
+        vue.noteChanged([a]); web.noteChanged([css])
+        check("hot: saving a known file keeps the lists", vue.vueFiles.count == 1 && web.allCSSFiles.count == 1)
+        put("src/B.vue"); try? "a{}\n".write(to: root.appendingPathComponent("src/b.css"), atomically: true, encoding: .utf8)
+        vue.noteChanged([b]); web.noteChanged([css2])
+        check("hot: a created .vue appears", vue.vueFiles.map { ($0 as NSString).lastPathComponent } == ["A.vue", "B.vue"])
+        check("hot: a created stylesheet appears", web.allCSSFiles.count == 2)
+        try? fm.removeItem(at: root.appendingPathComponent("src/B.vue")); try? fm.removeItem(at: root.appendingPathComponent("src/b.css"))
+        vue.noteChanged([b]); web.noteChanged([css2])
+        check("hot: a deleted .vue disappears", vue.vueFiles.map { ($0 as NSString).lastPathComponent } == ["A.vue"])
+        check("hot: a deleted stylesheet disappears", web.allCSSFiles.count == 1)
+        try? fm.removeItem(at: root)
+    }
+
     /// One visible tab by default; every open file stays open (Cmd-E), and the View toggle brings the full strip back.
     private static func singleTabChecks(w: ProjectWindow, dir: URL) {
         let was = Prefs.multipleTabs
@@ -162,10 +188,16 @@ extension SelfTest {
         for u in urls { try? "x\n".write(to: u, atomically: true, encoding: .utf8); w.open(u) }
         Prefs.multipleTabs = false
         check("tabs: one visible tab by default (\(w.tabs.visibleTabIDs.count))", w.tabs.visibleTabIDs == [urls[2].standardizedFileURL.path])
+        check("tabs: the strip row has no height in single-tab mode (\(w.tabs.stripHeight))", w.tabs.stripHeight == 0)
         check("tabs: the other files stay open", urls.allSatisfy { u in w.tabs.entries.contains { $0.id == u.standardizedFileURL.path } })
         w.open(urls[0])
         check("tabs: switching shows the new active tab only", w.tabs.visibleTabIDs == [urls[0].standardizedFileURL.path])
+        w.window.contentView?.layoutSubtreeIfNeeded()
+        fputs("TABDBG single: \(w.tabs.debugItemFrames)\n", stderr)
         Prefs.multipleTabs = true
+        w.window.contentView?.layoutSubtreeIfNeeded()
+        fputs("TABDBG multi: \(w.tabs.debugItemFrames)\n", stderr)
+        check("tabs: the strip row is back with several tabs", w.tabs.stripHeight > 0)
         check("tabs: multiple-tabs mode shows every tab", Set(urls.map { $0.standardizedFileURL.path }).isSubset(of: Set(w.tabs.visibleTabIDs)))
     }
 

@@ -124,6 +124,7 @@ enum NativeWeb {
 
     /// FSEvents batch hook: the next request re-validates the file lists and stamps.
     static func invalidate(root: URL) { NWProject.existing(root: root.standardizedFileURL.path)?.markDirty() }
+    static func invalidate(root: URL, paths: [String]) { NWProject.existing(root: root.standardizedFileURL.path)?.noteChanged(paths) }
 
     static func trimMemory() {
         NWProject.trimAll()
@@ -242,6 +243,20 @@ final class NWProject {
     }
 
     func markDirty() { flagLock.lock(); dirty = true; flagLock.unlock() }
+
+    /// Hot update: the stylesheet / markup lists only change when such a file is created, deleted or moved; saving the content of one
+    /// leaves them (and the Tailwind state keyed on them) alone, its own CSS index being validated by mtime when used.
+    func noteChanged(_ paths: [String]) {
+        for p in paths {
+            let lower = (p as NSString).lastPathComponent.lowercased()
+            let ext = (lower as NSString).pathExtension
+            if lower.hasPrefix("tailwind.config") || lower == "package.json" || lower.hasPrefix("postcss.config") { markDirty(); return }
+            let isCSS = Self.cssExts.contains(ext)
+            guard isCSS || Self.markupExts.contains(ext) || lower.hasSuffix(".blade.php") else { continue }
+            guard listed else { markDirty(); return }
+            if sortedContains(isCSS ? cssFiles : markupFiles, p) != FileManager.default.fileExists(atPath: p) { markDirty(); return }
+        }
+    }
     private func takeDirty() -> Bool { flagLock.lock(); defer { flagLock.unlock() }; let d = dirty; dirty = false; return d }
 
     // MARK: file lists (lazy; rebuilt when dirty or older than `listTTL`)

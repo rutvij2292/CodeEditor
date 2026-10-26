@@ -69,3 +69,43 @@ extension SelfTest {
         try? fm.removeItem(at: tmp)
     }
 }
+
+extension SelfTest {
+    /// CE_ENGINE_TRIAL=<project root> CE_SELFTEST=1: what a "dirty" mark costs the Vue and web engines today (a full directory walk
+    /// per change batch, on the next request), measured on a real project.
+    static func engineTrial(root path: String) {
+        func ms(_ t0: CFAbsoluteTime) -> String { String(format: "%.1f ms", (CFAbsoluteTimeGetCurrent() - t0) * 1000) }
+        let vue = NVProject.shared(root: path)
+        var t0 = CFAbsoluteTimeGetCurrent()
+        let n1 = vue.vueFiles.count + vue.codeFiles.count
+        fputs("ETRIAL Vue list, cold: \(n1) files in \(ms(t0))\n", stderr)
+        var total = 0.0
+        for _ in 0..<5 { vue.markDirty(); t0 = CFAbsoluteTimeGetCurrent(); _ = vue.vueFiles; total += CFAbsoluteTimeGetCurrent() - t0 }
+        fputs(String(format: "ETRIAL Vue list after a change (OLD per batch): %.1f ms avg\n", total / 5 * 1000), stderr)
+        t0 = CFAbsoluteTimeGetCurrent(); let g = vue.globals(); let a = vue.autoComponents()
+        fputs("ETRIAL Vue globals (\(g.count)) + auto components (\(a.count)) after a change (OLD per batch, next request): \(ms(t0))\n", stderr)
+        total = 0
+        for _ in 0..<5 { vue.markDirty(); t0 = CFAbsoluteTimeGetCurrent(); _ = vue.globals(); _ = vue.autoComponents(); total += CFAbsoluteTimeGetCurrent() - t0 }
+        fputs(String(format: "ETRIAL Vue globals + auto after markDirty: %.1f ms avg\n", total / 5 * 1000), stderr)
+        func bench(_ label: String, paths: [String], _ work: () -> Void) {
+            var tot = 0.0
+            for _ in 0..<5 { vue.noteChanged(paths); let t = CFAbsoluteTimeGetCurrent(); work(); tot += CFAbsoluteTimeGetCurrent() - t }
+            fputs(String(format: "ETRIAL NEW %@: %.2f ms avg for the next request\n", label, tot / 5 * 1000), stderr)
+        }
+        if let vf = vue.vueFiles.first { bench("saving a .vue file (lists + memos kept)", paths: [vf]) { _ = vue.vueFiles; _ = vue.globals(); _ = vue.autoComponents() } }
+        if let jf = vue.codeFiles.first { bench("saving a .js/.ts file (lists kept, globals + routes rebuilt)", paths: [jf]) { _ = vue.codeFiles; _ = vue.globals(); _ = vue.autoComponents() } }
+        bench("saving a PHP file (nothing for the Vue engine)", paths: [path + "/app/Foo.php"]) { _ = vue.vueFiles; _ = vue.globals(); _ = vue.autoComponents() }
+        let web = NWProject.shared(root: path)
+        t0 = CFAbsoluteTimeGetCurrent()
+        let n2 = web.allCSSFiles.count + web.allMarkupFiles.count
+        fputs("ETRIAL Web lists, cold: \(n2) files in \(ms(t0))\n", stderr)
+        total = 0
+        for _ in 0..<5 { web.markDirty(); t0 = CFAbsoluteTimeGetCurrent(); _ = web.allCSSFiles; total += CFAbsoluteTimeGetCurrent() - t0 }
+        fputs(String(format: "ETRIAL Web lists after a change (OLD per batch): %.1f ms avg\n", total / 5 * 1000), stderr)
+        if let css = web.allCSSFiles.first {
+            total = 0
+            for _ in 0..<5 { web.noteChanged([css]); t0 = CFAbsoluteTimeGetCurrent(); _ = web.allCSSFiles; _ = web.allMarkupFiles; total += CFAbsoluteTimeGetCurrent() - t0 }
+            fputs(String(format: "ETRIAL NEW Web lists after saving a stylesheet: %.2f ms avg\n", total / 5 * 1000), stderr)
+        }
+    }
+}

@@ -83,6 +83,8 @@ protocol NativeEngine {
     func startDiagnostics()
     /// File-system change in a project (FSEvents batch).
     func invalidate(root: URL)
+    /// Hot update: the paths of an FSEvents batch. Engines that can tell what a path affects re-check only that (default: everything).
+    func invalidate(root: URL, paths: [String])
     func trimMemory()
     func installMemoryHooks()
 
@@ -110,6 +112,7 @@ extension NativeEngine {
     func registerCompletion() {}
     func startDiagnostics() {}
     func invalidate(root: URL) {}
+    func invalidate(root: URL, paths: [String]) { invalidate(root: root) }
     func trimMemory() {}
     func installMemoryHooks() {}
     var settingsSections: [NativeSettingsSection] { [] }

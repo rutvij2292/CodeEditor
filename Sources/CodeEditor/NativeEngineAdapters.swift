@@ -117,6 +117,7 @@ struct WebEngine: NativeEngine {
     func registerCompletion() { NativeWeb.register() }
     func startDiagnostics() { NativeWebDiagController.start() }
     func invalidate(root: URL) { NativeWeb.invalidate(root: root) }
+    func invalidate(root: URL, paths: [String]) { NativeWeb.invalidate(root: root, paths: paths) }
     func trimMemory() { NativeWeb.trimMemory() }
     func installMemoryHooks() { NativeWeb.installMemoryHooks() }
     func resetPrefs() {
@@ -237,6 +238,7 @@ struct VueEngine: NativeEngine {
     func findUsages(_ w: ProjectWindow, tab: EditorTab) -> Bool { NativeVueUI.findUsages(w) }
     func registerCompletion() { NativeVue.register() }
     func invalidate(root: URL) { NativeVue.invalidate(root: root) }
+    func invalidate(root: URL, paths: [String]) { NativeVue.invalidate(root: root, paths: paths) }
     func trimMemory() { NativeVue.trimMemory() }
     func installMemoryHooks() { NativeVue.installMemoryHooks() }
     func resetPrefs() { off(NativeVue.enabledKey); off(NativeVue.nativeOnlyKey) }

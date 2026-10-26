@@ -133,6 +133,23 @@ final class TabHost: NSView {
     var onDropURLs: (([URL]) -> Void)?
     var onReorder: (() -> Void)?
 
+    private lazy var scrollHeight = scroll.heightAnchor.constraint(equalToConstant: 28)
+    private lazy var barLineHeight = barLine.heightAnchor.constraint(equalToConstant: 1)
+
+    /// One tab (the default) needs no strip: the breadcrumb names the file and the window shows the unsaved dot, so the row's height goes
+    /// to the editor. The strip is back whenever several tabs are shown or the editor is split.
+    private func updateChrome() {
+        let collapsed = !Prefs.multipleTabs && split == nil
+        scrollHeight.constant = collapsed ? 0 : 28
+        barLineHeight.constant = collapsed ? 0 : 1
+        scroll.isHidden = collapsed
+        barLine.isHidden = collapsed
+        updateOverflow()
+        needsLayout = true
+    }
+    /// Test hook.
+    var stripHeight: CGFloat { scrollHeight.constant }
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
@@ -169,7 +186,7 @@ final class TabHost: NSView {
             hint.centerYAnchor.constraint(equalTo: content.centerYAnchor),
             scroll.topAnchor.constraint(equalTo: topAnchor),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scroll.heightAnchor.constraint(equalToConstant: 28),
+            scrollHeight,
             scroll.trailingAnchor.constraint(equalTo: overflow.leadingAnchor),
             overflow.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             overflow.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
@@ -178,13 +195,14 @@ final class TabHost: NSView {
             strip.topAnchor.constraint(equalTo: clip.topAnchor),
             strip.bottomAnchor.constraint(equalTo: clip.bottomAnchor),
             barLine.topAnchor.constraint(equalTo: scroll.bottomAnchor), barLine.leadingAnchor.constraint(equalTo: leadingAnchor),
-            barLine.trailingAnchor.constraint(equalTo: trailingAnchor), barLine.heightAnchor.constraint(equalToConstant: 1),
+            barLine.trailingAnchor.constraint(equalTo: trailingAnchor), barLineHeight,
             content.topAnchor.constraint(equalTo: barLine.bottomAnchor),
             content.leadingAnchor.constraint(equalTo: leadingAnchor),
             content.trailingAnchor.constraint(equalTo: trailingAnchor),
             content.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
         registerForDraggedTypes([.fileURL])
+        updateChrome()
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -196,7 +214,7 @@ final class TabHost: NSView {
 
     var isOverflowing: Bool { strip.fittingSize.width > scroll.bounds.width + 0.5 }
 
-    private func updateOverflow() { overflow.isHidden = entries.isEmpty || !Prefs.multipleTabs || !isOverflowing }
+    private func updateOverflow() { overflow.isHidden = entries.isEmpty || !Prefs.multipleTabs || scroll.isHidden || !isOverflowing }
 
     @objc private func themeChanged() {
         restyle()
@@ -213,7 +231,7 @@ final class TabHost: NSView {
 
     // MARK: Split (two tabs side by side; each tab keeps its single view, so a split costs one NSSplitView and no buffers)
 
-    private var split: (left: String, right: String)?
+    private var split: (left: String, right: String)? { didSet { updateChrome() } }
     private var splitView: NSSplitView?
     private let leftBox = NSView(), rightBox = NSView()
     private var splitMonitor: Any?
@@ -352,12 +370,13 @@ final class TabHost: NSView {
     }
 
     /// Test hook: ids of the tabs currently shown in the strip.
+    var debugItemFrames: String { layoutSubtreeIfNeeded(); return entries.map { e in "\((e.id as NSString).lastPathComponent): hidden=\(items[e.id]?.isHidden ?? true) frame=\(items[e.id]?.frame ?? .zero)" }.joined(separator: " | ") + " strip=\(strip.frame) scroll=\(scroll.frame) bar=\(frame)" }
     var visibleTabIDs: [String] { entries.map(\.id).filter { items[$0]?.isHidden == false } }
 
     @objc private func prefsChanged(_ n: Notification) {
         guard (n.userInfo?["key"] as? String) == "multipleTabs" else { return }
         for e in entries { refreshItem(e.id) }
-        needsLayout = true
+        updateChrome()
     }
 
     func remove(_ id: String) {

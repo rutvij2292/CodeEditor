@@ -99,6 +99,7 @@ enum NativeEngines {
     static func start() { for e in all { e.startDiagnostics(); e.installMemoryHooks() } }
 
     static func invalidate(root: URL) { for e in all { e.invalidate(root: root) } }
+    static func invalidate(root: URL, paths: [String]) { for e in all { e.invalidate(root: root, paths: paths) } }
     static func trimMemory() { for e in all { e.trimMemory() } }
     static func resetPrefs() { for e in all { e.resetPrefs() } }
 

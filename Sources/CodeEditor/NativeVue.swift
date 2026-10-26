@@ -55,6 +55,7 @@ enum NativeVue {
     // MARK: memory / invalidation
 
     static func invalidate(root: URL) { NVProject.existing(root: root.standardizedFileURL.path)?.markDirty() }
+    static func invalidate(root: URL, paths: [String]) { NVProject.existing(root: root.standardizedFileURL.path)?.noteChanged(paths) }
 
     /// Drops every cached summary and file list. Safe at any time; called on memory pressure, when the app is hidden and in power-saver mode.
     static func trimMemory() {
@@ -136,6 +137,32 @@ final class NVProject {
     }
 
     func markDirty() { lock.lock(); dirty = true; globalsMemo = nil; autoMemo = nil; implicitDirs = nil; routeMemo.removeAll(); lock.unlock() }
+
+    /// Hot update. Only `.vue` and script files matter to this engine, and only some changes do anything: a created / deleted file
+    /// (the lists and the auto-import table), a script change (global registrations, router files), a build config
+    /// (aliases, plugins). Saving the content of a `.vue` file, a stylesheet or a PHP file touches nothing here: per-file summaries
+    /// are already validated by mtime when used.
+    func noteChanged(_ paths: [String]) {
+        listLock.lock(); let isListed = listed; let vl = vueList, cl = codeList; listLock.unlock()
+        var relist = false, scripts = false
+        for p in paths {
+            let name = (p as NSString).lastPathComponent.lowercased()
+            if name == "package.json" || name == "components.d.ts" || name.hasPrefix("vite.config") || name.hasPrefix("nuxt.config") || name.hasPrefix("tsconfig") || name.hasPrefix("jsconfig") {
+                markDirty(); return
+            }
+            let ext = (name as NSString).pathExtension
+            let isVue = ext == "vue", isCode = Self.codeExts.contains(ext)
+            guard isVue || isCode else { continue }
+            if isCode { scripts = true }
+            if isListed, sortedContains(isVue ? vl : cl, p) != FileManager.default.fileExists(atPath: p) { relist = true }
+            else if !isListed { relist = true }
+        }
+        guard relist || scripts else { return }
+        lock.lock()
+        if relist { dirty = true; autoMemo = nil; implicitDirs = nil }
+        if scripts || relist { globalsMemo = nil; routeMemo.removeAll() }
+        lock.unlock()
+    }
 
     func dropCaches() {
         lock.lock()
