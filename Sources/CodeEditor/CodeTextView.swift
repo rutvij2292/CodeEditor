@@ -1041,7 +1041,12 @@ final class CodeTextView: NSTextView {
         let closers: [unichar: unichar] = [123: 125, 40: 41, 91: 93]
         var text = lineEnding + indent
         var caretOffset = text.utf16.count
-        if let pv = prev, let close = closers[pv] {
+        if prev == 62, !markupExtension.isEmpty, p > 0, MarkupGate.extensions.contains(markupExtension.lowercased()) || markupExtension.lowercased() == "php",
+           MarkupGate.opensElement(s, gt: p - 1) {                       // Return after `<div>`: one level deeper, `</div>` drops below
+            text += indentUnit
+            caretOffset = text.utf16.count
+            if sel.upperBound + 1 < s.length, s.character(at: sel.upperBound) == 60, s.character(at: sel.upperBound + 1) == 47 { text += lineEnding + indent }
+        } else if let pv = prev, let close = closers[pv] {
             text += indentUnit
             caretOffset = text.utf16.count
             if sel.upperBound < s.length, s.character(at: sel.upperBound) == close { text += lineEnding + indent }

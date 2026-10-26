@@ -180,6 +180,17 @@ extension SelfTest {
             let c = tv.selectedRange().location
             let ls = (tv.string as NSString).lineRange(for: NSRange(location: c, length: 0)).location
             check("markup \(ext): Return on an empty line keeps the indent (\(c - ls))", c - ls == 8)
+            // Return after an open tag indents; between the tags it also moves the end tag down
+            do {
+                let t = tv.string as NSString
+                let at = t.range(of: "<h1></h1>").location + 4
+                tv.setSelectedRange(NSRange(location: at, length: 0))
+                tv.insertNewline(nil)
+                check("markup \(ext): Return between tags expands them", tv.string.contains("        <h1>\n            \n        </h1>"))
+                let cc = tv.selectedRange().location
+                let l0 = (tv.string as NSString).lineRange(for: NSRange(location: cc, length: 0)).location
+                check("markup \(ext): the caret is on the indented middle line (\(cc - l0))", cc - l0 == 12)
+            }
         }
     }
 

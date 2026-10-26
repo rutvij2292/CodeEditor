@@ -77,4 +77,27 @@ enum MarkupGate {
         if caret + close.utf16.count <= ns.length, ns.substring(with: NSRange(location: caret, length: close.utf16.count)) == close { return nil }
         return name
     }
+
+    /// True when the `>` at `gt` ends an opening tag of a non-void element (`<div class="x">`, not `</div>`, `<br>` or `<x />`).
+    static func opensElement(_ ns: NSString, gt: Int) -> Bool {
+        guard gt >= 0, gt < ns.length, ns.character(at: gt) == 62, gt > 0, ns.character(at: gt - 1) != 47 else { return false }
+        let floor = max(0, gt - 1500)
+        var j = gt - 1
+        var quote: unichar = 0
+        // walk back to the `<`; quotes may hide a `>` or `<` inside attribute values
+        while j >= floor {
+            let c = ns.character(at: j)
+            if quote != 0 { if c == quote { quote = 0 } }
+            else if c == 34 || c == 39 { quote = c }
+            else if c == 62 { return false }
+            else if c == 60 { break }
+            j -= 1
+        }
+        guard j >= floor, ns.character(at: j) == 60, j + 1 < gt else { return false }
+        let first = ns.character(at: j + 1)
+        guard (first >= 65 && first <= 90) || (first >= 97 && first <= 122) else { return false }
+        var k = j + 1
+        while k < gt, isNameChar(ns.character(at: k)) { k += 1 }
+        return !voids.contains(ns.substring(with: NSRange(location: j + 1, length: k - j - 1)).lowercased())
+    }
 }
