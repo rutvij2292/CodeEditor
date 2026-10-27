@@ -22,6 +22,11 @@ enum SelfTest {
 
     private static func runChecks(app: AppDelegate) {
         if let trial = AppEnv.value("CE_ENGINE_TRIAL") { DispatchQueue.global().async { engineTrial(root: trial); DispatchQueue.main.async { finish() } }; return }
+        if let f = AppEnv.value("CE_IDLE_FILE") {                  // typing burst, then idle: CPU / wakeups / energy per interval
+            var root = URL(fileURLWithPath: f).deletingLastPathComponent()
+            while root.path != "/", !FileManager.default.fileExists(atPath: root.appendingPathComponent("composer.json").path) { root = root.deletingLastPathComponent() }
+            idleProbe(w: app.openProject(root), file: f); return
+        }
         if let f = AppEnv.value("CE_COMPL_FILE"), AppEnv.value("CE_COMPL_ASYNC") != nil {      // typed-completion probe on its own: the main queue stays free to deliver results
             var root = URL(fileURLWithPath: f).deletingLastPathComponent()
             while root.path != "/", !FileManager.default.fileExists(atPath: root.appendingPathComponent("composer.json").path) { root = root.deletingLastPathComponent() }

@@ -2,6 +2,10 @@
 
 Version is `0.<commit count>` (see build-app.sh); the installer is `dist/Kode-<version>.dmg`.
 
+## 0.276
+- Route action completion: `Route::get('x', [LoginController::class, '|'])` offers the controller's public methods (also `[$this, '|']`); verified through the real completion pipeline.
+- Dev probes: `CE_COMPL_ASYNC` (typed completion), `CE_IDLE_FILE` (typing burst then idle: CPU / wakeups / energy; idle settles to ~0 within 10 s).
+
 ## 0.274
 - Single-tab mode no longer shows an empty strip row: the strip collapses to zero height (it returns with several tabs or a split); the unsaved dot moves to the window's close button.
 - Hot updates for the Vue / web engines: saving a file no longer rebuilds their file lists or memos (a `.js` / `.ts` save rebuilds only globals and routes); creating / deleting files refreshes the lists.

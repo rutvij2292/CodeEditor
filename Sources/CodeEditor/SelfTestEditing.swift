@@ -343,6 +343,43 @@ extension SelfTest {
         }
     }
 
+    /// CE_IDLE_FILE=<file>: opens it, types ~200 characters, then idles for CE_IDLE_SECS (default 60) printing, per 10 s, CPU time, interrupt
+    /// wakeups and billed energy (what Activity Monitor's Energy Impact is built from).
+    static func idleProbe(w: ProjectWindow, file: String) {
+        func usage() -> (cpu: Double, wake: UInt64, energy: UInt64) {
+            var ri = rusage_info_v4()
+            _ = withUnsafeMutablePointer(to: &ri) { $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(getpid(), RUSAGE_INFO_V4, $0) } }
+            return (Double(ri.ri_user_time + ri.ri_system_time) / 1e9, ri.ri_interrupt_wkups, ri.ri_billed_energy)
+        }
+        w.open(URL(fileURLWithPath: file))
+        let secs = Int(AppEnv.value("CE_IDLE_SECS") ?? "") ?? 60
+        var last = usage()
+        var typed = 0
+        let text = Array("$value = $this->service->find($id); // typing in the editor\n")
+        func report(_ tag: String) {
+            let u = usage()
+            fputs(String(format: "IDLE %@: cpu %.3f s, wakeups %llu, energy %.1f mJ\n", tag, u.cpu - last.cpu, u.wake - last.wake, Double(u.energy - last.energy) / 1e6), stderr)
+            last = u
+        }
+        func idle(_ n: Int) {
+            guard n < secs / 10 else { finish() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { report("idle +\((n + 1) * 10) s"); idle(n + 1) }
+        }
+        func type() {
+            guard let ed = w.current else { finish() }
+            if typed >= 200 { report("typing 200 chars"); idle(0); return }
+            ed.textView.insertText(String(text[typed % text.count]), replacementRange: NSRange(location: NSNotFound, length: 0))
+            typed += 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { type() }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            report("open + settle")
+            guard let ed = w.current else { finish() }
+            ed.textView.setSelectedRange(NSRange(location: (ed.textView.string as NSString).length, length: 0))
+            type()
+        }
+    }
+
     /// CE_TOA_FILE=<php file with `Request $request`>: types `$request->toA` through the real controller and prints the popup list.
     private static func typingProbe(w: ProjectWindow) {
         guard let path = AppEnv.value("CE_TOA_FILE") else { return }
