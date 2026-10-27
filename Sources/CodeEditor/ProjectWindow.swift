@@ -1127,6 +1127,24 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Help > Keyboard Shortcut Cheat Sheet: every command that has a key, grouped by menu, searchable by name or keys (built on demand).
+    func showShortcutCheatSheet() {
+        var items: [PickerItem] = []
+        for r in actionItems() {
+            // detail is "Menu › Group   ⌥⌘X": show the keys first so the list reads like a cheat sheet
+            let parts = r.detail.components(separatedBy: "   ")
+            guard parts.count == 2 else { continue }
+            var it = r
+            it.detail = parts[0]
+            it.marker = parts[1]
+            it.markerTint = .systemIndigo
+            it.symbol = "keyboard"
+            it.key = r.key + " " + parts[1]
+            items.append(it)
+        }
+        QuickPicker.present(over: window, placeholder: "Keyboard shortcuts", items: items)
+    }
+
     func showFindAction() {
         QuickPicker.present(over: window, placeholder: "Find action…   (⌥↩ assigns a shortcut)", items: actionItems())
     }

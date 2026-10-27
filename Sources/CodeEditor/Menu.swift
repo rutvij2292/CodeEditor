@@ -134,7 +134,7 @@ enum MainMenu {
             item("Edit Live Templates…", #selector(LiveTemplates.openTemplatesFile(_:)), "", target: LiveTemplates.shared),
             item("Optimize PHP Imports", #selector(PHPImportActions.optimizeImports(_:)), "o", [.control, .option], target: PHPImportActions.shared),
             item("Format Document", #selector(AppDelegate.formatDocument(_:)), "l", [.command, .option, .shift], target: a),
-            item("Toggle Soft Wrap", Selector(("toggleSoftWrap:")), ""),
+            hiddenAlias("Toggle Soft Wrap", Selector(("toggleSoftWrap:")), "", [], target: nil),     // View > Soft Wrap is the one visible entry
             item("Format JSON", #selector(ViewerSystem.formatJSON(_:)), target: ViewerSystem.shared),
             item("Minify JSON", #selector(ViewerSystem.minifyJSON(_:)), target: ViewerSystem.shared),
             sep,
@@ -216,7 +216,7 @@ enum MainMenu {
             item("TODO Tool Window", #selector(AppDelegate.showTodoTool(_:)), "8", target: a),
             item("Bookmarks Tool Window", #selector(AppDelegate.showBookmarksTool(_:)), "2", [.command, .option], target: a),
             item("HTTP Client Tool Window", #selector(AppDelegate.showHttpTool(_:)), "8", [.command, .option], target: a),
-            item("Claude Changes Tool Window", #selector(AppDelegate.showClaudeChangesTool(_:)), "", target: a),
+            item("Claude Changes Tool Window", #selector(AppDelegate.showClaudeChangesTool(_:)), "3", [.command, .option], target: a),
             item("Last Tool Window", #selector(AppDelegate.jumpToLastTool(_:)), f12, [], target: a),
             item("Hide All Tool Windows", #selector(AppDelegate.hideAllTools(_:)), f12, [.command, .shift], target: a),
             sep,
@@ -255,7 +255,8 @@ enum MainMenu {
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
             item("Zoom", #selector(NSWindow.performZoom(_:))),
         ]))
-        let help = menu("Help", [item("Keyboard Shortcuts…", #selector(AppDelegate.showKeymapSettings(_:)), "", target: a)])
+        let help = menu("Help", [item("Keyboard Shortcut Cheat Sheet", #selector(AppDelegate.showShortcutCheatSheet(_:)), "", target: a),
+                                    item("Customize Keymap…", #selector(AppDelegate.showKeymapSettings(_:)), "", target: a)])
         main.addItem(help)
         NSApp.helpMenu = help.submenu
         KeymapStore.apply(to: main)       // user shortcut overrides (Settings > Keymap)
