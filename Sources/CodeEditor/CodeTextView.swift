@@ -538,7 +538,7 @@ final class CodeTextView: NSTextView {
         }
     }
 
-    private func centerCaret() {
+    private func centerCaret(retries: Int = 12) {
         guard let lm = layoutManager, let tc = textContainer, let sv = enclosingScrollView else {
             scrollRangeToVisible(selectedRange()); return
         }
@@ -546,7 +546,21 @@ final class CodeTextView: NSTextView {
         lm.ensureLayout(forGlyphRange: glyph)
         var rect = lm.boundingRect(forGlyphRange: glyph, in: tc)
         rect.origin.y += textContainerInset.height
+        // The view only grows to the laid-out text on a later turn: a jump right after open would clamp to the stale (short) height and
+        // land at the top or "the end of what was laid out". Size the document to the layout we just forced first.
+        let laidOut = ceil(lm.usedRect(for: tc).maxY) + textContainerInset.height * 2
+        if frame.height < laidOut { setFrameSize(NSSize(width: frame.width, height: laidOut)) }
         let clip = sv.contentView
+        // A tab that was just added has no size until its first layout pass: centring against a zero-height clip would park the caret at the
+        // top edge (and later growth keeps that offset). Try again shortly instead.
+        if clip.bounds.height < 1, retries > 0 {
+            let caret = selectedRange().location
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self, self.selectedRange().location == caret else { return }
+                self.centerCaret(retries: retries - 1)
+            }
+            return
+        }
         let maxY = max(0, frame.height - clip.bounds.height)
         let y = min(max(0, rect.midY - clip.bounds.height / 2), maxY)
         clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
