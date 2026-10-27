@@ -345,6 +345,7 @@ final class ViewerController: NSObject {
         overlay?.removeFromSuperview(); overlay = nil
         if let tab { NativeProblems.set(url: tab.url, []) }
         pane?.viewerState.control?.removeFromSuperview()
+        pane?.breadcrumbBar.trailingReserve = 0
         teardownSide()
     }
 
@@ -363,6 +364,7 @@ final class ViewerController: NSObject {
             c.topAnchor.constraint(equalTo: pane.breadcrumbBar.topAnchor, constant: 2),
         ])
         pane.viewerState.control = c
+        pane.breadcrumbBar.trailingReserve = c.fittingSize.width + 20
     }
 
     @objc private func segmentChanged(_ sender: NSSegmentedControl) { setMode(ViewerMode(segment: sender.selectedSegment)) }

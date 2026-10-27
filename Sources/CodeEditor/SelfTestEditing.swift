@@ -40,6 +40,13 @@ extension SelfTest {
         engineHotChecks(dir: dir)
         phpReturnCheck(w: w, dir: dir)
         softWrapChecks(w: w, dir: dir)
+        breadcrumbReserveCheck()
+        if let out = AppEnv.value("CE_BANNER_PNG") {      // dev aid: renders the notice banner
+            let b = NoticeBanner(frame: NSRect(x: 0, y: 0, width: 900, height: 30))
+            b.set(message: "\u{201C}issues.md\u{201D} was deleted from disk \u{2014} your buffer is kept.", actions: [("Recreate", {}), ("Save As\u{2026}", {}), ("Close", {})])
+            b.layoutSubtreeIfNeeded()
+            if let rep = b.bitmapImageRepForCachingDisplay(in: b.bounds) { b.cacheDisplay(in: b.bounds, to: rep); try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out)) }
+        }
         typingProbe(w: w)
         typedCompletionProbe(w: w)
         openLayoutTrial(w: w)
@@ -379,6 +386,19 @@ extension SelfTest {
             ed.textView.setSelectedRange(NSRange(location: (ed.textView.string as NSString).length, length: 0))
             type()
         }
+    }
+
+    /// The viewer's Source / Split / Preview switch sits over the right end of the breadcrumb bar: the bar must keep that strip free.
+    private static func breadcrumbReserveCheck() {
+        let bar = BreadcrumbBar(frame: NSRect(x: 0, y: 0, width: 700, height: BreadcrumbBar.height))
+        bar.set(segments: ["vrtac-apps", "docs", "specs", "ta-track-intensive-other-activity-issues.md", "GitHub Issues: Other Activity option for Intensive TA", "Issue 2 - Frontend Intensive TA form"]
+            .enumerated().map { BreadcrumbSegment(title: $1, kind: $0 == 0 ? .root : .folder, url: nil, node: nil) })
+        bar.layoutSubtreeIfNeeded()
+        let free = (bar.hits.map { $0.frame.maxX }.max() ?? 0)
+        bar.trailingReserve = 220
+        bar.layoutSubtreeIfNeeded()
+        let reserved = (bar.hits.map { $0.frame.maxX }.max() ?? 0)
+        check("breadcrumb: keeps the right \(220) pt free for the viewer switch (\(Int(free)) -> \(Int(reserved)) of 700)", reserved <= 700 - 220 && reserved < free + 0.5)
     }
 
     /// Soft wrap through the real toggle: long lines fold at the viewport edge, no horizontal scroller, and turning it off restores both.

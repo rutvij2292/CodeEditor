@@ -45,6 +45,7 @@ final class NoticeBanner: NSView {
     private let label = NSTextField(labelWithString: "")
     private let buttons = NSStackView()
     private let line = NSView()
+    private let icon = NSImageView()
     private final class ActionButton: NSButton {
         var run: (() -> Void)?
         @objc func fire() { run?() }
@@ -57,10 +58,13 @@ final class NoticeBanner: NSView {
         label.font = .systemFont(ofSize: 12)
         buttons.spacing = 6
         line.wantsLayer = true
-        for v in [label, buttons, line] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        icon.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
+        icon.symbolConfiguration = .init(pointSize: 12, weight: .regular)
+        for v in [icon, label, buttons, line] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12), icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
             buttons.leadingAnchor.constraint(greaterThanOrEqualTo: label.trailingAnchor, constant: 10),
             buttons.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
@@ -76,8 +80,9 @@ final class NoticeBanner: NSView {
     private(set) var buttonTitles: [String] = []
 
     func restyle() {
-        layer?.backgroundColor = NSColor.systemYellow.withAlphaComponent(Theme.isDark ? 0.16 : 0.28).cgColor
-        line.layer?.backgroundColor = NSColor.systemYellow.withAlphaComponent(0.5).cgColor
+        layer?.backgroundColor = NSColor.systemOrange.withAlphaComponent(Theme.isDark ? 0.10 : 0.09).cgColor     // a tint, not a yellow slab
+        line.layer?.backgroundColor = NSColor.systemOrange.withAlphaComponent(0.25).cgColor
+        icon.contentTintColor = .systemOrange
         label.textColor = Theme.foreground
     }
 
@@ -93,8 +98,9 @@ final class NoticeBanner: NSView {
         buttons.arrangedSubviews.forEach { buttons.removeArrangedSubview($0); $0.removeFromSuperview() }
         for (title, run) in actions {
             let b = ActionButton(title: title, target: nil, action: nil)
-            b.bezelStyle = .rounded
+            b.bezelStyle = .recessed
             b.controlSize = .small
+            b.font = .systemFont(ofSize: 11.5)
             b.run = run
             b.target = b
             b.action = #selector(ActionButton.fire)

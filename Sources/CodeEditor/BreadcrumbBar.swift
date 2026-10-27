@@ -110,6 +110,8 @@ final class BreadcrumbBar: NSView, NSViewToolTipOwner {
     /// Shows a menu (tests replace this; the default pops it up under the segment).
     var present: (NSMenu, NSPoint, NSView) -> Void = { menu, point, view in menu.popUp(positioning: nil, at: point, in: view) }
     var onEscape: (() -> Void)?
+    /// Width kept free at the right edge for controls drawn over the bar (the viewer's Source / Split / Preview switch).
+    var trailingReserve: CGFloat = 0 { didSet { if trailingReserve != oldValue { relayout() } } }
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -161,7 +163,7 @@ final class BreadcrumbBar: NSView, NSViewToolTipOwner {
     private func relayout() {
         let ellipsisWidth: CGFloat = 22
         let widths = segments.indices.map(width(of:))
-        layoutResult = BreadcrumbLayout.collapse(widths: widths, available: max(0, bounds.width - 16),
+        layoutResult = BreadcrumbLayout.collapse(widths: widths, available: max(0, bounds.width - 16 - trailingReserve),
                                                  ellipsisWidth: ellipsisWidth, separator: Self.separatorWidth)
         hits = []
         var x: CGFloat = 8
@@ -173,7 +175,7 @@ final class BreadcrumbBar: NSView, NSViewToolTipOwner {
                 hits.append((-1, NSRect(x: x, y: y, width: ellipsisWidth, height: 18)))
                 x += ellipsisWidth + Self.separatorWidth
             }
-            let w = min(widths[i], max(24, bounds.width - 8 - x))
+            let w = min(widths[i], max(24, bounds.width - 8 - trailingReserve - x))
             hits.append((i, NSRect(x: x, y: y, width: w, height: 18)))
             x += w
         }
