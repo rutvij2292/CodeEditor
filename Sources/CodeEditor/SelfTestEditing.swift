@@ -253,6 +253,13 @@ extension SelfTest {
                 let syms = SymbolExtractor.symbols(in: sfc, fileExtension: "vue")
                 let comps = syms.filter { $0.kind == .component }.map { "\($0.container ?? "-")>\($0.name)@\($0.line)" }
                 check("vue structure: components and named slots, nested under their parent (got \(comps))", comps == ["->Dialog@3", "Dialog>#footer@4", "#footer>Button@5"])
+                let phpOld = "<?php\nclass A {\n    public function one() {\n        return 1;\n    }\n    public function two() {\n        return 2;\n    }\n}\n"
+                let phpNew = "<?php\nclass A {\n    public function one() {\n        return 1;\n    }\n    public function two() {\n        $x = 3;\n        return $x;\n    }\n}\n"
+                let outline = BreadcrumbOutlineBuilder.build(text: phpNew, key: "php", languages: BreadcrumbOutlineBuilder.languages(for: "php"))
+                let cs = ChangedSymbols.rows(path: "/x/A.php", rel: "A.php", old: phpOld, new: phpNew, outline: outline)
+                check("changed symbols: one row for the changed method with its line counts (got \(cs.map { "\($0.name) +\($0.added) -\($0.removed) @\($0.line)" }))",
+                      cs.count == 1 && cs[0].name.hasPrefix("two") && cs[0].added == 2 && cs[0].removed == 1 && cs[0].line == 7)
+                check("changed symbols: a new file is a single '(new file)' row", ChangedSymbols.rows(path: "/x/B.php", rel: "B.php", old: "", new: phpNew, outline: nil, isNew: true).map(\.name) == ["(new file)"])
                 check("vue structure: script symbols follow the template", syms.last?.name == "save" && syms.last?.kind == .function)
             }
             do {

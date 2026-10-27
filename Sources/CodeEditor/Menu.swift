@@ -164,6 +164,7 @@ enum MainMenu {
             item("Mark Plan as Reviewed", #selector(PlanSupport.markReviewed(_:)), target: PlanSupport.shared),
             item("Add Plan Review Comment…", #selector(PlanSupport.addReviewComment(_:)), target: PlanSupport.shared),
             item("Search Everywhere", #selector(AppDelegate.searchEverywhere(_:)), "", target: a),
+            item("Changed Symbols…", #selector(AppDelegate.showChangedSymbols(_:)), "c", [.control, .option], target: a),
             item("Find Action…", #selector(AppDelegate.findAction(_:)), "a", [.command, .shift], target: a),
             item("Focus Breadcrumbs", #selector(AppDelegate.focusBreadcrumbs(_:)), up, [.command, .option], target: a),
             item("Go to Line…", #selector(AppDelegate.goToLine(_:)), "l", target: a),
