@@ -14,6 +14,13 @@ enum SelfTestFindPopup {
     private typealias Step = (@escaping () -> Void) -> Void
 
     static func run(w: ProjectWindow, then finish: @escaping () -> Void) {
+        do {   // always-excluded files and folders (Prefs.findExcludes) become !patterns of the mask
+            let m = FindGlobMask(FindGlobMask.merged("*.php", excludes: ".phpunit.result.cache, storage/logs"))
+            SelfTest.check("find excludes: a listed dotfile is never searched", !FindGlobMask(FindGlobMask.merged("", excludes: ".phpunit.result.cache")).allows(".phpunit.result.cache")
+                           && !FindGlobMask(FindGlobMask.merged("", excludes: ".phpunit.result.cache")).allows("tests/.phpunit.result.cache"))
+            SelfTest.check("find excludes: a listed folder is skipped, other files stay", !m.allows("storage/logs/a.php") && m.allows("app/Models/User.php"))
+            SelfTest.check("find excludes: merged text keeps the user's mask", FindGlobMask.merged("*.php", excludes: "a, b") == "*.php, !a, !b" && FindGlobMask.merged("", excludes: "") == "")
+        }
         let fm = FileManager.default
         let dir = fm.temporaryDirectory.appendingPathComponent("ce-findpopup-\(getpid())")
         try? fm.createDirectory(at: dir.appendingPathComponent("src"), withIntermediateDirectories: true)

@@ -799,6 +799,10 @@ final class FindPanelController: NSObject, NSSearchFieldDelegate, NSOutlineViewD
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        defer {
+            if !menu.items.isEmpty { menu.addItem(.separator()) }
+            let ed = NSMenuItem(title: "Edit Excluded Files and Folders…", action: #selector(editExcludes), keyEquivalent: ""); ed.target = self; menu.addItem(ed)
+        }
         guard outline.clickedRow >= 0, let item = outline.item(atRow: outline.clickedRow) else { return }
         if item is FindMatchNode {
             let c = NSMenuItem(title: "Copy Line", action: #selector(copyLine), keyEquivalent: ""); c.target = self; menu.addItem(c)
@@ -809,6 +813,55 @@ final class FindPanelController: NSObject, NSSearchFieldDelegate, NSOutlineViewD
             let title = replaceMode ? (allEx ? "Include File" : "Exclude File") : "Remove File from Results"
             let e = NSMenuItem(title: title, action: #selector(excludeFile), keyEquivalent: ""); e.target = self; menu.addItem(e)
             let p = NSMenuItem(title: "Copy Path", action: #selector(copyPath), keyEquivalent: ""); p.target = self; menu.addItem(p)
+            menu.addItem(.separator())
+            let rel = relativeToProject(f.url)
+            let name = f.url.lastPathComponent
+            let a = NSMenuItem(title: "Never Search “\(name)”", action: #selector(alwaysExcludeFile), keyEquivalent: ""); a.target = self; menu.addItem(a)
+            if rel.contains("/") {
+                let dir = (rel as NSString).deletingLastPathComponent
+                let d = NSMenuItem(title: "Never Search Folder “\(dir)”", action: #selector(alwaysExcludeFolder), keyEquivalent: ""); d.target = self; menu.addItem(d)
+            }
+        }
+    }
+
+    private func relativeToProject(_ url: URL) -> String {
+        let base = rootURL.standardizedFileURL.path
+        return url.standardizedFileURL.path.hasPrefix(base + "/") ? String(url.standardizedFileURL.path.dropFirst(base.count + 1)) : url.path
+    }
+
+    private func addExclude(_ pattern: String) {
+        var list = Prefs.findExcludes.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if !list.contains(pattern) { list.append(pattern) }
+        Prefs.findExcludes = list.joined(separator: ", ")
+        scheduleSearch(immediately: true)
+    }
+
+    @objc private func alwaysExcludeFile() {
+        let item = outline.item(atRow: outline.clickedRow)
+        guard let f = (item as? FindFileNode) ?? (item as? FindMatchNode)?.file else { return }
+        let rel = relativeToProject(f.url)
+        let name = f.url.lastPathComponent
+        addExclude(name.hasPrefix(".") || !rel.contains("/") ? name : rel)      // a dotfile name excludes it everywhere; otherwise the exact path
+    }
+
+    @objc private func alwaysExcludeFolder() {
+        let item = outline.item(atRow: outline.clickedRow)
+        guard let f = (item as? FindFileNode) ?? (item as? FindMatchNode)?.file else { return }
+        addExclude((relativeToProject(f.url) as NSString).deletingLastPathComponent)
+    }
+
+    @objc private func editExcludes() {
+        let alert = NSAlert()
+        alert.messageText = "Files and folders Find in Files skips"
+        alert.informativeText = "Comma separated. Names match anywhere (.phpunit.result.cache, *.log); a path excludes that folder or file (storage/logs, public/build)."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 24))
+        field.stringValue = Prefs.findExcludes
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save"); alert.addButton(withTitle: "Reset to Defaults"); alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: Prefs.findExcludes = field.stringValue; scheduleSearch(immediately: true)
+        case .alertSecondButtonReturn: Prefs.findExcludes = Prefs.defaultFindExcludes; scheduleSearch(immediately: true)
+        default: break
         }
     }
 

@@ -16,6 +16,10 @@ enum Prefs {
         NotificationCenter.default.post(name: didChange, object: nil, userInfo: ["key": key])
     }
 
+    /// Files and folders Find in Files never reports (glob mask syntax, comma separated; `storage/logs` excludes a folder). Edited from the results' context menu.
+    static let defaultFindExcludes = ".phpunit.result.cache, .phpunit.cache, .php-cs-fixer.cache, .eslintcache, .DS_Store"
+    static var findExcludes: String { get { get("findExcludes", defaultFindExcludes) } set { set("findExcludes", newValue) } }
+
     // MARK: Editor
     /// Font family for code ("" = bundled JetBrains Mono; "System Monospaced" = the system font).
     static var editorFontName: String { get { get("editorFontName", "") } set { set("editorFontName", newValue) } }

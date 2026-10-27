@@ -76,6 +76,13 @@ struct FindGlobMask {
 
     var isEmpty: Bool { includes.isEmpty && excludes.isEmpty }
 
+    /// The user's mask plus the always-excluded patterns, each turned into a `!pattern`.
+    static func merged(_ mask: String, excludes: String) -> String {
+        let extra = excludes.split(whereSeparator: { $0 == "," || $0 == "\n" }).map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("!") }.map { "!" + $0 }
+        return ([mask] + extra).filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+
     private static func fn(_ pattern: String, _ s: String) -> Bool { fnmatch(pattern, s, FNM_CASEFOLD) == 0 }
 
     func allows(_ rel: String) -> Bool {
@@ -510,7 +517,7 @@ final class FindEngine {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             let t0 = DispatchTime.now()
-            let mask = FindGlobMask(o.fileMask)
+            let mask = FindGlobMask(FindGlobMask.merged(o.fileMask, excludes: Prefs.findExcludes))
             var list = self.listFiles(o)
             if !mask.isEmpty { list = list.filter { mask.allows($0.rel) } }
             let sink = FindSink(token: token, batch: batch)
