@@ -4,12 +4,13 @@ import SwiftTreeSitter
 /// What a symbol segment is (drives the icon). Code kinds reuse `CodeSymbol.Kind` icons.
 enum BreadcrumbSymbolKind: String {
     case namespace, `class`, interface, trait, `enum`, function, method, property
-    case tag, rule, key, heading, directive
+    case tag, component, rule, key, heading, directive
 
     var iconName: String {
         if let code = CodeSymbol.Kind(rawValue: rawValue) { return code.iconName }
         switch self {
         case .tag: return "chevron.left.forwardslash.chevron.right"
+        case .component: return "puzzlepiece"
         case .rule: return "number.square"
         case .key: return "k.square"
         case .heading: return "number"
@@ -364,26 +365,44 @@ enum BreadcrumbOutlineBuilder {
             guard let start = firstNamed(n, "start_tag") ?? firstNamed(n, "self_closing_tag") ?? n.namedChild(at: 0),
                   let tag = firstNamed(start, "tag_name") else { return "element" }
             var label = str(tag)
+            if Self.isComponentTag(label) { return label }
             for i in 0..<start.namedChildCount {
                 guard let a = start.namedChild(at: i), a.nodeType == "attribute" else { continue }
                 let s = str(a)
                 for (prefix, mark) in [("id=", "#"), ("class=", ".")] where s.hasPrefix(prefix) {
                     let v = s.dropFirst(prefix.count).trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-                    label += mark == "." ? "." + (v.split(separator: " ").first.map(String.init) ?? v) : "#" + v
+                    let part = mark == "." ? (v.split(separator: " ").first.map(String.init) ?? v) : v
+                    if part.count <= 24 { label += mark + part }      // a long BEM class would only end in `…`
                 }
             }
             return label
+        }
+
+        static let builtinTags: Set<String> = ["component", "slot", "transition", "transition-group", "keep-alive", "router-view", "router-link", "teleport", "suspense"]
+        /// `Dialog`, `v-select`: a component, as opposed to a plain element.
+        static func isComponentTag(_ tag: String) -> Bool {
+            guard let c = tag.unicodeScalars.first, !builtinTags.contains(tag.lowercased()) else { return false }
+            return (c.value >= 65 && c.value <= 90) || tag.contains("-")
         }
 
         // Vue -------------------------------------------------------------
 
         mutating func vue(_ n: Node, _ type: String, _ parent: Int) -> Int {
             switch type {
-            case "template_element": return add("template", .tag, n, parent)
-            case "element": return add(elementLabel(n), .tag, n, parent)
+            case "template_element":
+                if parent < 0 { return add("template", .tag, n, parent) }
+                // a nested <template> only matters as a named slot (`#footer`); v-if / v-for wrappers stay out of the trail
+                let head = firstNamed(n, "start_tag").map(str) ?? ""
+                guard let r = head.range(of: #"(?:#|v-slot:)[\w\-\[\]\.]+"#, options: .regularExpression) else { return parent }
+                let name = String(head[r])
+                return add(name.hasPrefix("#") ? name : "#" + name.dropFirst(7), .component, n, parent)
+            case "element":
+                let label = elementLabel(n)
+                return add(label, Self.isComponentTag(String(label.prefix { $0 != "." && $0 != "#" })) ? .component : .tag, n, parent)
             case "style_element": return add("style", .tag, n, parent)
             case "script_element":
-                let idx = add("script", .tag, n, parent)
+                let isSetup = (firstNamed(n, "start_tag").map(str) ?? "").range(of: #"\ssetup[\s>=]"#, options: .regularExpression) != nil
+                let idx = add(isSetup ? "script setup" : "script", .tag, n, parent)
                 if let raw = firstNamed(n, "raw_text") {
                     let head = firstNamed(n, "start_tag").map(str) ?? ""
                     let isTS = head.contains("lang=\"ts\"") || head.contains("lang='ts'") || head.contains("lang=\"tsx\"")

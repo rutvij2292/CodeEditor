@@ -19,6 +19,20 @@ enum NativeVueBench {
             fputs("RESOLVE \(spec) -> \(p.resolve(spec, from: root + "/resources/js/x.vue") ?? "nil")\n", stderr)
             return
         }
+        if let spec = AppEnv.value("CE_VUE_COMPLETE") {            // dev aid: CE_VUE_COMPLETE="<file>|<text inserted after the line containing 'modal'>" prints the attribute completions there
+            let parts = spec.components(separatedBy: "|")
+            guard parts.count == 2, let text = FastProject.readRaw(parts[0]) else { fputs("COMPLETE: bad spec\n", stderr); return }
+            let ns = text as NSString
+            let m = ns.range(of: "\n", options: [], range: NSRange(location: ns.range(of: "<template>").location, length: ns.length - ns.range(of: "<template>").location)).location
+            let ins = "\n" + parts[1]
+            let withText = ns.replacingCharacters(in: NSRange(location: ns.range(of: "\n", range: NSRange(location: ns.range(of: "    <Dialog").location, length: 200)).location, length: 0), with: ins) as NSString
+            _ = m
+            let caret = ns.range(of: "\n", range: NSRange(location: ns.range(of: "    <Dialog").location, length: 200)).location + ins.utf16.count
+            let ctx = CompletionContext(text: withText as String, caret: caret, fileURL: URL(fileURLWithPath: parts[0]), fileExtension: "vue", triggerCharacter: nil, isManual: true, prefixRange: NSRange(location: caret - parts[1].trimmingCharacters(in: .whitespaces).utf16.count, length: parts[1].trimmingCharacters(in: .whitespaces).utf16.count))
+            let items = p.queue.sync { NVComplete.items(p, ctx) }
+            fputs("COMPLETE \(items.count) items: " + items.prefix(40).map(\.label).joined(separator: ", ") + "\n", stderr)
+            return
+        }
         let tWalk = Date()
         var files = p.queue.sync { p.vueFiles }
         let walkMs = ms(tWalk)

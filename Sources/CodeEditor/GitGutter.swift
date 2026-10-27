@@ -153,6 +153,8 @@ final class GitGutterController {
         gutter.onMarkerClick = { [weak self] m, r in self?.showPopover(for: m, rect: r) }
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(textChanged), name: NSText.didChangeNotification, object: tv)
+        // Edits made straight on the storage (completion rollback, smart backspace, undo, scripted edits) post no didChange: the markers went stale.
+        nc.addObserver(self, selector: #selector(storageEdited(_:)), name: NSTextStorage.didProcessEditingNotification, object: tv.textStorage)
         nc.addObserver(self, selector: #selector(statusChanged), name: GitGutter.statusChanged, object: nil)
         nc.addObserver(self, selector: #selector(powerChanged), name: PowerState.didChange, object: nil)
         reloadHead(resolveRoot: true)
@@ -173,6 +175,10 @@ final class GitGutterController {
     @objc private func statusChanged() {
         Self.cacheLock.lock(); Self.rootCache.removeAll(); Self.cacheLock.unlock()
         reloadHead(resolveRoot: true)
+    }
+    @objc private func storageEdited(_ n: Notification) {
+        guard let ts = n.object as? NSTextStorage, ts.editedMask.contains(.editedCharacters) else { return }
+        textChanged()
     }
     @objc private func textChanged() {
         // Power saver: the live diff waits for the next save / git change instead of running 0.75 s after each keystroke.

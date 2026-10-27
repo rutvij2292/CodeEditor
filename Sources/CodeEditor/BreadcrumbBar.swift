@@ -66,6 +66,21 @@ enum BreadcrumbLayout {
         var collapsed: Range<Int>?
     }
 
+    /// Folders between the project root and the last two folders before the file; they live behind the `…` menu even when there is room.
+    static func deepFolders(_ kinds: [BreadcrumbSegment.Kind]) -> Range<Int>? {
+        guard kinds.first == .root, let f = kinds.firstIndex(of: .file), f - 3 >= 2 else { return nil }
+        return 1..<(f - 2)
+    }
+
+    static func collapse(widths: [CGFloat], available: CGFloat, ellipsisWidth: CGFloat, separator: CGFloat, alwaysHidden: Range<Int>?) -> Result {
+        guard let h = alwaysHidden, !h.isEmpty else { return collapse(widths: widths, available: available, ellipsisWidth: ellipsisWidth, separator: separator) }
+        let keep = widths.indices.filter { !h.contains($0) }
+        let r = collapse(widths: keep.map { widths[$0] }, available: available - ellipsisWidth - separator, ellipsisWidth: ellipsisWidth, separator: separator)
+        let visible = r.visible.map { keep[$0] }
+        guard let c = r.collapsed else { return Result(visible: visible, collapsed: h) }
+        return Result(visible: visible, collapsed: min(keep[c.lowerBound], h.lowerBound)..<(keep[c.upperBound - 1] + 1))
+    }
+
     static func collapse(widths: [CGFloat], available: CGFloat, ellipsisWidth: CGFloat, separator: CGFloat) -> Result {
         let n = widths.count
         func total(_ idx: [Int]) -> CGFloat { idx.reduce(0) { $0 + widths[$1] } + separator * CGFloat(max(0, idx.count - 1)) }
@@ -164,7 +179,8 @@ final class BreadcrumbBar: NSView, NSViewToolTipOwner {
         let ellipsisWidth: CGFloat = 22
         let widths = segments.indices.map(width(of:))
         layoutResult = BreadcrumbLayout.collapse(widths: widths, available: max(0, bounds.width - 16 - trailingReserve),
-                                                 ellipsisWidth: ellipsisWidth, separator: Self.separatorWidth)
+                                                 ellipsisWidth: ellipsisWidth, separator: Self.separatorWidth,
+                                                 alwaysHidden: BreadcrumbLayout.deepFolders(segments.map(\.kind)))
         hits = []
         var x: CGFloat = 8
         let y = (Self.height - 18) / 2

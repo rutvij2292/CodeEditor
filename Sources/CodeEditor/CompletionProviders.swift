@@ -107,6 +107,11 @@ enum WordProvider {
         let inf = CompletionLex.info(ctx)
         if CompletionLex.state(ctx) != .code && !ctx.isManual { return [] }
         let pr = ctx.prefixRange
+        // Naming a tag or attribute in markup: document words are noise there (`id` offered `joint_partner_id`, `getElementById`); the HTML / Vue providers answer.
+        if inf.region == .html, MarkupGate.extensions.contains(ctx.fileExtension.lowercased()) {
+            let k = NWHtml.locate(NWBuf(ns), at: ctx.caret).kind
+            if k == .attrName || k == .tagName { return [] }
+        }
         if inf.region == .php || inf.region == .bladeExpr {
             if pr.location > 0 {
                 let c = ns.character(at: pr.location - 1)

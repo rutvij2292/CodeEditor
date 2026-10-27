@@ -68,6 +68,7 @@ final class BreadcrumbController: NSObject, NSMenuDelegate {
         if let key = grammarKey {
             if let outline {
                 chain = outline.chain(at: min(tab.textView.selectedRange().location, tab.textView.textStorage?.length ?? 0))
+                if key == "vue" { chain = Self.vueTrail(chain, outline.nodes) }
                 for i in chain where outline.nodes.indices.contains(i) {
                     segments.append(BreadcrumbSegment(title: outline.nodes[i].name, kind: .symbol(outline.nodes[i].kind), url: nil, node: i))
                 }
@@ -76,6 +77,20 @@ final class BreadcrumbController: NSObject, NSMenuDelegate {
         }
         bar.set(segments: segments)
         onChange?()
+    }
+
+    /// Vue SFC trail: the block, components and named slots, and the innermost element; plain wrapper divs are left out and the template
+    /// part keeps at most 4 nodes (outermost dropped first). Script symbols are untouched.
+    static func vueTrail(_ chain: [Int], _ nodes: [BreadcrumbNode]) -> [Int] {
+        var kept: [Int] = []
+        for (n, i) in chain.enumerated() where nodes.indices.contains(i) {
+            let node = nodes[i]
+            if node.parent < 0 || node.kind != .tag || n == chain.count - 1 { kept.append(i) }
+        }
+        let inner = kept.filter { nodes[$0].parent >= 0 && (nodes[$0].kind == .tag || nodes[$0].kind == .component) }
+        guard inner.count > 4 else { return kept }
+        let drop = Set(inner.prefix(inner.count - 4))
+        return kept.filter { !drop.contains($0) }
     }
 
     private func rebuildOutline(key: String) {

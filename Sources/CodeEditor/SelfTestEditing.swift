@@ -248,6 +248,11 @@ extension SelfTest {
             let inText = tv.selectedRange().location
             check("markup \(ext): no auto popup in element text", MarkupGate.isPlainText(ns, caret: inText, ext: ext))
             check("markup \(ext): popup still allowed after `<`", !MarkupGate.isPlainText("<template><di" as NSString, caret: 13, ext: ext))
+            do {
+                let t = "<template><div idx=\"a\">id</div><div id" as NSString
+                let c = CompletionContext(text: t as String, caret: t.length, fileURL: URL(fileURLWithPath: "/tmp/x.\(ext)"), fileExtension: ext, triggerCharacter: nil, isManual: true, prefixRange: NSRange(location: t.length - 2, length: 2))
+                check("markup \(ext): no document words while naming an attribute", WordProvider.generate(c).isEmpty)
+            }
             check("markup \(ext): popup allowed in an attribute", !MarkupGate.isPlainText("<template><div cl" as NSString, caret: 17, ext: ext))
             check("markup \(ext): popup allowed inside {{ }}", !MarkupGate.isPlainText("<template><p>{{ us" as NSString, caret: 18, ext: ext))
             check("markup \(ext): no end tag for void / self-closed", MarkupGate.tagToClose("<template><br" as NSString, caret: 13, ext: ext) == nil && MarkupGate.tagToClose("<template><x /" as NSString, caret: 14, ext: ext) == nil)
