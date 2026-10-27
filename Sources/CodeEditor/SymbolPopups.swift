@@ -15,6 +15,23 @@ extension CodeSymbol.Kind {
         case .variable: return "v.square"
         }
     }
+
+    /// Filled badge and colour per kind, so a long list scans by shape and hue (types warm, callables cool, data green / pink).
+    var pickerIcon: String { iconName + (self == .namespace ? "" : ".fill") }
+    var pickerTint: NSColor {
+        switch self {
+        case .namespace: return .systemGray
+        case .class: return .systemOrange
+        case .interface: return .systemTeal
+        case .trait: return .systemPurple
+        case .enum: return .systemYellow
+        case .function: return .systemBlue
+        case .method: return .systemIndigo
+        case .property: return .systemGreen
+        case .constant: return .systemPink
+        case .variable: return .systemMint
+        }
+    }
 }
 
 enum FileStructure {
@@ -29,8 +46,10 @@ enum FileStructure {
         for (i, s) in symbols.enumerated() {
             if s.line <= currentLine && s.kind != .namespace { preselect = i }
             let line = s.line
-            items.append(PickerItem(title: s.name, detail: s.container ?? "", symbol: s.kind.iconName,
-                                    key: s.name) { goTo(line) })
+            var item = PickerItem(title: s.name, detail: s.container ?? "", symbol: s.kind.pickerIcon, key: s.name) { goTo(line) }
+            item.tint = s.kind.pickerTint
+            item.strong = s.isType
+            items.append(item)
         }
         return (items, preselect)
     }

@@ -10,6 +10,9 @@ struct PickerItem {
     /// Search Everywhere: the full path shown in the footer, and the alternative for Shift-Return ("Open In Right Split").
     var footer = ""
     var runSplit: (() -> Void)?
+    /// Icon colour (nil = the muted gutter colour) and a semibold title, e.g. File Structure types.
+    var tint: NSColor?
+    var strong = false
 
     init(title: String, detail: String = "", symbol: String = "doc.text", key: String? = nil,
          run: @escaping () -> Void) {

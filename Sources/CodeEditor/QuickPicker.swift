@@ -34,8 +34,8 @@ private final class PickerRowCell: NSView {
 
     func configure(_ item: PickerItem, matches: Set<Int>) {
         icon.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil)
-        icon.contentTintColor = Theme.gutter
-        let base = NSFont.systemFont(ofSize: 14), bold = NSFont.systemFont(ofSize: 14, weight: .bold)
+        icon.contentTintColor = item.tint ?? Theme.gutter
+        let base = NSFont.systemFont(ofSize: 14, weight: item.strong ? .semibold : .regular), bold = NSFont.systemFont(ofSize: 14, weight: .bold)
         let para = NSMutableParagraphStyle(); para.lineBreakMode = .byTruncatingTail
         let s = NSMutableAttributedString(string: item.title, attributes: [
             .font: base, .foregroundColor: Theme.foreground, .paragraphStyle: para])
