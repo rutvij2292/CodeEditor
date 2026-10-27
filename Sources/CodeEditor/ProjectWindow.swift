@@ -1128,7 +1128,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     }
 
     func showFindAction() {
-        QuickPicker.present(over: window, placeholder: "Find action…", items: actionItems())
+        QuickPicker.present(over: window, placeholder: "Find action…   (⌥↩ assigns a shortcut)", items: actionItems())
     }
 
     func showSearchEverywhere(tab: Int = 0) { SearchEverywhere.present(in: self, tab: tab) }
@@ -1147,6 +1147,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
                     key: (path + [item.title]).joined(separator: " ")) {
                     NSApp.sendAction(action, to: item.target, from: item)
                 })
+                items[items.count - 1].runSplit = { [weak self] in ShortcutAssign.begin(for: item, over: self?.window) }     // ⌥↩: assign a shortcut
             }
         }
         if let main = NSApp.mainMenu { for top in main.items { if let sub = top.submenu { walk(sub, path: [top.title]) } } }

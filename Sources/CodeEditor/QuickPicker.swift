@@ -503,7 +503,8 @@ final class QuickPicker: NSObject, NSTextFieldDelegate, NSTableViewDataSource, N
         case #selector(NSResponder.pageDown(_:)), Selector(("movePageDown:")),
              #selector(NSResponder.scrollPageDown(_:)): select(table.selectedRow + page)
         case #selector(NSResponder.insertNewline(_:)): runSelected()
-        case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)): if tabbed { runSelected(split: true) } else { runSelected() }
+        case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+            if tabbed || (shown.indices.contains(table.selectedRow) && shown[table.selectedRow].runSplit != nil) { runSelected(split: true) } else { runSelected() }
         case #selector(NSResponder.insertTab(_:)): if tabbed { switchTab(to: (tabIndex + 1) % tabs.count) } else { return false }
         case #selector(NSResponder.insertBacktab(_:)): if tabbed { switchTab(to: (tabIndex + tabs.count - 1) % tabs.count) } else { return false }
         case #selector(NSResponder.cancelOperation(_:)): close(refocus: true)
