@@ -39,6 +39,7 @@ extension SelfTest {
         singleTabChecks(w: w, dir: dir)
         engineHotChecks(dir: dir)
         phpReturnCheck(w: w, dir: dir)
+        softWrapChecks(w: w, dir: dir)
         typingProbe(w: w)
         typedCompletionProbe(w: w)
         openLayoutTrial(w: w)
@@ -378,6 +379,35 @@ extension SelfTest {
             ed.textView.setSelectedRange(NSRange(location: (ed.textView.string as NSString).length, length: 0))
             type()
         }
+    }
+
+    /// Soft wrap through the real toggle: long lines fold at the viewport edge, no horizontal scroller, and turning it off restores both.
+    private static func softWrapChecks(w: ProjectWindow, dir: URL) {
+        let url = dir.appendingPathComponent("wrap-\(getpid()).php")
+        let long = "Route::get('/reset-password/{token}', [ResetPasswordController::class, 'create'])->middleware('guest')->name('password.reset')->where('token', '[a-z0-9]+');" + " // " + String(repeating: "wrapped words ", count: 60)
+        try? ("<?php\n" + long + "\n").write(to: url, atomically: true, encoding: .utf8)
+        w.open(url)
+        guard let ed = w.current, let sv = ed.textView.enclosingScrollView, let lm = ed.textView.layoutManager, let tc = ed.textView.textContainer else { check("wrap: editor", false); return }
+        let was = Prefs.softWrap
+        if sv.contentSize.width < 50 { sv.setFrameSize(NSSize(width: 800, height: 600)) }   // headless windows are not laid out
+        func fragments() -> Int {
+            lm.ensureLayout(for: tc)
+            var n = 0
+            lm.enumerateLineFragments(forGlyphRange: NSRange(location: 0, length: lm.numberOfGlyphs)) { _, _, _, _, _ in n += 1 }
+            return n
+        }
+        setSoftWrap(false)
+        let off = fragments()
+        let offWidth = ed.textView.frame.width
+        setSoftWrap(true)
+        let on = fragments()
+        check("wrap: on folds the long line (\(off) -> \(on) fragments)", on > off)
+        check("wrap: on has no horizontal scroller", !sv.hasHorizontalScroller)
+        check("wrap: on tracks the view width (container \(Int(tc.containerSize.width)) <= view \(Int(ed.textView.frame.width)))", tc.widthTracksTextView && tc.containerSize.width <= sv.contentSize.width)
+        setSoftWrap(false)
+        check("wrap: off restores one line and the scroller", fragments() == off && sv.hasHorizontalScroller && ed.textView.frame.width >= offWidth - 1)
+        setSoftWrap(was)
+        try? FileManager.default.removeItem(at: url)
     }
 
     /// CE_TOA_FILE=<php file with `Request $request`>: types `$request->toA` through the real controller and prints the popup list.

@@ -74,7 +74,7 @@ final class CodeTextView: NSTextView {
 
     /// Posted (object: nil) after the soft-wrap preference changes; every CodeTextView re-applies it.
     static let softWrapDidChange = Notification.Name("CodeEditor.softWrapDidChange")
-    static var softWrapEnabled: Bool { UserDefaults.standard.bool(forKey: "softWrap") }
+    static var softWrapEnabled: Bool { Prefs.softWrap }
     private var appliedSoftWrap: Bool?
     private var lastCaretLineRect: NSRect = .zero
 
@@ -122,7 +122,7 @@ final class CodeTextView: NSTextView {
     @objc private func softWrapPreferenceChanged() { applySoftWrap(Self.softWrapEnabled) }
 
     @objc func toggleSoftWrap(_ sender: Any?) {
-        UserDefaults.standard.set(!Self.softWrapEnabled, forKey: "softWrap")
+        Prefs.softWrap = !Self.softWrapEnabled
         NotificationCenter.default.post(name: Self.softWrapDidChange, object: nil)
     }
 
