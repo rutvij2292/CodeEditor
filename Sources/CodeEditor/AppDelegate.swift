@@ -336,6 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func reopenClosedTab(_ sender: Any?) { active?.reopenClosedTab() }
     @objc func showLocalHistory(_ sender: Any?) { active?.showLocalHistory() }
     @objc func showSettings(_ sender: Any?) { SettingsWindowController.shared.show() }
+    @objc func showClaudeData(_ sender: Any?) { active?.showClaudeData() }
     @objc func showChangedSymbols(_ sender: Any?) { active?.showChangedSymbols() }
     @objc func showShortcutCheatSheet(_ sender: Any?) { active?.showShortcutCheatSheet() }
     @objc func showKeymapSettings(_ sender: Any?) { SettingsWindowController.shared.show(pane: "Keymap") }

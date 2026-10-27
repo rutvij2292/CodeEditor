@@ -141,6 +141,7 @@ enum SelfTest {
                     SelfTestStructure.run(w: w)
                     SelfTestToolStrip.run(w: w)
                     SelfTestKeymap.run(app: app)
+                    SelfTestClaudeData.run()
                     try? fm.removeItem(at: dir)
                     try? fm.removeItem(at: LocalHistory.root)
                     SelfTestBranches.run()
