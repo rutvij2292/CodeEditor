@@ -248,6 +248,13 @@ extension SelfTest {
             let inText = tv.selectedRange().location
             check("markup \(ext): no auto popup in element text", MarkupGate.isPlainText(ns, caret: inText, ext: ext))
             check("markup \(ext): popup still allowed after `<`", !MarkupGate.isPlainText("<template><di" as NSString, caret: 13, ext: ext))
+            if ext == "vue" {
+                let sfc = "<template>\n  <div>\n    <Dialog>\n      <template #footer>\n        <Button />\n      </template>\n      <template v-if=\"x\"><span/></template>\n    </Dialog>\n  </div>\n</template>\n<script setup>\nconst save = (a) => a\n</script>\n"
+                let syms = SymbolExtractor.symbols(in: sfc, fileExtension: "vue")
+                let comps = syms.filter { $0.kind == .component }.map { "\($0.container ?? "-")>\($0.name)@\($0.line)" }
+                check("vue structure: components and named slots, nested under their parent (got \(comps))", comps == ["->Dialog@3", "Dialog>#footer@4", "#footer>Button@5"])
+                check("vue structure: script symbols follow the template", syms.last?.name == "save" && syms.last?.kind == .function)
+            }
             do {
                 let t = "<template><div idx=\"a\">id</div><div id" as NSString
                 let c = CompletionContext(text: t as String, caret: t.length, fileURL: URL(fileURLWithPath: "/tmp/x.\(ext)"), fileExtension: ext, triggerCharacter: nil, isManual: true, prefixRange: NSRange(location: t.length - 2, length: 2))

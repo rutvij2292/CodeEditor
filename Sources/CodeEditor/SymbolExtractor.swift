@@ -8,7 +8,7 @@ struct CodeSymbol {
     let container: String?  // enclosing class / namespace name
     var detail = ""          // PHP: `private static`; Vue / JS: role or signature (`computed`, `props`, `(key)`)
 
-    enum Kind: String { case namespace, `class`, interface, trait, `enum`, function, method, property, constant, variable }
+    enum Kind: String { case namespace, `class`, interface, trait, `enum`, function, method, property, constant, variable, component }
 
     var isType: Bool { kind == .class || kind == .interface || kind == .trait || kind == .enum }
 }
@@ -47,7 +47,8 @@ enum SymbolExtractor {
         switch fileExtension.lowercased() {
         case "php", "phtml": isPHP = true
         case "js", "jsx", "mjs", "cjs": isPHP = false
-        case "ts", "tsx", "mts", "cts", "vue": return typesOnly ? [] : NativeJS.documentSymbols(path: "/symbols." + fileExtension.lowercased(), text: text)
+        case "vue": return typesOnly ? [] : VueTemplateSymbols.symbols(in: text) + NativeJS.documentSymbols(path: "/symbols.vue", text: text)
+        case "ts", "tsx", "mts", "cts": return typesOnly ? [] : NativeJS.documentSymbols(path: "/symbols." + fileExtension.lowercased(), text: text)
         default: return []
         }
         guard let parser = parser(forKey: isPHP ? "php" : "js", ext: isPHP ? "php" : "js"),

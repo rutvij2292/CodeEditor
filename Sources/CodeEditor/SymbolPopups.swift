@@ -13,6 +13,7 @@ extension CodeSymbol.Kind {
         case .property: return "p.square"
         case .constant: return "k.square"
         case .variable: return "v.square"
+        case .component: return "puzzlepiece.extension"
         }
     }
 
@@ -30,6 +31,7 @@ extension CodeSymbol.Kind {
         case .property: return .systemGreen
         case .constant: return .systemPink
         case .variable: return .systemMint
+        case .component: return .systemPurple
         }
     }
 }
