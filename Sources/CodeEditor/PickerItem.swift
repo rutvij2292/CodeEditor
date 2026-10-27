@@ -13,6 +13,9 @@ struct PickerItem {
     /// Icon colour (nil = the muted gutter colour) and a semibold title, e.g. File Structure types.
     var tint: NSColor?
     var strong = false
+    /// Small coloured label before the detail (File Structure: `private static`).
+    var marker = ""
+    var markerTint: NSColor?
 
     init(title: String, detail: String = "", symbol: String = "doc.text", key: String? = nil,
          run: @escaping () -> Void) {

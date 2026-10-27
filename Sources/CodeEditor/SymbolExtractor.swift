@@ -6,6 +6,7 @@ struct CodeSymbol {
     let kind: Kind
     let line: Int           // 1-based
     let container: String?  // enclosing class / namespace name
+    var detail = ""          // PHP: `private static`; Vue / JS: role or signature (`computed`, `props`, `(key)`)
 
     enum Kind: String { case namespace, `class`, interface, trait, `enum`, function, method, property, constant, variable }
 
@@ -70,12 +71,31 @@ enum SymbolExtractor {
 
         func line(_ n: Node) -> Int { Int(n.pointRange.lowerBound.row) + 1 }
 
-        mutating func add(_ nameNode: Node?, _ kind: CodeSymbol.Kind, at: Node, _ container: String?, strip: Bool = false) {
+        /// `public` / `private static` / `protected abstract`: the visibility (public when absent) and the other modifiers of a class member.
+        func mods(_ n: Node) -> String {
+            var vis = "public", extra: [String] = []
+            for i in 0..<n.childCount {
+                guard let c = n.child(at: i), let t = c.nodeType else { continue }
+                switch t {
+                case "visibility_modifier": vis = str(c)
+                case "static_modifier": extra.append("static")
+                case "abstract_modifier": extra.append("abstract")
+                case "final_modifier": extra.append("final")
+                case "readonly_modifier": extra.append("readonly")
+                default: break
+                }
+            }
+            return ([vis] + extra).joined(separator: " ")
+        }
+
+        mutating func add(_ nameNode: Node?, _ kind: CodeSymbol.Kind, at: Node, _ container: String?, strip: Bool = false, detail: String = "") {
             guard let nameNode else { return }
             var name = str(nameNode)
             if strip, name.hasPrefix("$") { name.removeFirst() }
             guard !name.isEmpty, name.utf16.count < 200 else { return }
-            out.append(CodeSymbol(name: name, kind: kind, line: line(at), container: container))
+            var s = CodeSymbol(name: name, kind: kind, line: line(at), container: container)
+            s.detail = detail
+            out.append(s)
         }
 
         func named(_ n: Node, _ type: String) -> Node? {
@@ -125,9 +145,9 @@ enum SymbolExtractor {
             if !typesOnly, let body = n.child(byFieldName: "body") { phpMembers(body, str(nameNode)) }
         }
 
-        mutating func phpConst(_ n: Node, _ container: String?) {
+        mutating func phpConst(_ n: Node, _ container: String?, detail: String = "") {
             for i in 0..<n.namedChildCount {
-                if let e = n.namedChild(at: i), e.nodeType == "const_element" { add(named(e, "name"), .constant, at: e, container) }
+                if let e = n.namedChild(at: i), e.nodeType == "const_element" { add(named(e, "name"), .constant, at: e, container, detail: detail) }
             }
         }
 
@@ -137,21 +157,21 @@ enum SymbolExtractor {
                 switch type {
                 case "method_declaration":
                     let nameNode = m.child(byFieldName: "name")
-                    add(nameNode, .method, at: m, cls)
+                    add(nameNode, .method, at: m, cls, detail: mods(m))
                     if nameNode.map(str)?.lowercased() == "__construct", let params = m.child(byFieldName: "parameters") {
                         for j in 0..<params.namedChildCount {
                             if let p = params.namedChild(at: j), p.nodeType == "property_promotion_parameter" {
-                                add(p.child(byFieldName: "name"), .property, at: p, cls, strip: true)
+                                add(p.child(byFieldName: "name"), .property, at: p, cls, strip: true, detail: mods(p))
                             }
                         }
                     }
                 case "property_declaration":
                     for j in 0..<m.namedChildCount {
                         if let e = m.namedChild(at: j), e.nodeType == "property_element" {
-                            add(e.child(byFieldName: "name"), .property, at: e, cls, strip: true)
+                            add(e.child(byFieldName: "name"), .property, at: e, cls, strip: true, detail: mods(m))
                         }
                     }
-                case "const_declaration": phpConst(m, cls)
+                case "const_declaration": phpConst(m, cls, detail: mods(m))
                 case "enum_case": add(m.child(byFieldName: "name"), .constant, at: m, cls)
                 default: break
                 }

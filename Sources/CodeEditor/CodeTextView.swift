@@ -531,6 +531,11 @@ final class CodeTextView: NSTextView {
         let caret = st + max(0, min(column - 1, ce - st))
         setSelectedRange(NSRange(location: caret, length: 0))
         centerCaret()
+        // Layout below the target can still settle (highlighting, wrapping, folds revealed): centre once more on the next turn if the caret stayed.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.selectedRange().location == caret else { return }
+            self.centerCaret()
+        }
     }
 
     private func centerCaret() {

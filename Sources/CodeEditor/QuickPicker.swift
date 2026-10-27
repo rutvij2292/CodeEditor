@@ -20,6 +20,7 @@ private final class PickerRowCell: NSView {
     let icon = NSImageView()
     let title = NSTextField(labelWithString: "")
     let detail = NSTextField(labelWithString: "")
+    let marker = NSTextField(labelWithString: "")
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -28,7 +29,9 @@ private final class PickerRowCell: NSView {
         detail.lineBreakMode = .byTruncatingHead
         detail.alignment = .right
         detail.font = .systemFont(ofSize: 12)
-        for v in [icon, title, detail] { addSubview(v) }
+        marker.font = .systemFont(ofSize: 11, weight: .medium)
+        marker.alignment = .right
+        for v in [icon, title, marker, detail] { addSubview(v) }
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -48,6 +51,8 @@ private final class PickerRowCell: NSView {
         title.attributedStringValue = s
         detail.stringValue = item.detail
         detail.textColor = Theme.gutter
+        marker.stringValue = item.marker
+        marker.textColor = item.markerTint ?? Theme.gutter
         needsLayout = true
     }
 
@@ -67,6 +72,9 @@ private final class PickerRowCell: NSView {
         }
         title.frame = NSRect(x: x0, y: (h - 18) / 2, width: tw, height: 18)
         detail.frame = NSRect(x: bounds.width - pad - dw, y: (h - 16) / 2, width: dw, height: 16)
+        let mNat = marker.stringValue.isEmpty ? 0 : ceil((marker.stringValue as NSString).size(withAttributes: [.font: marker.font ?? NSFont.systemFont(ofSize: 11)]).width) + 6
+        let mw = max(0, min(mNat, bounds.width - pad - dw - (dw > 0 ? 10 : 0) - (x0 + tw + gap)))
+        marker.frame = NSRect(x: detail.frame.minX - (dw > 0 ? 10 : 0) - mw, y: (h - 16) / 2, width: mw, height: 16)
     }
 }
 

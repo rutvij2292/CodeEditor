@@ -174,7 +174,8 @@ extension NativeJS {
         let table = NPLineStarts(ns)
         var out: [CodeSymbol] = []
         for s in d.summary.order where s.kind != .import {
-            let kind: CodeSymbol.Kind
+            var kind: CodeSymbol.Kind
+            var detail = ""
             switch s.kind {
             case .function: kind = .function
             case .class: kind = .class
@@ -185,7 +186,14 @@ extension NativeJS {
             default: kind = .variable
             }
             if kind == .variable, s.members.isEmpty { continue }                      // plain `let` / `var` data is noise in an outline
-            out.append(CodeSymbol(name: s.name, kind: kind, line: table.position(of: s.loc).line, container: nil))
+            if kind == .constant, let sig = s.sigText { kind = .function; detail = String(sig.prefix(48)) }          // `const save = (a) => {…}` is a function
+            else if let call = s.initCall {                                                                          // `const x = computed(…)`: say what it is
+                let roles = ["defineProps": "props", "defineEmits": "emits", "defineModel": "model", "defineExpose": "expose", "withDefaults": "props"]
+                detail = roles[call] ?? call
+            }
+            var top = CodeSymbol(name: s.name, kind: kind, line: table.position(of: s.loc).line, container: nil)
+            top.detail = detail
+            out.append(top)
             for m in s.members where m.name != "constructor" {
                 let mk: CodeSymbol.Kind = m.kind == .method || m.kind == .getter || m.kind == .setter ? .method : m.kind == .enumMember ? .constant : .property
                 out.append(CodeSymbol(name: m.name, kind: mk, line: table.position(of: m.loc).line, container: s.name))

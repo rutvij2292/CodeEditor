@@ -49,6 +49,16 @@ enum FileStructure {
             var item = PickerItem(title: s.name, detail: s.container ?? "", symbol: s.kind.pickerIcon, key: s.name) { goTo(line) }
             item.tint = s.kind.pickerTint
             item.strong = s.isType
+            if s.kind == .method || s.kind == .property || (s.kind == .constant && s.container != nil && !s.detail.isEmpty) {
+                let vis = s.detail.split(separator: " ").first.map(String.init) ?? ""
+                if ["public", "protected", "private"].contains(vis) {
+                    item.marker = s.detail
+                    item.markerTint = vis == "public" ? .systemGreen : vis == "protected" ? .systemOrange : .systemRed
+                }
+            } else if !s.detail.isEmpty {
+                item.marker = s.detail
+                item.markerTint = s.kind == .function ? .systemBlue : .systemPurple
+            }
             items.append(item)
         }
         return (items, preselect)
