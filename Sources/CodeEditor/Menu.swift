@@ -17,6 +17,14 @@ enum MainMenu {
         return item
     }
 
+    /// A second key for a command: works from the keyboard but stays out of the menu, Find Action and duplicate rows.
+    private static func hiddenAlias(_ title: String, _ action: Selector?, _ key: String, _ mods: NSEvent.ModifierFlags, target: AnyObject? = nil) -> NSMenuItem {
+        let i = item(title, action, key, mods, target: target)
+        i.isHidden = true
+        i.allowsKeyEquivalentWhenHidden = true
+        return i
+    }
+
     private static func menu(_ title: String, _ items: [NSMenuItem]) -> NSMenuItem {
         let top = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         let menu = NSMenu(title: title)
@@ -90,12 +98,12 @@ enum MainMenu {
             item("Find in Files…", #selector(AppDelegate.findInFiles(_:)), "f", [.command, .shift], target: a),
             item("Replace in Files…", #selector(AppDelegate.replaceInFiles(_:)), "r", [.command, .shift], target: a),
             sep,
-            item("Send @File to Terminal", #selector(AppDelegate.sendFileToTerminal(_:)), "f", [.command, .option, .control], target: a),
-            item("Send Selection Reference to Terminal", #selector(AppDelegate.sendSelectionReferenceToTerminal(_:)), "k", [.command, .option, .control], target: a),
+            item("Send @File to Terminal", #selector(AppDelegate.sendFileToTerminal(_:)), "f", [.command, .option], target: a),
+            item("Send Selection Reference to Terminal", #selector(AppDelegate.sendSelectionReferenceToTerminal(_:)), "k", [.command, .option], target: a),
             item("Send Selection Text to Terminal", #selector(AppDelegate.sendSelectionTextToTerminal(_:)), "k", [.command, .option, .shift], target: a),
             item("Ask Claude About Selection…", #selector(AppDelegate.askClaudeAboutSelection(_:)), "/", [.command, .option], target: a),
             item("Send Selection to Claude (@mention)", #selector(AppDelegate.sendSelectionToClaude(_:)), "j", [.command, .option], target: a),
-            item("Write Claude Prompt…", #selector(AppDelegate.showClaudeComposer(_:)), "\r", [.command, .shift], target: a),
+            item("Write Claude Prompt…", #selector(AppDelegate.showClaudeComposer(_:)), "\r", [.command, .option], target: a),
         ]))
 
         main.addItem(menu("Code", [
@@ -118,8 +126,8 @@ enum MainMenu {
             item("Select Next Occurrence", Selector(("selectNextOccurrence:")), "g", [.control]),
             item("Unselect Occurrence", Selector(("unselectPreviousOccurrence:")), "g", [.control, .shift]),
             item("Select All Occurrences", Selector(("selectAllOccurrences:")), "g", [.control, .command]),
-            item("Add Caret Above", Selector(("addCaretAbove:")), ""),
-            item("Add Caret Below", Selector(("addCaretBelow:")), ""),
+            item("Add Caret Above", Selector(("addCaretAbove:")), up, [.control, .shift]),
+            item("Add Caret Below", Selector(("addCaretBelow:")), down, [.control, .shift]),
             sep,
             item("Reformat Code", #selector(AppDelegate.reformatCode(_:)), "l", [.command, .option], target: a),
             item("Show Quick Fixes and Actions…", #selector(AppDelegate.showQuickFixes(_:)), "\r", [.option], target: a),
@@ -132,7 +140,7 @@ enum MainMenu {
             sep,
             item("Basic Completion", Selector(("triggerCompletion:")), " ", [.control]),
             item("Smart Completion", Selector(("triggerSmartCompletion:")), " ", [.control, .shift]),
-            item("Complete Current Statement", Selector(("completeCurrentStatement:")), "\r", [.control, .shift]),   // Cmd-Shift-Return is Write Claude Prompt
+            item("Complete Current Statement", Selector(("completeCurrentStatement:")), "\r", [.command, .shift]),   // PhpStorm's key; Write Claude Prompt moved to ⌥⌘↩
             item("Parameter Info", Selector(("showParameterInfo:")), "p"),
             item("Quick Documentation", Selector(("showQuickDocumentation:")), "j", [.control]),
             item("Go to Declaration", Selector(("goToDefinition:")), "b"),
@@ -152,7 +160,7 @@ enum MainMenu {
             item("Recent Files", #selector(AppDelegate.recentFiles(_:)), "e", target: a),
             item("Recent Locations", #selector(RecentLocationsSupport.show(_:)), "e", [.command, .shift], target: RecentLocationsSupport.shared),
             item("Plans…", #selector(PlanSupport.showPlans(_:)), "p", [.command, .option], target: PlanSupport.shared),
-            item("Plan Changes Since Last Viewed…", #selector(PlanSupport.showPlanChanges(_:)), target: PlanSupport.shared),
+            item("Plan Changes Since Last Viewed…", #selector(PlanSupport.showPlanChanges(_:)), "p", [.command, .option, .shift], target: PlanSupport.shared),
             item("Mark Plan as Reviewed", #selector(PlanSupport.markReviewed(_:)), target: PlanSupport.shared),
             item("Add Plan Review Comment…", #selector(PlanSupport.addReviewComment(_:)), target: PlanSupport.shared),
             item("Search Everywhere", #selector(AppDelegate.searchEverywhere(_:)), "", target: a),
@@ -171,8 +179,8 @@ enum MainMenu {
             sep,
             item("Back", #selector(AppDelegate.goBack(_:)), "[", target: a),
             item("Forward", #selector(AppDelegate.goForward(_:)), "]", target: a),
-            item("Back (Alt)", #selector(AppDelegate.goBack(_:)), left, [.command, .option], target: a),
-            item("Forward (Alt)", #selector(AppDelegate.goForward(_:)), right, [.command, .option], target: a),
+            hiddenAlias("Back (Alt)", #selector(AppDelegate.goBack(_:)), left, [.command, .option], target: a),
+            hiddenAlias("Forward (Alt)", #selector(AppDelegate.goForward(_:)), right, [.command, .option], target: a),
             item("Previous Tab", #selector(AppDelegate.previousTab(_:)), "{", [.command, .shift], target: a),
             item("Next Tab", #selector(AppDelegate.nextTab(_:)), "}", [.command, .shift], target: a),
             sep,
@@ -185,13 +193,13 @@ enum MainMenu {
             item("Push…", #selector(AppDelegate.pushChanges(_:)), "k", [.command, .shift], target: a),
             item("Update Project (Pull)", #selector(AppDelegate.updateProject(_:)), "t", target: a),
             item("Fetch", #selector(AppDelegate.fetchChanges(_:)), "", target: a),
-            item("Branches…", #selector(AppDelegate.showBranches(_:)), "b", [.command, .option], target: a),
+            item("Branches…", #selector(AppDelegate.showBranches(_:)), "`", [.control, .shift], target: a),     // ⌥⌘B is Go to Implementation
             item("New Branch…", #selector(AppDelegate.newBranch(_:)), "", target: a),
-            item("Resolve Pull Request Conflicts…", #selector(AppDelegate.resolvePullRequest(_:)), "p", [.command, .option, .shift], target: a),
+            item("Resolve Pull Request Conflicts…", #selector(AppDelegate.resolvePullRequest(_:)), "", target: a),
             item("Show History for File", #selector(AppDelegate.showFileHistory(_:)), "", target: a),
             item("Annotate with Git Blame", #selector(AppDelegate.toggleBlameAnnotations(_:)), "a", [.command, .option], target: a),
             toggleItem("Toggle Inline Blame", "inlineBlame", a, key: "b", mods: [.control, .option]),
-            item("Review Diff with Claude…", #selector(AppDelegate.reviewDiffWithClaude(_:)), "", target: a),
+            item("Review Diff with Claude…", #selector(AppDelegate.reviewDiffWithClaude(_:)), "r", [.command, .option], target: a),
             sep,
             item("Show Git Panel", #selector(AppDelegate.toggleGit(_:)), "9", target: a),
         ]))
@@ -247,6 +255,9 @@ enum MainMenu {
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
             item("Zoom", #selector(NSWindow.performZoom(_:))),
         ]))
+        let help = menu("Help", [item("Keyboard Shortcuts…", #selector(AppDelegate.showKeymapSettings(_:)), "", target: a)])
+        main.addItem(help)
+        NSApp.helpMenu = help.submenu
         KeymapStore.apply(to: main)       // user shortcut overrides (Settings > Keymap)
         return main
     }

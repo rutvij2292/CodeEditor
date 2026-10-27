@@ -105,12 +105,12 @@ final class TestActions: NSObject {
         }
         let menu = NSMenu(title: "Run")
         for i in [item("Run Test at Caret", #selector(runAtCaret(_:)), "r", [.control, .shift]),
-                  item("Run Tests in File", #selector(runFile(_:))),
+                  item("Run Tests in File", #selector(runFile(_:)), "t", [.control, .shift]),
                   item("Run All Tests", #selector(runAll(_:))),
                   NSMenuItem.separator(),
                   item("Re-run Last Tests", #selector(rerunLast(_:)), "r"),
                   item("Re-run Failed Tests", #selector(rerunFailed(_:))),
-                  item("Stop Tests", #selector(stop(_:))),
+                  item("Stop Tests", #selector(stop(_:)), String(UnicodeScalar(UInt32(NSF2FunctionKey))!), [.command]),
                   NSMenuItem.separator(),
                   item("Tests Tool Window", #selector(showTests(_:)), "6", [.command])] { menu.addItem(i) }
         let top = NSMenuItem(title: "Run", action: nil, keyEquivalent: "")

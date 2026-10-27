@@ -336,6 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func reopenClosedTab(_ sender: Any?) { active?.reopenClosedTab() }
     @objc func showLocalHistory(_ sender: Any?) { active?.showLocalHistory() }
     @objc func showSettings(_ sender: Any?) { SettingsWindowController.shared.show() }
+    @objc func showKeymapSettings(_ sender: Any?) { SettingsWindowController.shared.show(pane: "Keymap") }
     @objc func sendFileToTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.sendFileReference?($0) } }
     @objc func sendSelectionReferenceToTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.sendSelectionReference?($0) } }
     @objc func sendSelectionTextToTerminal(_ sender: Any?) { active.map { Self.terminalHandlers.sendSelectionText?($0) } }

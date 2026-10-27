@@ -1138,7 +1138,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         NSApp.mainMenu?.update()
         var items: [PickerItem] = []
         func walk(_ menu: NSMenu, path: [String]) {
-            for item in menu.items where !item.isSeparatorItem {
+            for item in menu.items where !item.isSeparatorItem && !item.isHidden {
                 if let sub = item.submenu { walk(sub, path: path + [item.title]); continue }
                 guard let action = item.action, item.isEnabled else { continue }
                 let shortcut = MainMenu.shortcutText(for: item)
