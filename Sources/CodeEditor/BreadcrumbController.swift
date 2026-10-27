@@ -25,6 +25,13 @@ final class BreadcrumbController: NSObject, NSMenuDelegate {
         self.tab = tab
         super.init()
         bar.menuProvider = { [weak self] i in self?.menu(forSegment: i) }
+        bar.jumpProvider = { [weak self] i in
+            guard let self, let show = self.tab?.onShowStructure, self.bar.segments.indices.contains(i) else { return false }
+            switch self.bar.segments[i].kind {
+            case .file, .symbol: show(); return true
+            default: return false
+            }
+        }
         bar.contextMenuProvider = { [weak self] i in self?.contextMenu(forSegment: i) }
         bar.onEscape = { [weak self] in self?.returnFocus() }
     }

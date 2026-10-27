@@ -241,6 +241,8 @@ final class EditorTab: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
     var projectRoot: (() -> URL?)?
     /// Opens a file chosen in a breadcrumb dropdown (integrator wires to ProjectWindow.open).
     var onOpenURL: ((URL) -> Void)?
+    /// Opens the searchable File Structure list (breadcrumb file / symbol click; integrator wires to ProjectWindow.showFileStructure).
+    var onShowStructure: (() -> Void)?
     private(set) var breadcrumbs: BreadcrumbController!
     private(set) var indent = IndentSettings.standard
     private var paragraph: NSParagraphStyle = .default

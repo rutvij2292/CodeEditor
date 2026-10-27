@@ -91,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             func owner() -> ProjectWindow? { self?.windows.first { $0.editors.values.contains { $0 === tab } } }
             tab.projectRoot = { owner()?.root }
             tab.onOpenURL = { url in owner()?.open(url) }
+            tab.onShowStructure = { owner()?.showFileStructure() }
         }
         LaravelNavigator.start()
         LaravelNavigator.openLocation = { [weak self] url, line, column in

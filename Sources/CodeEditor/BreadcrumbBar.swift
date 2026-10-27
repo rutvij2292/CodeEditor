@@ -66,10 +66,10 @@ enum BreadcrumbLayout {
         var collapsed: Range<Int>?
     }
 
-    /// Folders between the project root and the last two folders before the file; they live behind the `…` menu even when there is room.
+    /// The project root and every folder: the bar starts at the file name and the path lives behind the `…` menu.
     static func deepFolders(_ kinds: [BreadcrumbSegment.Kind]) -> Range<Int>? {
-        guard kinds.first == .root, let f = kinds.firstIndex(of: .file), f - 3 >= 2 else { return nil }
-        return 1..<(f - 2)
+        guard let f = kinds.firstIndex(of: .file), f >= 1 else { return nil }
+        return 0..<f
     }
 
     static func collapse(widths: [CGFloat], available: CGFloat, ellipsisWidth: CGFloat, separator: CGFloat, alwaysHidden: Range<Int>?) -> Result {
@@ -119,6 +119,8 @@ final class BreadcrumbBar: NSView, NSViewToolTipOwner {
     private var focus: Int?                 // keyboard: segment index or -1 for the ellipsis
 
     /// Menu for a segment (nil = nothing to show); -1 asks for the collapsed `…` menu.
+    /// Claims a click before the dropdown (the file / symbol segments open the searchable jump list); true = handled.
+    var jumpProvider: ((Int) -> Bool)?
     var menuProvider: ((Int) -> NSMenu?)?
     /// Right-click menu for a segment.
     var contextMenuProvider: ((Int) -> NSMenu?)?
@@ -298,6 +300,7 @@ final class BreadcrumbBar: NSView, NSViewToolTipOwner {
 
     /// Pops the dropdown of a segment (`-1` = the collapsed `…` entry).
     func open(segment i: Int) {
+        if jumpProvider?(i) == true { return }
         guard let menu = menuProvider?(i), let f = frame(ofSegment: i) else { return }
         present(menu, NSPoint(x: f.minX, y: bounds.height), self)
     }
