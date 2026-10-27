@@ -2,6 +2,10 @@
 
 Version is `0.<commit count>` (see build-app.sh); the installer is `dist/Kode-<version>.dmg`.
 
+## 0.279
+- Soft wrap: the Edit-menu toggle and Settings / View now share one preference; end-to-end wrap test.
+- Markdown / viewer files: the breadcrumb bar keeps room for the Source / Split / Preview switch (no more overprinting); calmer notice banner (icon, light tint, recessed buttons, 26 pt); GitHub-style preview headings and no underline on links.
+
 ## 0.276
 - Route action completion: `Route::get('x', [LoginController::class, '|'])` offers the controller's public methods (also `[$this, '|']`); verified through the real completion pipeline.
 - Dev probes: `CE_COMPL_ASYNC` (typed completion), `CE_IDLE_FILE` (typing burst then idle: CPU / wakeups / energy; idle settles to ~0 within 10 s).

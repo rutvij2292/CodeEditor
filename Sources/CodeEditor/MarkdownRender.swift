@@ -54,7 +54,7 @@ struct MDStyle {
     }
 
     func heading(_ level: Int) -> NSFont {
-        let scale: [CGFloat] = [2.0, 1.6, 1.3, 1.15, 1.0, 0.9]
+        let scale: [CGFloat] = [1.75, 1.4, 1.2, 1.08, 1.0, 0.9]
         return .systemFont(ofSize: body.pointSize * scale[min(5, max(0, level - 1))], weight: level <= 2 ? .bold : .semibold)
     }
 }
@@ -160,7 +160,7 @@ final class MarkdownRenderer {
                     blk.setWidth(level == 1 ? 6 : 4, type: .absoluteValueType, for: .margin, edge: .maxY)
                     extra = [blk]
                 }
-                append(s, pstyle(ctx, spacing: extra.isEmpty ? 6 : 2, before: out.length == 0 ? 0 : (level <= 2 ? 14 : 10), extra: extra, lineMult: 1.1))
+                append(s, pstyle(ctx, spacing: extra.isEmpty ? 6 : 2, before: out.length == 0 ? 0 : (level <= 2 ? 18 : 12), extra: extra, lineMult: 1.1))
             case .paragraph(let text, _):
                 append(inline(text, font: style.body, color: ctx.color), pstyle(ctx, spacing: spacing))
             case .code(let lang, let text, _):
@@ -439,7 +439,7 @@ final class MarkdownPreviewView: NSView, NSTextViewDelegate {
         let s = MDStyle()
         textView.backgroundColor = Theme.background
         scroll.backgroundColor = Theme.background
-        textView.linkTextAttributes = [.foregroundColor: s.link, .underlineStyle: NSUnderlineStyle.single.rawValue, .cursor: NSCursor.pointingHand]
+        textView.linkTextAttributes = [.foregroundColor: s.link, .cursor: NSCursor.pointingHand]     // no underline: link colour is enough
         textView.selectedTextAttributes = [.backgroundColor: Theme.palette.selection]
     }
 

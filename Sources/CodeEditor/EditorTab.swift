@@ -55,7 +55,7 @@ final class NoticeBanner: NSView {
         super.init(frame: frame)
         wantsLayer = true
         label.lineBreakMode = .byTruncatingTail
-        label.font = .systemFont(ofSize: 12)
+        label.font = .systemFont(ofSize: 11.5)
         buttons.spacing = 6
         line.wantsLayer = true
         icon.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: nil)
@@ -160,7 +160,7 @@ final class EditorPane: NSView {
         banner.set(message: message, actions: actions)
         banner.restyle()
         banner.isHidden = false
-        bannerHeight.constant = 30
+        bannerHeight.constant = 26
     }
 
     func hideBanner() { banner.isHidden = true; bannerHeight.constant = 0 }

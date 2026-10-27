@@ -41,6 +41,12 @@ extension SelfTest {
         phpReturnCheck(w: w, dir: dir)
         softWrapChecks(w: w, dir: dir)
         breadcrumbReserveCheck()
+        if let out = AppEnv.value("CE_MD_PNG"), let src = AppEnv.value("CE_MD_FILE").flatMap({ try? String(contentsOfFile: $0, encoding: .utf8) }) {   // dev aid: renders a markdown preview
+            let v = MarkdownPreviewView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
+            v.show(blocks: MarkdownParser.parse(src))
+            v.layoutSubtreeIfNeeded()
+            if let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) { v.cacheDisplay(in: v.bounds, to: rep); try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: out)) }
+        }
         if let out = AppEnv.value("CE_BANNER_PNG") {      // dev aid: renders the notice banner
             let b = NoticeBanner(frame: NSRect(x: 0, y: 0, width: 900, height: 30))
             b.set(message: "\u{201C}issues.md\u{201D} was deleted from disk \u{2014} your buffer is kept.", actions: [("Recreate", {}), ("Save As\u{2026}", {}), ("Close", {})])
