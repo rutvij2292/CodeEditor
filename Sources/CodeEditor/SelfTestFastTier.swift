@@ -33,6 +33,8 @@ extension SelfTest {
         put(root, "vendor/laravel/framework/src/Illuminate/Database/Eloquent/Model.php", "<?php\nnamespace Illuminate\\Database\\Eloquent;\nabstract class Model {\n    public function save(array $options = []): bool { return true; }\n    public function fresh($with = []) { return $this; }\n    protected function internal() {}\n    public static function create(array $attributes = []): static { return new static; }\n}\n")
         put(root, "vendor/laravel/framework/src/Illuminate/Database/Eloquent/Builder.php", "<?php\nnamespace Illuminate\\Database\\Eloquent;\nclass Builder {\n    public function where($column, $operator = null, $value = null) { return $this; }\n    public function get($columns = ['*']) {}\n}\n")
         put(root, "routes/web.php", "<?php\nuse Illuminate\\Support\\Facades\\Route;\nRoute::get('/', fn () => view('welcome'))->name('home');\nRoute::resource('posts', PostController::class);\nRoute::name('admin.')->prefix('admin')->group(function () {\n    Route::get('/users', fn () => 1)->name('users');\n});\n")
+        put(root, "app/Http/Controllers/Controller.php", "<?php\nnamespace App\\Http\\Controllers;\nabstract class Controller {}\n")
+        put(root, "app/Http/Controllers/LoginController.php", "<?php\nnamespace App\\Http\\Controllers;\nclass LoginController extends Controller {\n    public function __construct() {}\n    public function create() {}\n    public function store() {}\n    protected function hidden() {}\n}\n")
         put(root, "resources/views/welcome.blade.php", "hi")
         put(root, "resources/views/posts/index.blade.php", "hi")
         put(root, "resources/views/components/forms/input.blade.php", "<input>")
@@ -92,6 +94,8 @@ extension SelfTest {
         put(root, "app/Services/Greeter.php", "<?php\nnamespace App\\Services;\nclass Greeter {\n    const VERSION = 1;\n    public static function make(): static { return new static; }\n    public function hello(string $who): string { return ''; }\n    private function secret() {}\n}\n")
         let ctl = "app/Http/Controllers/PostController.php"
         let head = "<?php\nnamespace App\\Http\\Controllers;\n\nuse App\\Models\\Post;\nuse App\\Models\\User;\n\nclass PostController {\n    public function __construct(private \\App\\Services\\Greeter $greeter) {}\n    private int $count = 0;\n    public function helper(): void {}\n"
+        let rc = fast(root, "routes/web.php", "<?php\nuse App\\Http\\Controllers\\LoginController;\nRoute::get('t', [LoginController::class, '|']);\n")
+        check("route: [Controller::class, '|'] offers its public methods", Set(rc.map(\.label)) == ["create", "store"])
         func labels(_ items: [CompletionItem]) -> Set<String> { Set(items.map(\.label)) }
         func inMethod(_ body: String) -> String { head + "    public function index(Post $post) {\n        " + body + "\n    }\n}\n" }
 

@@ -317,6 +317,32 @@ extension SelfTest {
         fputs("COMPL settled: open=\(c.isOpen) [\(c.candidateLabels.prefix(10).joined(separator: ", "))]\n", stderr)
     }
 
+    /// Like `typedCompletionProbe`, but every key is its own main-queue block so provider results (delivered via `main.async`) land.
+    static func asyncCompletionProbe(w: ProjectWindow) {
+        guard let path = AppEnv.value("CE_COMPL_FILE"), let text = AppEnv.value("CE_COMPL_TEXT") else { finish() }
+        w.open(URL(fileURLWithPath: path))
+        let pause = Double(AppEnv.value("CE_COMPL_PUMP") ?? "") ?? 0.9
+        var keys = text.map(String.init)
+        func step() {
+            guard let ed = w.current, let c = CompletionSystem.controller(for: ed) else { fputs("COMPL no controller\n", stderr); finish() }
+            guard !keys.isEmpty else { fputs("COMPL settled: open=\(c.isOpen) [\(c.candidateLabels.prefix(10).joined(separator: ", "))]\n", stderr); finish() }
+            let ch = keys.removeFirst()
+            if let ev = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: ch.first!.isUppercase ? [.shift] : [], timestamp: 0, windowNumber: 0, context: nil,
+                                         characters: ch, charactersIgnoringModifiers: ch.lowercased(), isARepeat: false, keyCode: 0) { _ = c.handleKey(ev) }
+            ed.textView.insertText(ch, replacementRange: NSRange(location: NSNotFound, length: 0))
+            DispatchQueue.main.asyncAfter(deadline: .now() + pause) {
+                fputs("COMPL after '\(ch)': open=\(c.isOpen) [\(c.candidateLabels.prefix(10).joined(separator: ", "))]\n", stderr)
+                step()
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            guard let ed = w.current else { finish() }
+            ed.textView.setSelectedRange(NSRange(location: (ed.textView.string as NSString).length, length: 0))
+            ed.textView.insertText("\n", replacementRange: NSRange(location: NSNotFound, length: 0))
+            step()
+        }
+    }
+
     /// CE_TOA_FILE=<php file with `Request $request`>: types `$request->toA` through the real controller and prints the popup list.
     private static func typingProbe(w: ProjectWindow) {
         guard let path = AppEnv.value("CE_TOA_FILE") else { return }

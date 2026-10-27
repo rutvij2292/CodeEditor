@@ -380,6 +380,7 @@ final class CompletionController: NSObject {
     // MARK: - Closing
 
     func close() {
+        if AppEnv.value("CE_COMPL_DEBUG") != nil { fputs("COMPL-DBG close from \(Thread.callStackSymbols.dropFirst().prefix(3).map { $0.split(separator: " ", omittingEmptySubsequences: true).dropFirst(3).first.map(String.init) ?? "?" })\n", stderr) }
         debounce?.invalidate()
         smartMode = false
         hidePopup()
