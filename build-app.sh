@@ -3,8 +3,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-swift build -c release --build-system native
-BIN_DIR=$(swift build -c release --build-system native --show-bin-path)
+# FAST=1: per-file (non-whole-module) release build in its own scratch dir. It is incremental, so after the first run
+# only changed files recompile (seconds, not minutes). Slightly slower code than the default; use the default for DMGs.
+FLAGS=(-c release --build-system native)
+[ "${FAST:-}" = 1 ] && FLAGS+=(--scratch-path .build-fast -Xswiftc -no-whole-module-optimization)
+swift build "${FLAGS[@]}"
+BIN_DIR=$(swift build "${FLAGS[@]}" --show-bin-path)
 
 NAME=Kode
 APP="dist/$NAME.app"

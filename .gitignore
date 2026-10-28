@@ -7,3 +7,4 @@ dist/
 screenshots/
 .tools/
 __pycache__/
+.build-fast/
