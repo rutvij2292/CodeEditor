@@ -37,8 +37,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private let historyLabel = NSTextField(labelWithString: "")
     private let commitTable = LogTable()
     private let fileTable = NSTableView()
-    private let diffView = SideBySideDiffView()
-    private let diffMessage = NSTextField(labelWithString: "")
+    private var diffWindow: CommitDiffWindow?
     private let status = NSTextField(labelWithString: "")
     private let split = NSSplitView()
     private let rightSplit = NSSplitView()
@@ -47,7 +46,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private var query = ""
     private var follow = false
     private var debounce: Timer?
-    private var fileToken = 0, diffToken = 0
+    private var fileToken = 0
     private var positioned = false
     private var preferredFile: String?
     private var graphRows: [GitGraphRow] = []
@@ -187,29 +186,13 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         fileTable.rowHeight = 20
         fileTable.dataSource = self
         fileTable.delegate = self
+        fileTable.target = self
+        fileTable.doubleAction = #selector(openFileDiff)
         let fileScroll = NSScrollView()
         fileScroll.documentView = fileTable
         fileScroll.hasVerticalScroller = true
         fileScroll.drawsBackground = false
         fileScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 50).isActive = true
-
-        let diffHost = NSView()
-        diffMessage.font = .systemFont(ofSize: 13)
-        diffMessage.alignment = .center
-        diffMessage.stringValue = "Select a commit"
-        diffView.pickMode = .none
-        diffView.isHidden = true
-        for v in [diffView, diffMessage] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; diffHost.addSubview(v) }
-        NSLayoutConstraint.activate([
-            diffView.topAnchor.constraint(equalTo: diffHost.topAnchor),
-            diffView.bottomAnchor.constraint(equalTo: diffHost.bottomAnchor),
-            diffView.leadingAnchor.constraint(equalTo: diffHost.leadingAnchor),
-            diffView.trailingAnchor.constraint(equalTo: diffHost.trailingAnchor),
-            diffMessage.centerXAnchor.constraint(equalTo: diffHost.centerXAnchor),
-            diffMessage.centerYAnchor.constraint(equalTo: diffHost.centerYAnchor),
-            diffMessage.widthAnchor.constraint(lessThanOrEqualTo: diffHost.widthAnchor, constant: -40),
-            diffHost.heightAnchor.constraint(greaterThanOrEqualToConstant: 100),
-        ])
 
         rightSplit.isVertical = false
         rightSplit.dividerStyle = .thin
@@ -222,7 +205,6 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         details.autoresizingMask = [.width]
         rightSplit.addArrangedSubview(detailsScroll)
         rightSplit.addArrangedSubview(fileScroll)
-        rightSplit.addArrangedSubview(diffHost)
         rightSplit.setHoldingPriority(.init(260), forSubviewAt: 0)
         rightSplit.setHoldingPriority(.init(250), forSubviewAt: 1)
         split.isVertical = true
@@ -246,7 +228,6 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             split.setPosition(min(640, bounds.width * 0.55), ofDividerAt: 0)
             rightSplit.layoutSubtreeIfNeeded()
             rightSplit.setPosition(min(128, rightSplit.bounds.height * 0.28), ofDividerAt: 0)
-            rightSplit.setPosition(min(200, rightSplit.bounds.height * 0.4), ofDividerAt: 1)
         }
     }
 
@@ -255,7 +236,6 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         layer?.backgroundColor = Theme.background.cgColor
         commitTable.backgroundColor = Theme.background
         fileTable.backgroundColor = Theme.background
-        diffMessage.textColor = Theme.gutter
         status.textColor = Theme.gutter
         details.textColor = Theme.foreground
         historyLabel.textColor = Theme.foreground
@@ -605,20 +585,16 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     private func clearSelectionUI(_ message: String) {
         detailsToken += 1
-        details.string = ""
         files = []
         fileTable.reloadData()
-        diffView.isHidden = true
-        diffMessage.stringValue = message
-        diffMessage.isHidden = false
+        details.string = message
     }
 
     func tableViewSelectionDidChange(_ n: Notification) {
-        if (n.object as? NSTableView) === fileTable { showSelectedFileDiff(); return }
+        if (n.object as? NSTableView) === fileTable { return }
         guard let c = selectedCommit else { return }
         loadDetails(for: c)
         fileToken += 1
-        diffToken += 1
         let token = fileToken
         let repo = repo
         reader.async {
@@ -630,44 +606,25 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
                     self.files = list
                     self.fileTable.reloadData()
                     if list.isEmpty { self.clearSelectionUI("No file changes in this commit"); self.onIdle?(); return }
-                    var idx = 0
-                    if let pf = self.preferredFile {
-                        idx = list.firstIndex { $0.path == pf }
-                            ?? list.firstIndex { ($0.path as NSString).lastPathComponent == (pf as NSString).lastPathComponent } ?? 0
+                    if let pf = self.preferredFile,
+                       let idx = list.firstIndex(where: { $0.path == pf })
+                        ?? list.firstIndex(where: { ($0.path as NSString).lastPathComponent == (pf as NSString).lastPathComponent }) {
+                        self.fileTable.selectRowIndexes([idx], byExtendingSelection: false)
+                        self.fileTable.scrollRowToVisible(idx)
                     }
-                    if self.fileTable.selectedRow == idx { self.showSelectedFileDiff() }
-                    else { self.fileTable.selectRowIndexes([idx], byExtendingSelection: false) }
+                    self.onIdle?()
                 case .failure(let e): self.clearSelectionUI(e.localizedDescription); self.onIdle?()
                 }
             }
         }
     }
 
-    private func showSelectedFileDiff() {
-        let r = fileTable.selectedRow
+    /// Double-click on a file: its side-by-side diff opens on demand in a separate window (steppable across the commit's files).
+    @objc private func openFileDiff() {
+        let r = fileTable.clickedRow >= 0 ? fileTable.clickedRow : fileTable.selectedRow
         guard r >= 0, r < files.count, let c = selectedCommit else { return }
-        let file = files[r]
-        diffToken += 1
-        let token = diffToken
-        let repo = repo
-        reader.async {
-            let res = Result { try repo.commitDiffSides(rev: c.hash, file: file) }
-            DispatchQueue.main.async { [weak self] in
-                guard let self, token == self.diffToken else { return }
-                switch res {
-                case .success(let sides):
-                    self.diffMessage.isHidden = true
-                    self.diffView.isHidden = false
-                    self.diffView.show(old: sides.old, new: sides.new, oldTitle: "\(c.shortHash)^", newTitle: c.shortHash,
-                                       fileExtension: (file.path as NSString).pathExtension)
-                case .failure(let e):
-                    self.diffView.isHidden = true
-                    self.diffMessage.stringValue = e.localizedDescription.hasPrefix("Binary") ? "Binary file: diff not shown" : e.localizedDescription
-                    self.diffMessage.isHidden = false
-                }
-                self.onIdle?()
-            }
-        }
+        if diffWindow == nil { diffWindow = CommitDiffWindow(repo: repo) }
+        diffWindow?.show(commit: c, files: files, index: r, over: window)
     }
 
     // MARK: table

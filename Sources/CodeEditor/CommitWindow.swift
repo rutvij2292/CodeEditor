@@ -8,6 +8,8 @@ final class CommitWindowController: NSObject, NSWindowDelegate {
     let window: NSWindow
     let panel: GitPanelController
     private let key: ObjectIdentifier
+    /// Only a Commit and Push started from this window closes it when the push lands; a bare Push leaves it open.
+    var closeAfterPush: Bool { panel.committedAndPushing }
     private var projectCloseObserver: NSObjectProtocol?
 
     static func existing(for project: ProjectWindow) -> CommitWindowController? { open[ObjectIdentifier(project)] }
@@ -59,6 +61,7 @@ final class CommitWindowController: NSObject, NSWindowDelegate {
         panel.onShowBranches = { [weak self, weak project] in if let w = self?.window { project?.branches.showPopup(over: w) } }
         panel.onRequestClose = { [weak self] in self?.window.performClose(nil) }
         panel.onCommitted = { [weak self] andPush in if !andPush { self?.window.close() } }
+        panel.onPushed = { [weak self] in if self?.closeAfterPush == true { self?.window.close() } }
         projectCloseObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: project.window,
                                                                       queue: .main) { [weak self] _ in self?.window.close() }
     }

@@ -286,6 +286,12 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     var onFocusEditor: (() -> Void)?
     /// Fired after a successful commit (`andPush`: the push is about to start).
     var onCommitted: ((_ andPush: Bool) -> Void)?
+    /// Fired after a push finishes without error.
+    var onPushed: (() -> Void)?
+    /// Set after a commit so the next refresh leaves nothing selected instead of showing a diff of an unrelated file.
+    private var clearSelectionOnApply = false
+    /// True from Commit and Push until the push ends; lets the host close its window once the push succeeds.
+    private(set) var committedAndPushing = false
     /// Fired after every successful reload of the repository state.
     var onSummaryChange: ((GitSummary) -> Void)?
     private(set) var summary = GitSummary.empty
@@ -828,7 +834,10 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
         outline.reloadData()
         expandAll()
-        if let previous, let row = groups.flatMap(\.rows).first(where: { $0.key == previous }) {
+        if clearSelectionOnApply {
+            clearSelectionOnApply = false
+            outline.deselectAll(nil)
+        } else if let previous, let row = groups.flatMap(\.rows).first(where: { $0.key == previous }) {
             outline.selectRowIndexes([outline.row(forItem: row)], byExtendingSelection: false)
         } else if outline.selectedRow < 0, let first = groups.first?.rows.first {
             outline.selectRowIndexes([outline.row(forItem: first)], byExtendingSelection: false)
@@ -1531,14 +1540,16 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
                 guard let self else { return }
                 self.setBusy(false)
                 switch r {
-                case .failure(let e): self.showError(e)
+                case .failure(let e): self.committedAndPushing = false; self.showError(e)
                 case .success(let p):
-                    if p.commits.isEmpty, !p.newBranch { self.showNote("Nothing to push: \(p.branch) is up to date with \(p.upstream ?? "its remote")."); return }
-                    if GitDialogs.skipPushPreview, !forcePreview { self.perform({ try $0.push() }); return }
+                    if p.commits.isEmpty, !p.newBranch { self.committedAndPushing = false; self.showNote("Nothing to push: \(p.branch) is up to date with \(p.upstream ?? "its remote")."); return }
+                    if GitDialogs.skipPushPreview, !forcePreview { self.perform({ try $0.push() }, then: { [weak self] e in if e == nil { self?.onPushed?() }; self?.committedAndPushing = false }); return }
                     PushWindow.present(over: self.panel.window, repo: self.repo, preview: p) { [weak self] req in
-                        guard let self, let req else { return }
+                        guard let self else { return }
+                        guard let req else { self.committedAndPushing = false; return }
                         if req.dontAskAgain { GitDialogs.skipPushPreview = true }
-                        self.perform({ try $0.push(remote: req.remote, target: req.target, setUpstream: req.setUpstream, tags: req.tags) })
+                        self.perform({ try $0.push(remote: req.remote, target: req.target, setUpstream: req.setUpstream, tags: req.tags) },
+                                     then: { [weak self] e in if e == nil { self?.onPushed?() }; self?.committedAndPushing = false })
                     }
                 }
             }
@@ -1680,9 +1691,10 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             self.messageView.string = ""
             self.messageView.needsDisplay = true
             self.amendCheck.state = .off
+            self.clearSelectionOnApply = true
             if !notes.isEmpty { self.showNote(notes.joined(separator: "\n")) }
             self.onCommitted?(push)
-            if push { self.startPush() }
+            if push { self.committedAndPushing = true; self.startPush() }
         }, resets: true)
     }
 
