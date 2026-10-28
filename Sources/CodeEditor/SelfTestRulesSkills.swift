@@ -90,6 +90,18 @@ enum SelfTestRulesSkills {
         try? RulesSkills.trash(cmd)
         check("rules: trash goes through the trasher", !fm.fileExists(atPath: cmd.file.path) && (try? fm.contentsOfDirectory(atPath: trash.path).count) == 1)
 
+        // the menu dot: unseeded project -> 0, seeded -> counts additions, title carries the count
+        let other = base.appendingPathComponent("other-proj")
+        write("other-proj/.claude/rules/a.md", "a\n")
+        check("rules: a never-seeded project shows no dot", RulesSkills.pendingCount(projectRoot: other) == 0)
+        var st2 = RulesSkills.loadStore()
+        RulesSkills.seedIfNeeded(projectRoot: other, items: RulesSkills.scan(projectRoot: other), store: &st2)
+        RulesSkills.saveStore(st2)
+        check("rules: a seeded, untouched project shows no dot", RulesSkills.pendingCount(projectRoot: other) == 0)
+        write("other-proj/.claude/rules/b.md", "b\n")
+        check("rules: an addition after seeding counts", RulesSkills.pendingCount(projectRoot: other) == 1)
+        check("rules: menu title carries the count", RulesSkills.menuTitle(pending: 0) == "Rules & Skills…" && RulesSkills.menuTitle(pending: 2).hasSuffix("● 2 new"))
+
         if let out = AppEnv.value("CE_RULES_PNG") {
             // a fresh project state so the badges show: seen state, then Claude's additions
             try? fm.removeItem(at: RulesSkills.stateFile)

@@ -209,6 +209,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         symbols = symbolIndex
         projectIndex.refresh(force: true) { symbolIndex.rebuild() }
         RecentProjects.add(url)
+        if !AppEnv.headless { RulesSkills.seedInBackground(projectRoot: url) }
         if !AppEnv.headless { FastTier.warm(root: url); NJSRefs.warm(root: url.standardizedFileURL.path) }
         git = nil
         gitRoot = nil

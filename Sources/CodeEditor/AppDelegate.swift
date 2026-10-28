@@ -388,6 +388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
+        case #selector(showRulesSkills(_:)): item.title = RulesSkills.menuTitle(pending: active?.root.map { RulesSkills.pendingCount(projectRoot: $0) } ?? 0)
         case #selector(toggleReopenWindows(_:)): item.state = SessionStore.reopenOnLaunch ? .on : .off
         case #selector(toggleIncludeVendor(_:)): item.state = ProjectIndex.includeVendor ? .on : .off
         case #selector(toggleBlameAnnotations(_:)): item.state = active?.current.map { Blame.isAnnotating($0) } == true ? .on : .off

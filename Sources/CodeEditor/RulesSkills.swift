@@ -130,6 +130,28 @@ enum RulesSkills {
         return c
     }
 
+    // MARK: menu dot
+
+    /// On the first open of a project, everything already there counts as seen (off the main thread; a few stat calls).
+    static func seedInBackground(projectRoot: URL) {
+        DispatchQueue.global(qos: .utility).async {
+            var store = loadStore()
+            guard store.projects[projectRoot.standardizedFileURL.path] == nil else { return }
+            seedIfNeeded(projectRoot: projectRoot, items: scan(projectRoot: projectRoot), store: &store)
+            saveStore(store)
+        }
+    }
+
+    /// How many files are new or changed since the user last looked. Zero for a project that was never seeded, so a first menu open
+    /// does not flag the whole folder.
+    static func pendingCount(projectRoot: URL) -> Int {
+        let store = loadStore()
+        guard store.projects[projectRoot.standardizedFileURL.path] != nil else { return 0 }
+        return scan(projectRoot: projectRoot).filter { status($0, in: store) != .seen }.count
+    }
+
+    static func menuTitle(pending: Int) -> String { pending > 0 ? "Rules & Skills…  ● \(pending) new" : "Rules & Skills…" }
+
     // MARK: diff against what was last seen
 
     struct DiffLine: Equatable { enum Kind { case same, added, removed }; let kind: Kind; let text: String }
