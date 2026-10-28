@@ -69,6 +69,7 @@ enum MainMenu {
             item("Auto-Save on Focus Loss", #selector(AppDelegate.toggleAutoSaveFocus(_:)), target: a),
             item("Auto-Save on Tab Switch", #selector(AppDelegate.toggleAutoSaveTabSwitch(_:)), target: a),
             item("Local History…", #selector(AppDelegate.showLocalHistory(_:)), target: a),
+            item("Rules & Skills…", #selector(AppDelegate.showRulesSkills(_:)), "r", [.control, .option], target: a),
             item("Claude Data for This Project…", #selector(AppDelegate.showClaudeData(_:)), target: a),
             sep,
             item("Close Tab", #selector(AppDelegate.closeTab(_:)), "w", target: a),
