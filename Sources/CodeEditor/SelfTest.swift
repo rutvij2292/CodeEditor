@@ -143,6 +143,8 @@ enum SelfTest {
                     SelfTestKeymap.run(app: app)
                     SelfTestClaudeData.run()
                     SelfTestRulesSkills.run()
+                    SelfTestBladeFormat.run()
+                    SelfTestBladeFormat.runDiffNav()
                     try? fm.removeItem(at: dir)
                     try? fm.removeItem(at: LocalHistory.root)
                     SelfTestBranches.run()

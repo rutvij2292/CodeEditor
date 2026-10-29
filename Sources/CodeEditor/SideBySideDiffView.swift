@@ -94,6 +94,8 @@ final class SideBySideDiffView: NSView, NSTextViewDelegate {
     private let leftTitle = DiffUI.label()
     private let rightTitle = DiffUI.label()
     private let summary = DiffUI.label(11, weight: .regular)
+    private let prevButton = NSButton(title: "", target: nil, action: nil)
+    private let nextButton = NSButton(title: "", target: nil, action: nil)
     private let overview = DiffOverview()
     private let toast = DiffUI.label(11, weight: .medium)
     private var arrowWidth: NSLayoutConstraint!
@@ -119,6 +121,8 @@ final class SideBySideDiffView: NSView, NSTextViewDelegate {
     private var pendingNew = false, pendingOld = false
 
     var changeCount: Int { blocks.count }
+    var scrollY: CGFloat { right.scroll.contentView.bounds.origin.y }
+    var currentChange: Int { current }
 
     var isNewSideEditable = false { didSet { right.text.isEditable = isNewSideEditable; right.text.allowsUndo = isNewSideEditable; updateArrows() } }
     var isOldSideEditable = false { didSet { left.text.isEditable = isOldSideEditable; left.text.allowsUndo = isOldSideEditable; updateArrows() } }
@@ -145,7 +149,19 @@ final class SideBySideDiffView: NSView, NSTextViewDelegate {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
-        for l in [leftTitle, rightTitle, summary] { header.addSubview(l) }
+        for l in [leftTitle, rightTitle, summary, prevButton, nextButton] { header.addSubview(l) }
+        for (b, symbol, tip, action) in [(prevButton, "chevron.up", "Previous change (⇧F7)", #selector(prevClicked)),
+                                         (nextButton, "chevron.down", "Next change (F7)", #selector(nextClicked))] {
+            b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)
+            b.toolTip = tip
+            b.isBordered = false
+            b.bezelStyle = .texturedRounded
+            b.imagePosition = .imageOnly
+            b.target = self
+            b.action = action
+            b.translatesAutoresizingMaskIntoConstraints = false
+            b.focusRingType = .none
+        }
         summary.alignment = .right
         toast.alignment = .center
         toast.wantsLayer = true
@@ -171,9 +187,13 @@ final class SideBySideDiffView: NSView, NSTextViewDelegate {
             leftTitle.leadingAnchor.constraint(equalTo: left.box.leadingAnchor, constant: 10),
             leftTitle.trailingAnchor.constraint(equalTo: left.box.trailingAnchor, constant: -10),
             rightTitle.leadingAnchor.constraint(equalTo: right.box.leadingAnchor, constant: 10),
-            rightTitle.trailingAnchor.constraint(equalTo: right.box.trailingAnchor, constant: -110),
+            rightTitle.trailingAnchor.constraint(equalTo: right.box.trailingAnchor, constant: -190),
+            nextButton.trailingAnchor.constraint(equalTo: summary.leadingAnchor, constant: -4),
+            prevButton.trailingAnchor.constraint(equalTo: nextButton.leadingAnchor),
+            nextButton.widthAnchor.constraint(equalToConstant: 22), prevButton.widthAnchor.constraint(equalToConstant: 22),
+            nextButton.centerYAnchor.constraint(equalTo: header.centerYAnchor), prevButton.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             summary.trailingAnchor.constraint(equalTo: overview.trailingAnchor, constant: -16),
-            summary.widthAnchor.constraint(equalToConstant: 96),
+            summary.widthAnchor.constraint(equalToConstant: 118),
             leftTitle.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             rightTitle.centerYAnchor.constraint(equalTo: header.centerYAnchor),
             summary.centerYAnchor.constraint(equalTo: header.centerYAnchor),
@@ -231,6 +251,8 @@ final class SideBySideDiffView: NSView, NSTextViewDelegate {
         DiffUI.scroll(left.scroll.contentView, x: 0, y: 0)
         DiffUI.scroll(right.scroll.contentView, x: 0, y: 0)
         for p in [left, right] { p.gutter.needsDisplay = true; p.text.needsDisplay = true }
+        // Land on the first change instead of the top of the file.
+        if !blocks.isEmpty { current = 0; reveal(blocks[0], flash: false) }
     }
 
     /// Re-diffs the current pane texts and rebuilds alignment (text itself is untouched, so caret and undo survive).
@@ -248,7 +270,9 @@ final class SideBySideDiffView: NSView, NSTextViewDelegate {
         }
         if let s = start { blocks.append(s..<rows.count) }
         for (b, range) in blocks.enumerated() { for i in range { blockOf[i] = b } }
-        summary.stringValue = blocks.isEmpty ? "No differences" : "\(blocks.count) difference\(blocks.count == 1 ? "" : "s")"
+        updateSummary()
+        prevButton.isEnabled = !blocks.isEmpty
+        nextButton.isEnabled = !blocks.isEmpty
 
         leftStyles = rows.map { r in
             switch r.kind { case .equal: return .none; case .removed: return .removed; case .changed: return .changed; case .added: return .filler }
@@ -390,6 +414,8 @@ final class SideBySideDiffView: NSView, NSTextViewDelegate {
 
     func nextChange() { go(1) }
     func previousChange() { go(-1) }
+    @objc private func prevClicked() { previousChange() }
+    @objc private func nextClicked() { nextChange() }
 
     private func go(_ step: Int) {
         flushEdits()
@@ -410,13 +436,19 @@ final class SideBySideDiffView: NSView, NSTextViewDelegate {
         reveal(blocks[i])
     }
 
-    private func reveal(_ block: Range<Int>) {
+    private func updateSummary() {
+        let n = blocks.count
+        summary.stringValue = n == 0 ? "No differences" : current >= 0 && current < n ? "\(current + 1) of \(n) differences" : "\(n) difference\(n == 1 ? "" : "s")"
+    }
+
+    private func reveal(_ block: Range<Int>, flash shouldFlash: Bool = true) {
         let clip = right.scroll.contentView
         let y0 = DiffUI.inset + CGFloat(block.lowerBound) * DiffUI.lineHeight
         let h = CGFloat(block.count) * DiffUI.lineHeight
         let target = h < clip.bounds.height ? y0 - (clip.bounds.height - h) / 2 : y0 - 40
-        DiffUI.scroll(clip, x: clip.bounds.origin.x, y: target)
-        flash(block)
+        updateSummary()
+        DiffUI.scroll(clip, x: clip.bounds.origin.x, y: max(0, target))
+        if shouldFlash { flash(block) }
     }
 
     private func flash(_ block: Range<Int>) {

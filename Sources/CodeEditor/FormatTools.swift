@@ -2,7 +2,7 @@ import Foundation
 
 /// A formatter binary resolved for one file.
 struct FormatTool {
-    enum Kind { case pint, phpCSFixer, prettier }
+    enum Kind { case pint, phpCSFixer, prettier, nativeBlade }
     let kind: Kind
     let exe: URL
     let cwd: URL                     // directory the tool was found in (project root)
@@ -10,12 +10,14 @@ struct FormatTool {
     var plugin: String?              // prettier plugin package (Blade)
     var viaPHP = false               // script lacks the exec bit: run as `php <exe>`
     var global = false
+    var indent: IndentSettings?      // native Blade formatter only
 
     var name: String {
         switch kind {
         case .pint: return "Pint"
         case .phpCSFixer: return "PHP-CS-Fixer"
         case .prettier: return "Prettier"
+        case .nativeBlade: return "Blade"
         }
     }
 }
@@ -48,7 +50,7 @@ enum FormatTools {
         return out
     }
 
-    /// Precedence: PHP: Pint > PHP-CS-Fixer. Blade: Prettier+blade plugin only. Others: project Prettier > PATH Prettier.
+    /// Precedence: PHP: Pint > PHP-CS-Fixer. Blade: Prettier+blade plugin, else the built-in formatter. Others: project Prettier > PATH Prettier.
     static func detect(for url: URL) -> FormatTool? {
         let fm = FileManager.default
         let ext = url.pathExtension.lowercased()
@@ -62,7 +64,7 @@ enum FormatTools {
                     return FormatTool(kind: .prettier, exe: bin, cwd: d, plugin: plugin)
                 }
             }
-            return nil
+            return FormatTool(kind: .nativeBlade, exe: URL(fileURLWithPath: "/usr/bin/true"), cwd: projectRoot(for: url) ?? url.deletingLastPathComponent())
         }
         if phpExtensions.contains(ext) {
             for d in dirs {

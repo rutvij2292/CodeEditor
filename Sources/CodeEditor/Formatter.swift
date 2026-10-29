@@ -127,8 +127,10 @@ enum Formatter {
         let snapshot = tv.string
         if snapshot.utf8.count > maxBytes { completion(.unavailable(reason: "File is larger than 1 MB")); return }
 
-        let tool = FormatTools.detect(for: tab.url)
-        if let tool, range == nil || tool.kind == .prettier {
+        var detected = FormatTools.detect(for: tab.url)
+        if detected?.kind == .nativeBlade { detected?.indent = IndentSettings.resolve(for: tab.url, text: snapshot) }
+        let tool = detected
+        if let tool, range == nil || tool.kind == .prettier || tool.kind == .nativeBlade {
             jobs[id]?.proc.cancel()
             jobs[id]?.finish(.unchanged(tool: tool.name))
             let job = Job(tool: tool.name, completion: completion)
@@ -222,6 +224,11 @@ enum Formatter {
         }
 
         switch tool.kind {
+        case .nativeBlade:
+            let indent = tool.indent ?? IndentSettings.preferred
+            let lines = range.map { BladeFormatter.lineRange(for: $0, in: text) }
+            return Executed(kind: .text(BladeFormatter.format(text, useTabs: indent.useTabs, size: indent.size, lines: lines)))
+
         case .prettier:
             var args = ["--stdin-filepath", url.path]
             if let range { args += ["--range-start", String(range.location), "--range-end", String(NSMaxRange(range))] }
