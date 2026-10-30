@@ -31,7 +31,7 @@ final class CommitDiffWindow: NSObject, NSWindowDelegate {
         window.delegate = self
         window.tabbingMode = .disallowed
         build()
-        if !AppEnv.headless { window.setFrameAutosaveName("CommitDiffWindow") }
+        if !AppEnv.headless { window.setFrameAutosaveName("CommitDiffWindow2") }
     }
 
     private func build() {
@@ -71,8 +71,9 @@ final class CommitDiffWindow: NSObject, NSWindowDelegate {
         self.files = files
         self.index = index
         if !window.isVisible, !AppEnv.headless {
-            if !window.setFrameUsingName("CommitDiffWindow"), let p = parent {
-                window.setFrameOrigin(NSPoint(x: p.frame.midX - 550, y: p.frame.midY - 360))
+            // Remembered size wins; first open fills the screen's usable area (v2 name drops the old half-width frame).
+            if !window.setFrameUsingName("CommitDiffWindow2"), let screen = parent?.screen ?? NSScreen.main {
+                window.setFrame(screen.visibleFrame, display: false)
             }
         }
         if !AppEnv.headless { window.makeKeyAndOrderFront(nil) }
