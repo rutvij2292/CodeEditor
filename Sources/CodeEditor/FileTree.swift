@@ -117,6 +117,7 @@ final class KeyOutlineView: NSOutlineView {
         switch event.keyCode {
         case 36, 76: onReturn?()          // return, enter
         case 53: onEscape?()              // escape
+        case 51, 117: onDelete?()         // delete / forward delete: straight to the Trash (recoverable, like Finder)
         default:
             if speedSearch?.handleKeyDown(event) == true { return }
             super.keyDown(with: event)
@@ -502,9 +503,9 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     func trash(_ url: URL) { trash([url]) }
 
     /// Moves every URL to the Trash after one confirmation; items inside another selected folder go with it.
-    func trash(_ urls: [URL]) {
+    func trash(_ urls: [URL], confirm: Bool = true) {
         let urls = urls.filter { u in !urls.contains { $0.path != u.path && FileOperations.isInside(u, of: $0) } }
-        guard !urls.isEmpty, confirmTrash(urls) else { return }
+        guard !urls.isEmpty, !confirm || confirmTrash(urls) else { return }
         var changes: [FileChange] = []
         for url in urls {
             do { try FileOperations.trash(url); changes.append(.deleted(url)) } catch { self.alert(error) }
@@ -514,7 +515,8 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         changes.forEach { onChange?($0) }
     }
 
-    private func trashSelection() { trash(selectedURLs) }
+    /// Delete key: no dialog, the Trash is the undo. The project root is never trashed this way.
+    private func trashSelection() { trash(selectedURLs.filter { $0.path != root?.url.path }, confirm: false) }
     private func renameSelection() { if let u = selectedURL, u.path != root?.url.path { beginRename(u) } }
 
     private func perform(_ op: () throws -> FileChange) {
