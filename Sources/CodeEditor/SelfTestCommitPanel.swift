@@ -36,6 +36,7 @@ enum SelfTestCommitPanel {
         swapChecks(w: w, repo: repo)
         diffTabChecks(w: w, repo: repo)
         tabChecks(repo: repo)
+        reviewChecks(w: w, repo: repo)
     }
 
     private static func layoutChecks(repo: URL) {
@@ -104,5 +105,49 @@ enum SelfTestCommitPanel {
         check("commit panel: Collapse All collapses every group", gp.expandedGroupCount == 0)
         gp.expandAllTapped()
         check("commit panel: Expand All expands every group", gp.expandedGroupCount == gp.groupCount)
+    }
+
+    /// Regressions the whole-branch review found.
+    private static func reviewChecks(w: ProjectWindow, repo: URL) {
+        let side = w.commitSidebar
+        // Cmd-1 / focus-tree entry points swap the file tree back instead of focusing a hidden tree.
+        side.show(repo: repo)
+        w.toggleProjectTree()
+        check("commit panel: Cmd-1 swaps the file tree back", !side.isShowing && !w.tree.panel.isHidden && !w.termDock.sidebarItem.isCollapsed)
+
+        // Cmd-K with the panel showing but not focused focuses it; only a focused panel hides.
+        side.show(repo: repo)
+        w.window.makeFirstResponder(nil)
+        side.toggle()
+        check("commit panel: Cmd-K on an unfocused panel keeps it showing", side.isShowing)
+        side.panel?.focusCommitMessage()
+        side.toggle()
+        check("commit panel: Cmd-K inside the panel hides it", !side.isShowing)
+
+        // Hiding while the terminal is maximized must not bring the sidebar back.
+        side.show(repo: repo)
+        w.termDock.maximized = true
+        w.termDock.sidebarItem.isCollapsed = true
+        side.hide(restoreFocus: false)
+        check("commit panel: hiding while the terminal is maximized leaves the sidebar collapsed", w.termDock.sidebarItem.isCollapsed)
+        w.termDock.maximized = false
+        w.termDock.sidebarItem.isCollapsed = false
+
+        // The inline Stash tab has a real height (its buttons are clickable).
+        let host = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 400))
+        let sv = GitStashView(inline: true)
+        sv.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(sv)
+        NSLayoutConstraint.activate([sv.topAnchor.constraint(equalTo: host.topAnchor), sv.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+                                     sv.trailingAnchor.constraint(equalTo: host.trailingAnchor)])
+        sv.show(stashes: [])
+        host.layoutSubtreeIfNeeded()
+        check("commit panel: the inline stash view has a non-zero height", sv.frame.height > 20)
+
+        // RAM: the sidebar never builds the heavy Log view; the log layout does.
+        let gs = GitPanelController(root: repo, layout: .sidebar) { _ in }
+        let gl = GitPanelController(root: repo, layout: .log) { _ in }
+        check("commit panel: the sidebar layout builds no Log view", !descendants(of: gs.view).contains { $0 is GitLogView })
+        check("commit panel: the log layout has its Log view", descendants(of: gl.view).contains { $0 is GitLogView })
     }
 }

@@ -16,7 +16,7 @@ final class GitStashView: NSView {
     convenience init(inline: Bool) {
         self.init(frame: .zero)
         self.inline = inline
-        if inline { fixedWidth?.isActive = false }
+        if inline { fixedWidth?.isActive = false; stack.bottomAnchor.constraint(equalTo: bottomAnchor).isActive = true }
     }
 
     override init(frame: NSRect) {

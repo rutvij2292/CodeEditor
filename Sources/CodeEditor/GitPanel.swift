@@ -313,6 +313,8 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     var onPushed: (() -> Void)?
     /// Set after a commit so the next refresh leaves nothing selected instead of showing a diff of an unrelated file.
     private var clearSelectionOnApply = false
+    /// True while code (not the user) changes the tree selection; such changes must not open the diff tab.
+    private var programmaticSelection = false
     /// True from Commit and Push until the push ends; lets the host close its window once the push succeeds.
     private(set) var committedAndPushing = false
     /// Fired after every successful reload of the repository state.
@@ -535,6 +537,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         outline.delegate = self
         outline.target = self
         outline.doubleAction = #selector(doubleClicked)
+        outline.action = #selector(rowClicked)
         outline.onSpace = { [weak self] in self?.toggleSelection() }
         outline.onReturn = { [weak self] in self?.openSelection() }
         speed.attach(to: outline) { [weak self] row in (self?.outline.item(atRow: row) as? GitRow)?.change.path }
@@ -726,25 +729,28 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         body.translatesAutoresizingMaskIntoConstraints = false
         panel.addSubview(stack)
         if layout == .sidebar { panel.addSubview(body) }      // the log layout carries no changes UI at all
-        logView.translatesAutoresizingMaskIntoConstraints = false
-        logView.isHidden = true
-        panel.addSubview(logView)
-        panel.onCommit = { [weak self] in self?.commitTapped() }
-        panel.onCommitPush = { [weak self] in self?.commitPushTapped() }
-        panel.onRollback = { [weak self] in self?.rollbackTapped() }
+        if layout == .sidebar {
+            panel.onCommit = { [weak self] in self?.commitTapped() }
+            panel.onCommitPush = { [weak self] in self?.commitPushTapped() }
+            panel.onRollback = { [weak self] in self?.rollbackTapped() }
+        }
         panel.onEscape = { [weak self] in if let f = self?.onFocusEditor { f() } else { self?.onRequestClose?() } }
         panel.onHide = { [weak self] in self?.onRequestClose?() }
         panel.escapeIsBusy = { [weak self] in
             guard let self else { return false }
             return self.stashPopover?.isShown == true || (self.mode == .log && self.logView.searchIsEditing)
         }
-        logView.onAction = { [weak self] a, c in self?.logAction(a, c) }
-        NSLayoutConstraint.activate([
-            logView.topAnchor.constraint(equalTo: stack.bottomAnchor),
-            logView.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
-            logView.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
-            logView.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-        ])
+        if layout == .log {      // the Log view is built only where it is shown (it is heavy: tables, a `git config` probe)
+            logView.translatesAutoresizingMaskIntoConstraints = false
+            panel.addSubview(logView)
+            logView.onAction = { [weak self] a, c in self?.logAction(a, c) }
+            NSLayoutConstraint.activate([
+                logView.topAnchor.constraint(equalTo: stack.bottomAnchor),
+                logView.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+                logView.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+                logView.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            ])
+        }
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: panel.topAnchor),
             stack.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
@@ -772,7 +778,6 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             ])
         }
         showDiffMessage("Select a file to see its changes")
-        logView.isHidden = layout == .sidebar
         updateButtons()
     }
 
@@ -796,14 +801,16 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     // MARK: public
 
     /// Path (relative to the repo root) of the file selected in the tree, if a file row is selected.
-    var selectedPath: String? { selectedRow()?.change.path }
+    var selectedPath: String? { mergingPath ?? selectedRow()?.change.path }
     /// Whether the tree currently lists `path` as changed; the host closes its diff tab when this turns false.
     func hasDiff(for path: String) -> Bool { changes.contains { $0.path == path } }
 
     /// Selects the row for `path` (preferring Changes over Staged) and asks the host to show its diff, as a click would.
     func select(path: String) {
         guard let row = groups.flatMap(\.rows).first(where: { $0.change.path == path }) else { return }
+        programmaticSelection = true
         outline.selectRowIndexes([outline.row(forItem: row)], byExtendingSelection: false)
+        programmaticSelection = false
         outline.scrollRowToVisible(outline.row(forItem: row))
         onShowDiff?()
     }
@@ -830,6 +837,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             v.topAnchor.constraint(equalTo: stashHost.topAnchor),
             v.leadingAnchor.constraint(equalTo: stashHost.leadingAnchor),
             v.trailingAnchor.constraint(equalTo: stashHost.trailingAnchor),
+            v.bottomAnchor.constraint(lessThanOrEqualTo: stashHost.bottomAnchor),
         ])
     }
 
@@ -841,6 +849,12 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     @objc func refreshTapped() { reload() }
     @objc func expandAllTapped() { for g in groups { outline.expandItem(g) } }
     @objc func collapseAllTapped() { for g in groups { outline.collapseItem(g) } }
+
+    /// Focuses what the host panel is for: the message box in the sidebar, the Log list in the bottom tool window.
+    func focusPrimary() {
+        if layout == .sidebar { focusCommitMessage() }
+        else if let v = ToolFocus.firstFocusable(in: panel) { panel.window?.makeFirstResponder(v) }
+    }
 
     func focusCommitMessage() { panel.window?.makeFirstResponder(messageView) }
     func fetch() { fetchTapped() }
@@ -979,6 +993,8 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
         outline.reloadData()
         expandAll()
+        programmaticSelection = true
+        defer { programmaticSelection = false }
         if clearSelectionOnApply {
             clearSelectionOnApply = false
             outline.deselectAll(nil)
@@ -1069,8 +1085,14 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     func outlineViewSelectionDidChange(_ notification: Notification) {
         if mergingPath != nil { closeMerge() }
         showDiffForSelection(force: true)
-        // Only a click or key press shows the diff tab; selections restored by a refresh must not pop it open.
-        if layout == .sidebar, selectedRow() != nil, let t = NSApp.currentEvent?.type, t == .leftMouseDown || t == .keyDown { onShowDiff?() }
+        // Arrow-key navigation shows the diff tab; clicks go through `rowClicked`, and selections made by code (refresh) never do.
+        if layout == .sidebar, !programmaticSelection, selectedRow() != nil, NSApp.currentEvent?.type == .keyDown { onShowDiff?() }
+    }
+
+    /// Single click on a file row shows its diff tab, even when that row was already selected (e.g. auto-selected on open).
+    @objc private func rowClicked() {
+        guard layout == .sidebar, outline.clickedRow >= 0, outline.item(atRow: outline.clickedRow) is GitRow else { return }
+        onShowDiff?()
     }
     func outlineViewItemDidCollapse(_ n: Notification) { if let g = n.userInfo?["NSObject"] as? GitGroup { collapsed.insert(g.kind) } }
     func outlineViewItemDidExpand(_ n: Notification) { if let g = n.userInfo?["NSObject"] as? GitGroup { collapsed.remove(g.kind) } }
@@ -1259,7 +1281,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     func showHistory(for url: URL) {
         let root = repo.root.resolvingSymlinksInPath().path
         let path = url.resolvingSymlinksInPath().path
-        guard path.hasPrefix(root + "/") else { NSSound.beep(); return }
+        guard layout == .log, path.hasPrefix(root + "/") else { NSSound.beep(); return }
         setMode(.log, reloadLog: false)
         logView.showHistory(path: String(path.dropFirst(root.count + 1)))
     }
@@ -1572,6 +1594,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
                     mv.isHidden = false
                     mv.show(base: v.base, ours: v.ours ?? "", theirs: v.theirs ?? "", oursTitle: "Yours", theirsTitle: "Theirs",
                             fileExtension: (c.path as NSString).pathExtension)
+                    self.onShowDiff?()
                     mv.onResolved = { [weak self] text in
                         self?.closeMerge()
                         self?.perform { try $0.markResolved(path: c.path, content: text) }

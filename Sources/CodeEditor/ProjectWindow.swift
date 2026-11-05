@@ -561,6 +561,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     func gitStateChanged(reloadEditors: Bool) {
         refreshGitStatus()
         git?.reload()
+        commitSidebar.reloadIfShowing()
         guard reloadEditors else { return }
         tree.refresh()
         editors.values.forEach { $0.reloadIfChangedOnDisk() }
@@ -669,6 +670,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             if url.path.hasPrefix(prefix) { symbols?.update(file: String(url.path.dropFirst(prefix.count))) }
         }
         refreshGitStatus()
+        commitSidebar.reloadIfShowing()
     }
 
     private func didSelect(_ id: String) {
@@ -1006,6 +1008,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     }
 
     func focusTree() {
+        showFileTreeInSidebar()
         if let id = tabs.selectedID { tree.reveal(URL(fileURLWithPath: id)) }
         if tree.outline.selectedRow < 0, tree.outline.numberOfRows > 0 { tree.outline.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
         window.makeFirstResponder(tree.outline)
@@ -1029,12 +1032,19 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     /// Cmd-1 (PhpStorm): focus the tree, showing the sidebar if needed; pressed again while the tree has focus, hide it and return to the editor.
     func toggleProjectTree() {
         guard !isTerminalMaximized else { return }
+        if commitSidebar.isShowing { showFileTreeInSidebar(); focusTree(); return }
         if isSidebarVisible, isTreeFocused { toggleSidebar(); return }
         if !isSidebarVisible { termDock.sidebarItem.animator().isCollapsed = false }
         focusTree()
     }
+    /// Swaps the file tree back into the left slot (and expands it) when the Commit panel is occupying it.
+    func showFileTreeInSidebar() {
+        guard commitSidebar.isShowing else { return }
+        commitSidebar.hide(restoreFocus: false)
+        termDock.sidebarItem.isCollapsed = false
+    }
     func collapseTree() { tree.collapseAll() }
-    func selectOpenedFile() { if let id = tabs.selectedID { tree.reveal(URL(fileURLWithPath: id)) } }
+    func selectOpenedFile() { showFileTreeInSidebar(); if let id = tabs.selectedID { tree.reveal(URL(fileURLWithPath: id)) } }
 
     /// Cmd-L: a small QuickPicker-style input accepting `line` or `line:column`.
     func goToLine() {
@@ -1212,7 +1222,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     func gitFetch() { showCommit(); git?.fetch() }
 
     /// Cmd-9: show the Git tool, or hide the panel if Git is what it shows.
-    func focusGitTool() { git?.reload(); git?.focusCommitMessage() }
+    func focusGitTool() { git?.reload(); git?.focusPrimary() }
 
     func toggleGitPanel() {
         guard root != nil else { return }

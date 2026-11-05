@@ -23,15 +23,24 @@ final class CommitSidebar {
         self.treeView = treeView
     }
 
-    /// Cmd-K: shows the panel, or hides it when it is already showing.
+    /// Cmd-K: shows the panel; with the panel focused it hides; with it showing but unfocused (or the sidebar collapsed) it
+    /// expands the sidebar and focuses the message box instead.
     func toggle(then: ((GitPanelController) -> Void)? = nil) {
-        if isShowing { hide() } else { show(then: then) }
+        guard isShowing, let project, let panel else { show(then: then); return }
+        let focusedInside = (project.window.firstResponder as? NSView)?.isDescendant(of: panel.view) == true
+        if focusedInside, !project.termDock.sidebarItem.isCollapsed { hide(); return }
+        if !project.isTerminalMaximized { project.termDock.sidebarItem.isCollapsed = false }
+        panel.focusCommitMessage()
+        project.toolStrip?.refresh()
     }
+
+    /// Refreshes the panel after in-app git or file events (save, checkout); no-op while hidden, never polls.
+    func reloadIfShowing() { if isShowing { panel?.reload() } }
 
     /// Resolves the repository (alerting when there is none), then shows the panel.
     func show(then: ((GitPanelController) -> Void)? = nil) {
         guard let project, let root = project.root else { return }
-        if isShowing { panel?.focusCommitMessage(); if let panel { then?(panel) }; return }
+        if isShowing { panel?.reload(); panel?.focusCommitMessage(); if let panel { then?(panel) }; return }
         GitRepo.repoRoot(for: root) { [weak self, weak project] repo in
             guard let self, let project else { return }
             guard let repo else {
@@ -57,6 +66,7 @@ final class CommitSidebar {
             treeView.isHidden = true
             panel.view.isHidden = false
             isShowing = true
+            project.toolStrip?.refresh()
         }
         panel.reload()
         DispatchQueue.main.async { [weak panel] in panel?.focusCommitMessage() }
@@ -69,8 +79,13 @@ final class CommitSidebar {
         isShowing = false
         panel?.view.isHidden = true
         treeView.isHidden = false
-        project.termDock.sidebarItem.isCollapsed = wasCollapsed
+        if project.isTerminalMaximized {
+            project.termDock.savedCollapse.sidebar = wasCollapsed      // the maximized layout owns the sidebar; restore it on un-maximize
+        } else {
+            project.termDock.sidebarItem.isCollapsed = wasCollapsed
+        }
         if restoreFocus { project.focusEditor() }
+        project.toolStrip?.refresh()
     }
 
     /// Opens (or re-titles and selects) the single diff preview tab for the file selected in the panel's tree.
