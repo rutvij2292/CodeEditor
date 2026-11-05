@@ -92,11 +92,13 @@ final class CommitSidebar {
     func showDiffTab() {
         guard let project, let panel, let path = panel.selectedPath else { return }
         previewPath = path
+        panel.diffActive = true
         project.showAuxiliaryTab(id: Self.diffTabID, title: Self.title(for: path), view: panel.diffHost)
     }
 
     func closeDiffTab() {
         previewPath = nil
+        panel?.diffActive = false
         project?.closeAuxiliaryTab(Self.diffTabID)
     }
 
@@ -105,7 +107,7 @@ final class CommitSidebar {
     /// After a refresh: close the preview when its file no longer has changes; follow the selection if the refresh moved it.
     private func syncDiffTab() {
         guard let path = previewPath, let panel, let project else { return }
-        if !project.tabs.entries.contains(where: { $0.id == Self.diffTabID }) { previewPath = nil; return }   // closed by the user
+        if !project.tabs.entries.contains(where: { $0.id == Self.diffTabID }) { previewPath = nil; panel.diffActive = false; return }   // closed by the user
         if !panel.hasDiff(for: path) { closeDiffTab(); return }
         if let selected = panel.selectedPath, selected != path {
             previewPath = selected

@@ -1499,7 +1499,18 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         reload()
     }
 
+    /// Sidebar layout: whether the host shows `diffHost` (the diff preview tab is open). While false no diff is built at all,
+    /// so opening the Commit panel costs a tree and a message box, not a side-by-side diff view with highlighting.
+    var diffActive = false {
+        didSet {
+            guard layout == .sidebar, diffActive != oldValue else { return }
+            if diffActive { showDiffForSelection(force: true) }
+            else { flushPendingWrite(); pruneStageViews(keeping: ""); active = nil; shownDiffKey = nil }
+        }
+    }
+
     private func showDiffForSelection(force: Bool) {
+        guard layout == .log || diffActive || mergingPath != nil else { return }
         if force { flushPendingWrite() }
         guard let row = selectedRow() else {
             shownDiffKey = nil
