@@ -240,6 +240,7 @@ private final class GitPanelView: NSView {
     let right = NSSplitView()
     let bannerLabel = NSTextField(wrappingLabelWithString: "")
     var positioned = false
+    var sidebar = false
     var onCommit: (() -> Void)?
     var onCommitPush: (() -> Void)?
     var onRollback: (() -> Void)?
@@ -275,6 +276,11 @@ private final class GitPanelView: NSView {
         if !positioned, bounds.width > 100, bounds.height > 100 {
             positioned = true
             DispatchQueue.main.async { [self] in
+                if sidebar {
+                    right.layoutSubtreeIfNeeded()
+                    right.setPosition(right.bounds.height - 190, ofDividerAt: 0)
+                    return
+                }
                 split.layoutSubtreeIfNeeded()
                 split.setPosition(min(430, bounds.width * 0.42), ofDividerAt: 0)
                 right.layoutSubtreeIfNeeded()
@@ -287,7 +293,13 @@ private final class GitPanelView: NSView {
 // MARK: controller
 
 final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate, NSSplitViewDelegate {
+    /// `.sidebar`: the left Commit panel (toolbar, changes tree, commit box; the diff view is detached and shown by the host
+    /// in the editor area). `.log`: the bottom Git tool window (branch/sync toolbar and the Log view only).
+    enum Layout { case sidebar, log }
+    let layout: Layout
     let view: NSView
+    /// Sidebar layout: the user picked a file in the tree; the host should show `diffHost` in the editor area.
+    var onShowDiff: (() -> Void)?
     var onStatusChange: (() -> Void)?
     /// Set by the Commit window: opens the shared branch popup instead of the plain menu below.
     var onShowBranches: (() -> Void)?
@@ -320,7 +332,9 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private let pushButton = NSButton()
     private let rollbackButton = NSButton()
     private let stashButton = NSButton()
-    private let modeControl = NSSegmentedControl(labels: ["Changes", "Log"], trackingMode: .selectOne, target: nil, action: nil)
+    private let refreshButton = NSButton()
+    private let expandAllButton = NSButton()
+    private let collapseAllButton = NSButton()
     private let spinner = NSProgressIndicator()
     private let banner = NSView()
     private let opBanner = NSView()
@@ -336,11 +350,12 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private var reloading = false
     private var reloadQueued = false
     private enum Mode { case changes, log }
-    private var mode = Mode.changes
+    private lazy var mode = layout == .log ? Mode.log : Mode.changes
     private static let maxUntrackedShown = 2000
     private let outline = GitOutline()
     private let speed = SpeedSearch()
-    private let diffHost = NSView()
+    /// The side-by-side diff (with its prev/next, stage and merge bars). Hosted by the panel only in the old split layout.
+    let diffHost = NSView()
     private let diffView = SideBySideDiffView()
     private var mergeView: MergeView?
     private let mergeBar = NSStackView()
@@ -384,7 +399,8 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private let diffInfo = NSTextField(labelWithString: "")
     private var mergingPath: String?
 
-    init(root: URL, openFile: @escaping (URL) -> Void) {
+    init(root: URL, layout: Layout = .log, openFile: @escaping (URL) -> Void) {
+        self.layout = layout
         repo = GitRepo(root: root)
         self.openFile = openFile
         view = panel
@@ -420,10 +436,6 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         tool(stashButton, "Stash", "tray.and.arrow.down", #selector(stashTapped))
         rollbackButton.toolTip = "Roll back selected changes (⌥⌘Z)"
         pushButton.toolTip = "Push (hold ⌥ to always preview)"
-        modeControl.controlSize = .small
-        modeControl.selectedSegment = 0
-        modeControl.target = self
-        modeControl.action = #selector(modeChanged)
         branchButton.controlSize = .small
         branchButton.font = .systemFont(ofSize: 12)
         branchButton.bezelStyle = .texturedRounded
@@ -432,7 +444,25 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         spinner.isDisplayedWhenStopped = false
         spinner.isIndeterminate = true
 
-        let toolbar = NSStackView(views: [branchButton, modeControl, fetchButton, pullButton, pushButton, rollbackButton, stashButton, spinner])
+        func iconTool(_ b: NSButton, _ symbol: String, _ tip: String, _ action: Selector) {
+            b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)
+            b.toolTip = tip
+            b.isBordered = false
+            b.imageScaling = .scaleProportionallyDown
+            b.target = self
+            b.action = action
+            b.widthAnchor.constraint(equalToConstant: 22).isActive = true
+        }
+        iconTool(refreshButton, "arrow.clockwise", "Refresh", #selector(refreshTapped))
+        iconTool(expandAllButton, "chevron.down.2", "Expand All", #selector(expandAllTapped))
+        iconTool(collapseAllButton, "chevron.up.2", "Collapse All", #selector(collapseAllTapped))
+        rollbackButton.title = ""
+        rollbackButton.imagePosition = .imageOnly
+        rollbackButton.bezelStyle = .regularSquare
+        rollbackButton.isBordered = false
+        let toolbar = NSStackView(views: layout == .sidebar
+            ? [refreshButton, rollbackButton, expandAllButton, collapseAllButton, spinner]
+            : [branchButton, fetchButton, pullButton, pushButton, spinner])
         toolbar.orientation = .horizontal
         toolbar.spacing = 6
         toolbar.alignment = .centerY
@@ -639,18 +669,27 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         // layout
         panel.right.isVertical = false
         panel.right.dividerStyle = .thin
-        panel.right.addArrangedSubview(diffHost)
-        panel.right.addArrangedSubview(commitBox)
-        panel.right.setHoldingPriority(.init(260), forSubviewAt: 1)
-        panel.split.isVertical = true
-        panel.split.dividerStyle = .thin
-        // Both dividers are frame-based and bounded by the delegate below (min list width 220, min diff height 100, ...):
-        // Auto Layout minimums inside the panes made the dividers refuse every drag.
-        panel.split.delegate = self
         panel.right.delegate = self
-        panel.split.addArrangedSubview(outlineScroll)
-        panel.split.addArrangedSubview(panel.right)
-        panel.split.setHoldingPriority(.init(260), forSubviewAt: 0)
+        if layout == .sidebar {
+            // Tree over commit box; the diff lives in the editor area (hosted by the project window), not here.
+            panel.sidebar = true
+            panel.right.addArrangedSubview(outlineScroll)
+            panel.right.addArrangedSubview(commitBox)
+            panel.right.setHoldingPriority(.init(260), forSubviewAt: 1)
+        } else {
+            panel.right.addArrangedSubview(diffHost)
+            panel.right.addArrangedSubview(commitBox)
+            panel.right.setHoldingPriority(.init(260), forSubviewAt: 1)
+            panel.split.isVertical = true
+            panel.split.dividerStyle = .thin
+            // Both dividers are frame-based and bounded by the delegate below (min list width 220, min diff height 100, ...):
+            // Auto Layout minimums inside the panes made the dividers refuse every drag.
+            panel.split.delegate = self
+            panel.split.addArrangedSubview(outlineScroll)
+            panel.split.addArrangedSubview(panel.right)
+            panel.split.setHoldingPriority(.init(260), forSubviewAt: 0)
+        }
+        let body: NSSplitView = layout == .sidebar ? panel.right : panel.split
 
         let separator = NSBox()
         separator.boxType = .separator
@@ -661,10 +700,10 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.setHuggingPriority(.required, for: .vertical)
         stack.setContentCompressionResistancePriority(.required, for: .vertical)
-        panel.split.setContentHuggingPriority(.init(1), for: .vertical)
-        panel.split.translatesAutoresizingMaskIntoConstraints = false
+        body.setContentHuggingPriority(.init(1), for: .vertical)
+        body.translatesAutoresizingMaskIntoConstraints = false
         panel.addSubview(stack)
-        panel.addSubview(panel.split)
+        if layout == .sidebar { panel.addSubview(body) }      // the log layout carries no changes UI at all
         logView.translatesAutoresizingMaskIntoConstraints = false
         logView.isHidden = true
         panel.addSubview(logView)
@@ -692,12 +731,17 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             separator.widthAnchor.constraint(equalTo: stack.widthAnchor),
             banner.widthAnchor.constraint(equalTo: stack.widthAnchor),
             opBanner.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            panel.split.topAnchor.constraint(equalTo: stack.bottomAnchor),
-            panel.split.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
-            panel.split.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
-            panel.split.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
         ])
+        if layout == .sidebar {
+            NSLayoutConstraint.activate([
+                body.topAnchor.constraint(equalTo: stack.bottomAnchor),
+                body.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+                body.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+                body.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            ])
+        }
         showDiffMessage("Select a file to see its changes")
+        logView.isHidden = layout == .sidebar
         updateButtons()
     }
 
@@ -720,6 +764,15 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     // MARK: public
 
+    /// Path (relative to the repo root) of the file selected in the tree, if a file row is selected.
+    var selectedPath: String? { selectedRow()?.change.path }
+    /// Whether the tree currently lists `path` as changed; the host closes its diff tab when this turns false.
+    func hasDiff(for path: String) -> Bool { changes.contains { $0.path == path } }
+
+    @objc func refreshTapped() { reload() }
+    @objc func expandAllTapped() { for g in groups { outline.expandItem(g) } }
+    @objc func collapseAllTapped() { for g in groups { outline.collapseItem(g) } }
+
     func focusCommitMessage() { panel.window?.makeFirstResponder(messageView) }
     func fetch() { fetchTapped() }
     func pull() { pullTapped() }
@@ -732,6 +785,24 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         var merging: Bool; var op: GitOperation?; var stashes: [GitStash]; var hiddenUntracked: Int
     }
 
+    private static func snapshot(of repo: GitRepo) -> Result<Snapshot, Error> {
+        do {
+            let s = try repo.statusCapped(maxUntracked: maxUntrackedShown)
+            let b = (try? repo.branches()) ?? ([], [])
+            return .success(Snapshot(changes: s.changes, info: s.info, branches: b, merging: repo.isMerging,
+                                     op: repo.operationInProgress(), stashes: (try? repo.stashList()) ?? [],
+                                     hiddenUntracked: s.hiddenUntracked))
+        } catch { return .failure(error) }
+    }
+
+    /// Self-test seam: refreshes on the calling thread (the test runs on the main queue, which an async reload cannot re-enter).
+    func reloadNowForTests() {
+        guard case .success(let r) = Self.snapshot(of: repo) else { return }
+        info = r.info; branches = r.branches; merging = r.merging; currentOp = r.op; stashes = r.stashes
+        apply(changes: r.changes)
+        publishSummary()
+    }
+
     /// Refreshes status, branches, stashes and the in-progress operation off the main thread. Calls made while a
     /// refresh is running are coalesced into one follow-up refresh. Never changes the first responder.
     func reload() {
@@ -740,14 +811,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         reloadGen += 1
         let gen = reloadGen
         reader.async { [repo] in
-            let result: Result<Snapshot, Error>
-            do {
-                let s = try repo.statusCapped(maxUntracked: Self.maxUntrackedShown)
-                let b = (try? repo.branches()) ?? ([], [])
-                result = .success(Snapshot(changes: s.changes, info: s.info, branches: b, merging: repo.isMerging,
-                                           op: repo.operationInProgress(), stashes: (try? repo.stashList()) ?? [],
-                                           hiddenUntracked: s.hiddenUntracked))
-            } catch { result = .failure(error) }
+            let result = Self.snapshot(of: repo)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.reloading = false
@@ -935,6 +999,8 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     func outlineViewSelectionDidChange(_ notification: Notification) {
         if mergingPath != nil { closeMerge() }
         showDiffForSelection(force: true)
+        // Only a click or key press shows the diff tab; selections restored by a refresh must not pop it open.
+        if layout == .sidebar, selectedRow() != nil, let t = NSApp.currentEvent?.type, t == .leftMouseDown || t == .keyDown { onShowDiff?() }
     }
     func outlineViewItemDidCollapse(_ n: Notification) { if let g = n.userInfo?["NSObject"] as? GitGroup { collapsed.insert(g.kind) } }
     func outlineViewItemDidExpand(_ n: Notification) { if let g = n.userInfo?["NSObject"] as? GitGroup { collapsed.remove(g.kind) } }
@@ -1110,18 +1176,14 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     // MARK: log tab
 
-    @objc private func modeChanged() { setMode(modeControl.selectedSegment == 1 ? .log : .changes) }
-
     private func setMode(_ m: Mode, reloadLog: Bool = true) {
+        guard layout == .log, m == .log else { return }      // the sidebar has no Log; the bottom panel has no Changes
         mode = m
-        modeControl.selectedSegment = m == .log ? 1 : 0
-        panel.split.isHidden = m == .log
-        logView.isHidden = m == .changes
-        if m == .log, reloadLog { logView.reload() }
+        logView.isHidden = false
+        if reloadLog { logView.reload() }
     }
 
     func showLog() { setMode(.log) }
-    func showChanges() { setMode(.changes) }
 
     /// Switches to the Log tab listing the history of one file (`git log --follow`).
     func showHistory(for url: URL) {

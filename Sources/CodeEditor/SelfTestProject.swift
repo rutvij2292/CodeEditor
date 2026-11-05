@@ -149,7 +149,7 @@ extension SelfTest {
         }
 
         do {   // commit panel dividers can be dragged (they used to refuse every drag)
-            let gp = GitPanelController(root: URL(fileURLWithPath: NSTemporaryDirectory())) { _ in }
+            let gp = GitPanelController(root: URL(fileURLWithPath: NSTemporaryDirectory()), layout: .sidebar) { _ in }
             let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
             gp.view.frame = NSRect(x: 0, y: 0, width: 1000, height: 700); gp.view.autoresizingMask = [.width, .height]
             win.contentView = gp.view
@@ -159,15 +159,9 @@ extension SelfTest {
                 for c in v.subviews { if let r = find(c, vertical: vertical) { return r } }
                 return nil
             }
-            if let sv = find(gp.view, vertical: true) {
-                sv.setPosition(300, ofDividerAt: 0); gp.view.layoutSubtreeIfNeeded()
-                let moved = abs(sv.subviews[0].frame.width - 300) < 2
-                sv.setPosition(600, ofDividerAt: 0); gp.view.layoutSubtreeIfNeeded()
-                check("commit panel: list / diff divider can be dragged both ways", moved && abs(sv.subviews[0].frame.width - 600) < 2)
-            } else { check("commit panel: list / diff divider exists", false) }
             if let rv = find(gp.view, vertical: false) {
                 rv.setPosition(300, ofDividerAt: 0); gp.view.layoutSubtreeIfNeeded()
-                check("commit panel: diff / message divider can be dragged", abs(rv.subviews[0].frame.height - 300) < 3)
+                check("commit panel: tree / message divider can be dragged", abs(rv.subviews[0].frame.height - 300) < 3)
             }
         }
 
