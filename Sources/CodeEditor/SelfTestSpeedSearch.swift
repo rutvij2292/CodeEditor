@@ -5,6 +5,9 @@ enum SelfTestSpeedSearch {
     private static func check(_ name: String, _ ok: @autoclosure () -> Bool) { SelfTest.check(name, ok()) }
 
     static func run(w: ProjectWindow) {
+        check("path scope: tests dir / *Test.php / *.spec.ts", PathScope.of("tests/Feature/A.php") == .tests && PathScope.of("app/FooTest.php") == .tests && PathScope.of("src/a.spec.ts") == .tests)
+        check("path scope: public/build, vendor, node_modules, dist are generated", PathScope.of("public/build/app.js") == .generated && PathScope.of("vendor/x/y.php") == .generated && PathScope.of("node_modules/a/b.js") == .generated && PathScope.of("dist/a.js") == .generated)
+        check("path scope: normal source and 'public' alone are plain", PathScope.of("app/Models/User.php") == nil && PathScope.of("public/index.php") == nil && PathScope.of("resources/js/Pages/Latest.vue") == nil)
         let tree = w.tree, outline = tree.outline
         func name(_ row: Int) -> String { (outline.item(atRow: row) as? FileNode)?.url.lastPathComponent ?? "" }
         guard outline.numberOfRows >= 2 else { check("speed search: tree has rows", false); return }

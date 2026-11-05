@@ -705,6 +705,7 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
         let row = o.makeView(withIdentifier: id, owner: nil) as? TreeRowView ?? { let r = TreeRowView(); r.identifier = id; return r }()
         row.level = max(0, o.level(forItem: item))
         row.isHovered = false
+        row.scope = (item as? FileNode).flatMap { PathScope.of($0.url.path, root: root?.url.path) }
         return row
     }
 

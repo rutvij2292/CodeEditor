@@ -89,8 +89,13 @@ final class TreeCellView: NSTableCellView {
 final class TreeRowView: NSTableRowView {
     var level = 0
     var isHovered = false { didSet { if isHovered != oldValue { needsDisplay = true } } }
+    var scope: PathScope? { didSet { if scope != oldValue { needsDisplay = true } } }
 
     override func drawBackground(in dirtyRect: NSRect) {
+        if let scope, !isSelected {
+            scope.tint.setFill()
+            NSBezierPath(roundedRect: pillRect, xRadius: 6, yRadius: 6).fill()
+        }
         if isHovered, !isSelected {
             TreeStyle.hover.setFill()
             NSBezierPath(roundedRect: pillRect, xRadius: 6, yRadius: 6).fill()

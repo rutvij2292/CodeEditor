@@ -55,6 +55,17 @@ private enum GitColors {
 
 // MARK: views
 
+/// Row background tinted by PathScope (tests green, generated/build yellow); selection draws over it as usual.
+private final class GitRowView: NSTableRowView {
+    var scope: PathScope? { didSet { if scope != oldValue { needsDisplay = true } } }
+    override func drawBackground(in dirtyRect: NSRect) {
+        super.drawBackground(in: dirtyRect)
+        guard let scope, !isSelected else { return }
+        scope.tint.setFill()
+        bounds.fill()
+    }
+}
+
 private final class GitOutline: NSOutlineView {
     var onSpace: (() -> Void)?
     var onReturn: (() -> Void)?
@@ -878,6 +889,13 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         (item as? GitGroup)?.rows[index] ?? groups[index]
     }
     func outlineView(_ o: NSOutlineView, isItemExpandable item: Any) -> Bool { item is GitGroup }
+
+    func outlineView(_ o: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
+        let id = NSUserInterfaceItemIdentifier("gitRow")
+        let v = o.makeView(withIdentifier: id, owner: nil) as? GitRowView ?? { let r = GitRowView(); r.identifier = id; return r }()
+        v.scope = (item as? GitRow).flatMap { PathScope.of($0.change.path) }
+        return v
+    }
 
     func outlineView(_ o: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         let id = NSUserInterfaceItemIdentifier("cell")
