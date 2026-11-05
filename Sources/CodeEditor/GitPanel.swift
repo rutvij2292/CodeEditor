@@ -332,6 +332,11 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private let pushButton = NSButton()
     private let rollbackButton = NSButton()
     private let stashButton = NSButton()
+    enum SidebarTab { case commit, stash }
+    private(set) var sidebarTab = SidebarTab.commit
+    private let tabControl = NSSegmentedControl(labels: ["Commit", "Stash"], trackingMode: .selectOne, target: nil, action: nil)
+    private let stashHost = NSView()
+    private var sidebarBody: NSView?
     private let refreshButton = NSButton()
     private let expandAllButton = NSButton()
     private let collapseAllButton = NSButton()
@@ -693,7 +698,15 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
         let separator = NSBox()
         separator.boxType = .separator
-        let stack = NSStackView(views: [toolbar, separator, banner, opBanner])
+        tabControl.controlSize = .small
+        tabControl.selectedSegment = 0
+        tabControl.target = self
+        tabControl.action = #selector(tabChanged)
+        let tabRow = NSStackView(views: [tabControl])
+        tabRow.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 0, right: 8)
+        tabRow.setHuggingPriority(.required, for: .vertical)
+        tabRow.setContentCompressionResistancePriority(.required, for: .vertical)
+        let stack = NSStackView(views: layout == .sidebar ? [tabRow, toolbar, separator, banner, opBanner] : [toolbar, separator, banner, opBanner])
         stack.orientation = .vertical
         stack.spacing = 0
         stack.alignment = .leading
@@ -733,7 +746,16 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             opBanner.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
         if layout == .sidebar {
+            sidebarBody = body
+            stashHost.isHidden = true
+            stashHost.translatesAutoresizingMaskIntoConstraints = false
+            panel.addSubview(stashHost)
             NSLayoutConstraint.activate([
+                tabRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+                stashHost.topAnchor.constraint(equalTo: stack.bottomAnchor),
+                stashHost.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+                stashHost.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+                stashHost.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
                 body.topAnchor.constraint(equalTo: stack.bottomAnchor),
                 body.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
                 body.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
@@ -776,6 +798,36 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         outline.scrollRowToVisible(outline.row(forItem: row))
         onShowDiff?()
     }
+
+    @objc private func tabChanged() { showTab(tabControl.selectedSegment == 1 ? .stash : .commit) }
+
+    /// Sidebar layout: switches between the Commit tab (tree + message) and the inline Stash tab.
+    func showTab(_ t: SidebarTab) {
+        guard layout == .sidebar else { return }
+        sidebarTab = t
+        tabControl.selectedSegment = t == .stash ? 1 : 0
+        sidebarBody?.isHidden = t == .stash
+        stashHost.isHidden = t == .commit
+        if t == .stash { rebuildStashTab() }
+    }
+
+    /// Replaces the Stash tab's content with the current stash list.
+    private func rebuildStashTab() {
+        stashHost.subviews.forEach { $0.removeFromSuperview() }
+        let v = makeStashView(inline: true)
+        v.translatesAutoresizingMaskIntoConstraints = false
+        stashHost.addSubview(v)
+        NSLayoutConstraint.activate([
+            v.topAnchor.constraint(equalTo: stashHost.topAnchor),
+            v.leadingAnchor.constraint(equalTo: stashHost.leadingAnchor),
+            v.trailingAnchor.constraint(equalTo: stashHost.trailingAnchor),
+        ])
+    }
+
+    var stashTabContainsStashList: Bool { !stashHost.isHidden && stashHost.subviews.contains { $0 is GitStashView } }
+    var commitTabVisible: Bool { sidebarBody?.isHidden == false }
+    var groupCount: Int { groups.count }
+    var expandedGroupCount: Int { groups.filter { outline.isItemExpanded($0) }.count }
 
     @objc func refreshTapped() { reload() }
     @objc func expandAllTapped() { for g in groups { outline.expandItem(g) } }
@@ -831,6 +883,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
                         self.merging = r.merging
                         self.currentOp = r.op
                         self.stashes = r.stashes
+                        if self.sidebarTab == .stash, self.layout == .sidebar { self.rebuildStashTab() }
                         self.apply(changes: r.changes)
                         self.updateOpBanner()
                         self.updateCapNote(hidden: r.hiddenUntracked)
@@ -1137,8 +1190,8 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     // MARK: stash
 
-    func makeStashView() -> GitStashView {
-        let v = GitStashView()
+    func makeStashView(inline: Bool = false) -> GitStashView {
+        let v = GitStashView(inline: inline)
         v.onStash = { [weak self] in self?.stashPopover?.close(); self?.stashChanges() }
         v.onApply = { [weak self] s in self?.stashPopover?.close(); self?.perform({ try $0.stashApply(index: s.index) }, resets: true) }
         v.onPop = { [weak self] s in self?.stashPopover?.close(); self?.perform({ try $0.stashPop(index: s.index) }, resets: true) }

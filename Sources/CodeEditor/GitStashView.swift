@@ -9,6 +9,16 @@ final class GitStashView: NSView {
     private let stack = NSStackView()
     private static let width: CGFloat = 400
 
+    /// Inline (Commit panel's Stash tab): fills its host instead of keeping the popover's fixed width.
+    private var inline = false
+    private var fixedWidth: NSLayoutConstraint?
+
+    convenience init(inline: Bool) {
+        self.init(frame: .zero)
+        self.inline = inline
+        if inline { fixedWidth?.isActive = false }
+    }
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         stack.orientation = .vertical
@@ -20,8 +30,9 @@ final class GitStashView: NSView {
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: topAnchor), stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            widthAnchor.constraint(equalToConstant: Self.width),
         ])
+        fixedWidth = widthAnchor.constraint(equalToConstant: Self.width)
+        fixedWidth?.isActive = true
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -71,10 +82,12 @@ final class GitStashView: NSView {
             row.alignment = .centerY
             row.translatesAutoresizingMaskIntoConstraints = false
             stack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalToConstant: Self.width - 24).isActive = true
+            row.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24).isActive = true
         }
-        layoutSubtreeIfNeeded()
-        setFrameSize(NSSize(width: Self.width, height: stack.fittingSize.height))
+        if !inline {
+            layoutSubtreeIfNeeded()
+            setFrameSize(NSSize(width: Self.width, height: stack.fittingSize.height))
+        }
     }
 
     @objc private func stashTapped() { onStash?() }

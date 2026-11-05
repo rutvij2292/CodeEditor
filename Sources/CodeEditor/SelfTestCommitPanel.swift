@@ -35,6 +35,7 @@ enum SelfTestCommitPanel {
         layoutChecks(repo: repo)
         swapChecks(w: w, repo: repo)
         diffTabChecks(w: w, repo: repo)
+        tabChecks(repo: repo)
     }
 
     private static func layoutChecks(repo: URL) {
@@ -88,5 +89,20 @@ enum SelfTestCommitPanel {
         check("commit panel: hiding the panel leaves the diff tab open", entries().count == 1)
         _ = w.close(id)
         check("commit panel: the diff tab closes like a viewer tab", entries().isEmpty)
+    }
+
+    private static func tabChecks(repo: URL) {
+        let gp = GitPanelController(root: repo, layout: .sidebar) { _ in }
+        gp.reloadNowForTests()
+        check("commit panel: starts on the Commit tab", gp.sidebarTab == .commit && gp.commitTabVisible && !gp.stashTabContainsStashList)
+        gp.showTab(.stash)
+        check("commit panel: the Stash tab replaces the tree and message box with the stash list", !gp.commitTabVisible && gp.stashTabContainsStashList)
+        gp.showTab(.commit)
+        check("commit panel: back to the Commit tab", gp.commitTabVisible && !gp.stashTabContainsStashList)
+        check("commit panel: groups start expanded", gp.groupCount > 0 && gp.expandedGroupCount == gp.groupCount)
+        gp.collapseAllTapped()
+        check("commit panel: Collapse All collapses every group", gp.expandedGroupCount == 0)
+        gp.expandAllTapped()
+        check("commit panel: Expand All expands every group", gp.expandedGroupCount == gp.groupCount)
     }
 }
