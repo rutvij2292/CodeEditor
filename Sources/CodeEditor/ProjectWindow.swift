@@ -32,6 +32,9 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     var changeReviewGutter: ChangeReviewGutter?
     /// Right/bottom dock state of the terminal (see TerminalDocking.swift).
     let termDock = TerminalDockState()
+    /// Left slot host: the file tree, or the Commit panel swapped in by Cmd-K.
+    let sidebarContainer = NSView()
+    lazy var commitSidebar = CommitSidebar(project: self, container: sidebarContainer, treeView: tree.panel)
     var problemsObserver: NSObjectProtocol?
     var projectFiles: [String] { index?.files ?? [] }
     private(set) var symbols: SymbolIndex?
@@ -107,7 +110,13 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         tree.onSearchEverywhere = { [weak self] q in self?.showGoToFile(initialQuery: q) }
         tree.onChange = { [weak self] change in self?.handleFileChange(change) }
 
-        let sidebarVC = NSViewController(); sidebarVC.view = tree.panel
+        let sidebarVC = NSViewController(); sidebarVC.view = sidebarContainer
+        tree.panel.translatesAutoresizingMaskIntoConstraints = false
+        sidebarContainer.addSubview(tree.panel)
+        NSLayoutConstraint.activate([
+            tree.panel.leadingAnchor.constraint(equalTo: sidebarContainer.leadingAnchor), tree.panel.trailingAnchor.constraint(equalTo: sidebarContainer.trailingAnchor),
+            tree.panel.topAnchor.constraint(equalTo: sidebarContainer.topAnchor), tree.panel.bottomAnchor.constraint(equalTo: sidebarContainer.bottomAnchor),
+        ])
         let contentVC = NSViewController()
         let host = NSView()
         tabs.translatesAutoresizingMaskIntoConstraints = false

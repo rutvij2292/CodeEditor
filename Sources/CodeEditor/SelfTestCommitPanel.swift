@@ -33,6 +33,7 @@ enum SelfTestCommitPanel {
         let repo = makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
         layoutChecks(repo: repo)
+        swapChecks(w: w, repo: repo)
     }
 
     private static func layoutChecks(repo: URL) {
@@ -45,5 +46,25 @@ enum SelfTestCommitPanel {
         check("commit panel: log layout has no commit message box", !logViews.contains { $0 is NSTextView && ($0 as! NSTextView).isEditable })
         side.reloadNowForTests()
         check("commit panel: hasDiff sees a modified and an untracked file", side.hasDiff(for: "a.txt") && side.hasDiff(for: "b.txt") && !side.hasDiff(for: "zzz.txt"))
+    }
+
+    private static func swapChecks(w: ProjectWindow, repo: URL) {
+        let side = w.commitSidebar
+        side.show(repo: repo)
+        check("commit panel: Cmd-K swaps the panel in place of the file tree", side.isShowing && w.tree.panel.isHidden && side.panel?.view.isHidden == false)
+        check("commit panel: the sidebar is expanded while it shows", !w.termDock.sidebarItem.isCollapsed)
+        side.hide(restoreFocus: false)
+        check("commit panel: hiding swaps the file tree back", !side.isShowing && !w.tree.panel.isHidden && side.panel?.view.isHidden == true)
+
+        w.termDock.sidebarItem.isCollapsed = true
+        side.show(repo: repo)
+        check("commit panel: a collapsed sidebar expands for the panel", !w.termDock.sidebarItem.isCollapsed)
+        side.hide(restoreFocus: false)
+        check("commit panel: and collapses again when the panel hides", w.termDock.sidebarItem.isCollapsed)
+        w.termDock.sidebarItem.isCollapsed = false
+
+        side.show(repo: repo); side.show(repo: repo)
+        check("commit panel: showing twice keeps one panel in the container", side.container.subviews.filter { $0 === side.panel?.view }.count == 1)
+        side.hide(restoreFocus: false)
     }
 }
