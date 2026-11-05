@@ -769,6 +769,14 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     /// Whether the tree currently lists `path` as changed; the host closes its diff tab when this turns false.
     func hasDiff(for path: String) -> Bool { changes.contains { $0.path == path } }
 
+    /// Selects the row for `path` (preferring Changes over Staged) and asks the host to show its diff, as a click would.
+    func select(path: String) {
+        guard let row = groups.flatMap(\.rows).first(where: { $0.change.path == path }) else { return }
+        outline.selectRowIndexes([outline.row(forItem: row)], byExtendingSelection: false)
+        outline.scrollRowToVisible(outline.row(forItem: row))
+        onShowDiff?()
+    }
+
     @objc func refreshTapped() { reload() }
     @objc func expandAllTapped() { for g in groups { outline.expandItem(g) } }
     @objc func collapseAllTapped() { for g in groups { outline.collapseItem(g) } }

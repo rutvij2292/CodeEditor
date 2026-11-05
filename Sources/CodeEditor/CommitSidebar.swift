@@ -14,6 +14,8 @@ final class CommitSidebar {
     private var wasCollapsed = false
     private weak var previousResponder: NSResponder?
     private var repoRoot: URL?
+    /// File whose diff the preview tab shows (repo-relative); nil when there is no preview tab.
+    private var previewPath: String?
 
     init(project: ProjectWindow, container: NSView, treeView: NSView) {
         self.project = project
@@ -71,6 +73,31 @@ final class CommitSidebar {
         if restoreFocus { project.focusEditor() }
     }
 
+    /// Opens (or re-titles and selects) the single diff preview tab for the file selected in the panel's tree.
+    func showDiffTab() {
+        guard let project, let panel, let path = panel.selectedPath else { return }
+        previewPath = path
+        project.showAuxiliaryTab(id: Self.diffTabID, title: Self.title(for: path), view: panel.diffHost)
+    }
+
+    func closeDiffTab() {
+        previewPath = nil
+        project?.closeAuxiliaryTab(Self.diffTabID)
+    }
+
+    private static func title(for path: String) -> String { (path as NSString).lastPathComponent + " (diff)" }
+
+    /// After a refresh: close the preview when its file no longer has changes; follow the selection if the refresh moved it.
+    private func syncDiffTab() {
+        guard let path = previewPath, let panel, let project else { return }
+        if !project.tabs.entries.contains(where: { $0.id == Self.diffTabID }) { previewPath = nil; return }   // closed by the user
+        if !panel.hasDiff(for: path) { closeDiffTab(); return }
+        if let selected = panel.selectedPath, selected != path {
+            previewPath = selected
+            project.tabs.setTitle(Self.title(for: selected), for: Self.diffTabID)
+        }
+    }
+
     private func build(repo: URL, project: ProjectWindow) {
         panel?.view.removeFromSuperview()
         repoRoot = repo
@@ -81,8 +108,10 @@ final class CommitSidebar {
         p.onShowBranches = { [weak project] in if let w = project?.window { project?.branches.showPopup(over: w) } }
         p.onCommitted = { [weak self] andPush in if !andPush { self?.hide() } }
         p.onPushed = { [weak self] in if self?.panel?.committedAndPushing == true { self?.hide() } }
-        p.onSummaryChange = { [weak project] summary in
+        p.onShowDiff = { [weak self] in self?.showDiffTab() }
+        p.onSummaryChange = { [weak self, weak project] summary in
             project?.setToolPanelBadge(summary.changes > 0 ? "\(summary.changes)" : nil, for: "git")
+            self?.syncDiffTab()
         }
         p.view.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(p.view)

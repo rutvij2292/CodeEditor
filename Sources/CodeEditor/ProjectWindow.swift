@@ -736,6 +736,19 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         forget(id)
     }
 
+    /// A non-file tab owned by a tool (the Commit panel's diff preview). Closes like a viewer tab; never saved or persisted in sessions.
+    func showAuxiliaryTab(id: String, title: String, view: NSView) {
+        if placeholders[id] != nil, tabs.entries.contains(where: { $0.id == id }) { tabs.setTitle(title, for: id); tabs.select(id); return }
+        placeholders[id] = .unreadable
+        tabs.add(id: id, title: title, view: view)
+    }
+
+    func closeAuxiliaryTab(_ id: String) {
+        guard placeholders[id] != nil else { return }
+        placeholders[id] = nil
+        forget(id)
+    }
+
     private func forget(_ id: String) {
         tabs.remove(id)
         mru.removeAll { $0 == id }

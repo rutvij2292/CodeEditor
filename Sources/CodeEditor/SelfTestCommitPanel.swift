@@ -34,6 +34,7 @@ enum SelfTestCommitPanel {
         defer { try? FileManager.default.removeItem(at: repo) }
         layoutChecks(repo: repo)
         swapChecks(w: w, repo: repo)
+        diffTabChecks(w: w, repo: repo)
     }
 
     private static func layoutChecks(repo: URL) {
@@ -66,5 +67,26 @@ enum SelfTestCommitPanel {
         side.show(repo: repo); side.show(repo: repo)
         check("commit panel: showing twice keeps one panel in the container", side.container.subviews.filter { $0 === side.panel?.view }.count == 1)
         side.hide(restoreFocus: false)
+    }
+
+    private static func diffTabChecks(w: ProjectWindow, repo: URL) {
+        let side = w.commitSidebar, id = CommitSidebar.diffTabID
+        func entries() -> [TabHost.Entry] { w.tabs.entries.filter { $0.id == id } }
+        side.show(repo: repo)
+        guard let panel = side.panel else { check("commit panel: panel exists for the diff tab checks", false); return }
+        panel.reloadNowForTests()
+        panel.select(path: "a.txt")
+        check("commit panel: clicking a file opens one diff preview tab titled after it", entries().count == 1 && entries().first?.title == "a.txt (diff)")
+        panel.select(path: "b.txt")
+        check("commit panel: a second file reuses the same preview tab", entries().count == 1 && entries().first?.title == "b.txt (diff)")
+        check("commit panel: the diff tab is not persisted in sessions", !w.captureSession().tabs.contains { $0.path == id })
+        try? FileManager.default.removeItem(at: repo.appendingPathComponent("b.txt"))
+        panel.reloadNowForTests()
+        check("commit panel: the preview closes when its file has no changes left", entries().isEmpty)
+        panel.select(path: "a.txt")
+        side.hide(restoreFocus: false)
+        check("commit panel: hiding the panel leaves the diff tab open", entries().count == 1)
+        _ = w.close(id)
+        check("commit panel: the diff tab closes like a viewer tab", entries().isEmpty)
     }
 }
