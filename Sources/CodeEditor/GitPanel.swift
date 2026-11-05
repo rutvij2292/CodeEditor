@@ -278,7 +278,7 @@ private final class GitPanelView: NSView {
             DispatchQueue.main.async { [self] in
                 if sidebar {
                     right.layoutSubtreeIfNeeded()
-                    right.setPosition(right.bounds.height - 190, ofDividerAt: 0)
+                    right.setPosition(right.bounds.height - 220, ofDividerAt: 0)
                     return
                 }
                 split.layoutSubtreeIfNeeded()
@@ -368,7 +368,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private let diffMessage = NSTextField(labelWithString: "")
     private let messageView = GitCommitTextView()
     private let commitButton = NSButton(title: "Commit", target: nil, action: nil)
-    private let draftButton = NSButton(title: "Draft with Claude", target: nil, action: nil)
+    private let draftButton = NSButton(title: "", target: nil, action: nil)
     private var draftProcess: Process?
     private var drafting = false
     private let commitPushButton = NSButton(title: "Commit and Push", target: nil, action: nil)
@@ -646,15 +646,24 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
         draftButton.bezelStyle = .rounded
         draftButton.controlSize = .regular
         draftButton.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Draft with Claude")
-        draftButton.imagePosition = .imageLeading
+        draftButton.imagePosition = .imageOnly
         draftButton.target = self
         draftButton.action = #selector(draftTapped)
-        draftButton.toolTip = "Write the commit message from the selected changes with your Claude Code login (no API key). Click again to cancel."
+        draftButton.toolTip = "Draft with Claude: write the commit message from the selected changes with your Claude Code login (no API key). Click again to cancel."
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let actions = NSStackView(views: [amendCheck, countLabel, spacer, draftButton, commitPushButton, commitButton])
-        actions.orientation = .horizontal
-        actions.spacing = 8
+        // Two rows so nothing is clipped in the narrow left panel: Amend / count / Draft on top, Commit buttons below.
+        let spacer2 = NSView()
+        spacer2.setContentHuggingPriority(.init(1), for: .horizontal)
+        let topRow = NSStackView(views: [amendCheck, countLabel, spacer, draftButton])
+        let buttonRow = NSStackView(views: [spacer2, commitPushButton, commitButton])
+        for r in [topRow, buttonRow] { r.orientation = .horizontal; r.spacing = 8 }
+        let actions = NSStackView(views: [topRow, buttonRow])
+        actions.orientation = .vertical
+        actions.alignment = .leading
+        actions.spacing = 6
+        topRow.widthAnchor.constraint(equalTo: actions.widthAnchor).isActive = true
+        buttonRow.widthAnchor.constraint(equalTo: actions.widthAnchor).isActive = true
         actions.translatesAutoresizingMaskIntoConstraints = false
         let commitBox = NSView()
         commitBox.addSubview(messageScroll)
@@ -668,7 +677,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             actions.trailingAnchor.constraint(equalTo: commitBox.trailingAnchor, constant: -8),
             actions.bottomAnchor.constraint(equalTo: commitBox.bottomAnchor, constant: -8),
             messageScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
-            commitBox.heightAnchor.constraint(greaterThanOrEqualToConstant: 110),
+            commitBox.heightAnchor.constraint(greaterThanOrEqualToConstant: 140),
         ])
 
         // layout
@@ -1772,7 +1781,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
 
     private func setDrafting(_ on: Bool) {
         drafting = on
-        draftButton.title = on ? "Cancel" : "Draft with Claude"
+        draftButton.toolTip = on ? "Cancel drafting" : "Draft with Claude: write the commit message from the selected changes with your Claude Code login (no API key). Click again to cancel."
         draftButton.image = NSImage(systemSymbolName: on ? "stop.circle" : "sparkles", accessibilityDescription: nil)
         messageView.isEditable = !on
         if on { showNote("Claude is drafting the message…") }
