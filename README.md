@@ -10,15 +10,15 @@ A light, native macOS code editor (Swift/AppKit) built as a low-memory alternati
 - **Fast and small:** native Swift, TextKit, tree-sitter syntax highlighting (PHP, Blade, JS/TS/TSX, HTML, CSS/SCSS, JSON, YAML, Markdown, Bash, XML), bracket pair colouring, code folding, breadcrumbs, inline Git blame, JetBrains Mono, IntelliJ Light / Darcula themes. A power-saver mode follows Low Power Mode, battery and thermal state.
 - **Code intelligence:** a built-in fast tier for Laravel and PHP (routes, views, config, env, translations, Eloquent columns and relations, class imports), plus language servers started lazily per project: Intelephense, TypeScript, HTML/CSS/JSON, Tailwind and Volar. ⌃Space completion, hover, go to definition, rename, diagnostics.
 - **Laravel navigation:** ⌘-click on views, routes, config, env, lang keys, components and Livewire.
-- **PhpStorm-style Git:** ⌘K Commit window with line-by-line picking, a branch widget and popup in the title bar, side-by-side diff and 3-way merge, log, stash, push.
+- **PhpStorm-style Git:** ⌘K Commit panel (swaps into the left sidebar; diffs open in the editor area) with line-by-line picking, a branch widget and popup in the title bar, side-by-side diff and 3-way merge, log, stash, push.
 - **Search:** fuzzy file, class and symbol search (⌘⇧O, ⌘O, ⇧⇧), find in files, docked terminal (⌥F12).
 - **Viewers:** live Markdown preview with synced scrolling, JSON and YAML tree viewers with diagnostics, and Compose / GitHub Actions / `package.json` suggestions.
 - **Claude Code integration:** Kode is an IDE for the `claude` CLI. It shares your selection, opens Claude's proposed edits in a diff you accept or reject, and shows diagnostics. See [docs/claude-code-bridge.md](docs/claude-code-bridge.md).
 
 ## Screenshots
 
-### Commit window (⌘K)
-![Commit window](docs/images/commit-window.png)
+### Commit panel (⌘K)
+![Commit panel (screenshot predates the left-panel layout)](docs/images/commit-window.png)
 
 ### Branches, the PhpStorm way
 ![Branch popup](docs/images/branch-popup.png)

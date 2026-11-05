@@ -9,7 +9,7 @@ enum BlameLineInfo: Equatable {
 /// Per-tab blame state: loads blame off-main, maps buffer lines through unsaved edits and drives the inline annotation
 /// and the annotate column.
 final class BlameController {
-    /// "Open in Git Log": the integrator wires this to the Commit window's Log tab (hash, file shown in the editor).
+    /// "Open in Git Log": the integrator wires this to the Git tool window's Log tab (hash, file shown in the editor).
     static var onShowCommit: ((String, URL) -> Void)?
 
     struct Loaded {

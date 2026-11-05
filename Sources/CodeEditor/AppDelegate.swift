@@ -79,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         Self.terminalHandlers.sendSelectionText = { $0.sendSelectionText() }
         Self.terminalHandlers.focus = { $0.toggleTerminalFocus() }
         Self.terminalHandlers.maximize = { $0.maximizeTerminal() }
-        BlameController.onShowCommit = { [weak self] _, url in self?.active?.showCommitWindow { $0.showHistory(for: url) } }
+        BlameController.onShowCommit = { [weak self] _, url in self?.active?.showHistory(for: url) }
         LanguageServers.openProjectRoot = { [weak self] url in
             let path = url.standardizedFileURL.path
             return self?.windows.compactMap(\.root)
@@ -298,10 +298,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func showFileHistory(_ sender: Any?) { active?.showFileHistory() }
     @objc func showBranches(_ sender: Any?) { active?.showBranchPopup() }
     @objc func newBranch(_ sender: Any?) { active?.branches.newBranch(from: nil) }
-    @objc func commitChanges(_ sender: Any?) { active?.showCommitWindow() }
-    @objc func pushChanges(_ sender: Any?) { active?.showCommitWindow { $0.push() } }
-    @objc func updateProject(_ sender: Any?) { active?.showCommitWindow { $0.pull() } }
-    @objc func fetchChanges(_ sender: Any?) { active?.showCommitWindow { $0.fetch() } }
+    @objc func commitChanges(_ sender: Any?) { active?.toggleCommitPanel() }
+    @objc func pushChanges(_ sender: Any?) { active?.showCommitPanel { $0.push() } }
+    @objc func updateProject(_ sender: Any?) { active?.showCommitPanel { $0.pull() } }
+    @objc func fetchChanges(_ sender: Any?) { active?.showCommitPanel { $0.fetch() } }
     @objc func selectOpenedFile(_ sender: Any?) { active?.selectOpenedFile() }
     @objc func collapseAll(_ sender: Any?) { active?.collapseTree() }
     @objc func showFindTool(_ sender: Any?) { active?.toggleTool("find") }

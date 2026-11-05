@@ -170,7 +170,8 @@ final class ToolStripView: NSView {
         case .bottom(let id): return p.bottom.isVisible && p.bottom.selectedID == id
         case .terminal: return p.isTerminalVisible
         case .claude: return p.isTerminalVisible && (p.terminalPanel?.isClaudeTabActive ?? false)
-        case .commit, .pullRequests, .routes: return false
+        case .commit: return p.commitSidebar.isShowing
+        case .pullRequests, .routes: return false
         }
     }
 
@@ -220,7 +221,7 @@ final class ToolStripView: NSView {
         switch e.kind {
         case .sidebar:
             if wasActive { p.toggleSidebar() } else { p.toggleProjectTree() }
-        case .commit: p.showCommitWindow()
+        case .commit: p.toggleCommitPanel()
         case .pullRequests: (NSApp.delegate as? AppDelegate)?.resolvePullRequest(nil)
         case .routes: p.showRouteBrowser()
         case .terminal: p.toggleTerminal()

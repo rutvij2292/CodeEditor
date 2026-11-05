@@ -1198,7 +1198,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
 
     // MARK: Git panel
 
-    /// Cmd-K: show the Commit/Changes panel (never hides it) and put the caret in the commit message.
+    /// Shows the bottom Git tool window (Log) without hiding it.
     func showCommit() {
         guard root != nil else { return }
         bottom.show("git") { [weak self] in
@@ -1221,7 +1221,13 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
 
     /// Git › Show History for File: opens the Git panel's Log tab filtered by the current file (`git log --follow`).
     func showFileHistory() {
-        guard let url = current?.url, root != nil else { return }
+        guard let url = current?.url else { return }
+        showHistory(for: url)
+    }
+
+    /// Opens the Git tool window's Log filtered by `url` (`git log --follow`).
+    func showHistory(for url: URL) {
+        guard root != nil else { return }
         ensureGitPanel()
         showToolPanel("git") { [weak self] in self?.git?.showHistory(for: url) }
     }

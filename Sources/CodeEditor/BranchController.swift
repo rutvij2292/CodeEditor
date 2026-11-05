@@ -148,9 +148,9 @@ final class BranchController: NSObject {
             let files = ((try? r.status()) ?? []).filter(\.isConflict).map(\.path)
             let name = op.rawValue
             BranchNotice.show(title: "\(name.capitalized) stopped with conflicts",
-                              message: files.isEmpty ? msg : "Resolve the conflicts in these files, then continue from the Commit window (⌘K).",
+                              message: files.isEmpty ? msg : "Resolve the conflicts in these files, then continue from the Commit panel (⌘K).",
                               files: files,
-                              buttons: [.init(title: "Open Commit Window", style: .primary) { [weak self] in self?.project?.showCommitWindow() },
+                              buttons: [.init(title: "Open Commit Panel", style: .primary) { [weak self] in self?.project?.showCommitPanel() },
                                         .init(title: "Abort \(name.capitalized)", style: .destructive) { [weak self] in
                                             self?.work("Aborting…", { try $0.abortOperation(op) }, ok: { _ in self?.flash("\(name.capitalized) aborted") })
                                         }],
@@ -218,9 +218,9 @@ final class BranchController: NSObject {
             case .conflicts(let files):
                 self.lastMessage = "conflicts"
                 BranchNotice.show(title: "Checked out “\(target)” with conflicts",
-                                  message: "Re-applying your local changes conflicted in these files. Resolve them in the Commit window (⌘K); your original changes are kept in the stash until then.",
+                                  message: "Re-applying your local changes conflicted in these files. Resolve them in the Commit panel (⌘K); your original changes are kept in the stash until then.",
                                   files: files,
-                                  buttons: [.init(title: "Open Commit Window", style: .primary) { [weak self] in self?.project?.showCommitWindow() },
+                                  buttons: [.init(title: "Open Commit Panel", style: .primary) { [weak self] in self?.project?.showCommitPanel() },
                                             .init(title: "Close") {}],
                                   over: self.noticeAnchor)
             }

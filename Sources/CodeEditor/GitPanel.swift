@@ -301,11 +301,11 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     /// Sidebar layout: the user picked a file in the tree; the host should show `diffHost` in the editor area.
     var onShowDiff: (() -> Void)?
     var onStatusChange: (() -> Void)?
-    /// Set by the Commit window: opens the shared branch popup instead of the plain menu below.
+    /// Set by the Commit panel: opens the shared branch popup instead of the plain menu below.
     var onShowBranches: (() -> Void)?
     /// Esc / Shift-Esc pressed while focus is inside the panel and no popover, sheet or search text wants it.
     var onRequestClose: (() -> Void)?
-    /// Escape in the project window's Git tool: focus the editor and keep the panel (the Commit window closes instead).
+    /// Escape in the project window's Git tool: focus the editor and keep the panel (the Commit panel hides instead).
     var onFocusEditor: (() -> Void)?
     /// Fired after a successful commit (`andPush`: the push is about to start).
     var onCommitted: ((_ andPush: Bool) -> Void)?

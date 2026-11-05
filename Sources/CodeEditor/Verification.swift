@@ -39,7 +39,7 @@ enum Verification {
             case "bookmarks": w.bookmarks?.toggle(path: w.projectFiles.first.map { w.root!.appendingPathComponent($0).path } ?? "", line: 1); w.showBookmarks()
             case "terminal": w.showTerminal()
             case _ where BranchVerification.isBranchPicker(picker): BranchVerification.start(picker!, w)
-            case "commit": w.showCommitWindow()
+            case "commit": w.commitSidebar.show(repo: w.gitRoot ?? w.root!)
             case "pr-prompt", "pr-resolver", "pr-success": PRSnapshots.render(picker!, to: shot)
             case "problems": w.showToolPanel("problems")
             case "http": decorateHttp(w)
@@ -85,8 +85,8 @@ enum Verification {
                 v.setFrameSize(NSSize(width: 820, height: 480))
                 render(v, to: shot.replacingOccurrences(of: ".png", with: "_push.png"))
             }
-            if picker == "commit", let w = app.active, let c = CommitWindowController.existing(for: w), let v = c.window.contentView {
-                render(v, to: shot.replacingOccurrences(of: ".png", with: "_commit.png"))
+            if picker == "commit", let w = app.active, w.commitSidebar.isShowing {
+                render(w.sidebarContainer, to: shot.replacingOccurrences(of: ".png", with: "_commit.png"))
             }
             if let p = picker, BranchVerification.isBranchPicker(p), let w = app.active { BranchVerification.finish(p, shot: shot, w) }
             if picker == "composer" { ClaudeComposer.snapshot(to: shot.replacingOccurrences(of: ".png", with: "_popup.png")) }
