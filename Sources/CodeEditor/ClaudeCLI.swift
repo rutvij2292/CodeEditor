@@ -24,9 +24,11 @@ enum ClaudeCLI {
     }
 
     /// Arguments for a text-only, tool-less, hook-free answer. `--setting-sources project` skips the user's hooks and plugins,
-    /// which roughly halves start-up latency.
-    static func arguments(model: String?, system: String?) -> [String] {
-        var args = ["-p", "--no-session-persistence", "--tools", "", "--setting-sources", "project", "--output-format", "text"]
+    /// which roughly halves start-up latency. `--strict-mcp-config` (with no `--mcp-config`) loads no MCP servers at all: the
+    /// user's servers otherwise inject their tool schemas into every call (measured ~30k prompt tokens for a one-word reply,
+    /// 652 with the flag) even though `--tools ""` means none could be used.
+    static func arguments(model: String?, system: String?, format: String = "text") -> [String] {
+        var args = ["-p", "--no-session-persistence", "--tools", "", "--setting-sources", "project", "--strict-mcp-config", "--output-format", format]
         if let model { args += ["--model", model] }
         if let system { args += ["--append-system-prompt", system] }
         return args

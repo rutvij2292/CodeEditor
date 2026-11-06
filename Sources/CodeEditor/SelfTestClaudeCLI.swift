@@ -37,6 +37,7 @@ enum SelfTestClaudeCLI {
             if case .success(let t) = result { text = t }
             check("claude cli: success returns stdout", text.contains("fix: handle empty cart"))
             let args = (try? String(contentsOf: argsFile)) ?? ""
+            check("claude cli: loads no MCP servers (their schemas cost ~30k prompt tokens per call)", args.contains("--strict-mcp-config") && !args.contains("--mcp-config"))
             check("claude cli: runs print mode with no tools and no session files",
                   args.contains("-p") && args.contains("--no-session-persistence") && args.contains("--tools") && args.contains("--model"))
             check("claude cli: prompt arrives on stdin", ((try? String(contentsOf: stdinFile)) ?? "") == "hello prompt")
@@ -58,6 +59,39 @@ enum SelfTestClaudeCLI {
                 unsetenv("CE_CLAUDE_BIN")
                 unsetenv("ANTHROPIC_API_KEY")
                 try? fm.removeItem(at: dir)
+                liveTokenBudget(then: done)
+            }
+        }
+    }
+
+    /// Opt-in (`CE_CLAUDE_TOKENS=1`, spends a few cents of real usage): runs the real CLI with `ClaudeCLI.arguments` and fails if a
+    /// one-word prompt costs more than `budget` prompt tokens. Guards against user MCP servers / plugins bloating every one-shot call.
+    static let budget = 5000
+    private static func liveTokenBudget(then done: @escaping () -> Void) {
+        guard ProcessInfo.processInfo.environment["CE_CLAUDE_TOKENS"] == "1", let exe = ClaudeCLI.executable() else { done(); return }
+        DispatchQueue.global().async {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: exe)
+            p.arguments = ClaudeCLI.arguments(model: "haiku", system: nil, format: "json")
+            p.currentDirectoryURL = ClaudeCLI.neutralDirectory
+            var env = ProcessInfo.processInfo.environment
+            env["ANTHROPIC_API_KEY"] = nil
+            p.environment = env
+            let i = Pipe(), o = Pipe()
+            p.standardInput = i; p.standardOutput = o; p.standardError = FileHandle.nullDevice
+            var total = -1
+            if (try? p.run()) != nil {
+                i.fileHandleForWriting.write(Data("Reply with the single word OK.".utf8))
+                try? i.fileHandleForWriting.close()
+                let data = o.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                if let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let u = j["usage"] as? [String: Any] {
+                    total = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"].reduce(0) { $0 + ((u[$1] as? Int) ?? 0) }
+                }
+            }
+            DispatchQueue.main.async {
+                print("claude cli live: one-word prompt used \(total) prompt tokens (budget \(budget))")
+                check("claude cli live: one-shot prompt stays under \(budget) tokens", total >= 0 && total < budget)
                 done()
             }
         }
