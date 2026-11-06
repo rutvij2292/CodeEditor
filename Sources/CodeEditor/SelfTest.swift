@@ -140,6 +140,7 @@ enum SelfTest {
                     SelfTestLiveTemplates.run(w: w)
                     SelfTestStructure.run(w: w)
                     SelfTestToolStrip.run(w: w)
+                    SelfTestProblems.run(w: w)
                     SelfTestCommitPanel.run(w: w)
                     SelfTestGitMenu.run(w: w)
                     SelfTestKeymap.run(app: app)
