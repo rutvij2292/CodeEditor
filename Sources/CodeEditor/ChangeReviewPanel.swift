@@ -164,9 +164,22 @@ final class ChangeReviewPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
         store.acceptNote = n
     }
 
-    @objc private func noteReturned() { if let r = selectedRow { accept(r) } else { acceptAllPending() } }
+    @objc private func noteReturned() { noteFieldReturned() }
+
+    /// Return in the note field accepts the selected file / session with the note; with nothing selected it does nothing
+    /// (never a bulk accept from a text field).
+    func noteFieldReturned() {
+        if let r = selectedRow { accept(r) }
+        else { summary.stringValue = "Select a file or session first, then press Return to accept it with your note" }
+    }
+
+    private func nothingPending() { summary.stringValue = "Nothing pending to accept — your note is kept" }
 
     func accept(_ row: Row) {
+        switch row {
+        case .session(let s): guard !s.pending.isEmpty else { return nothingPending() }
+        case .file(_, let e): guard e.state == .pending else { return nothingPending() }
+        }
         takeNote()
         switch row {
         case .session(let s): store.acceptAll(in: s)
@@ -191,7 +204,11 @@ final class ChangeReviewPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
     @objc private func acceptSelected() { if let r = selectedRow { accept(r) } }
     @objc private func rejectSelected() { if let r = selectedRow { reject(r) } }
     @objc private func acceptAllTapped() { acceptAllPending() }
-    func acceptAllPending() { takeNote(); store.acceptAll() }
+    func acceptAllPending() {
+        guard store.pendingFileCount > 0 else { return nothingPending() }
+        takeNote()
+        store.acceptAll()
+    }
     @objc private func rejectAllTapped() {
         guard store.pendingFileCount > 0, confirm("Reject all \(store.pendingFileCount) pending file(s) changed by agents?") else { return }
         report(store.rejectAll())

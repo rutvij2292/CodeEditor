@@ -790,6 +790,9 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     /// Asks about every unsaved tab; false means the user cancelled.
     func confirmCloseAll() -> Bool { editors.values.allSatisfy { confirmDiscard($0) } }
 
+    /// Saves a Ledger note that is still being typed (closing a window or quitting does not end text editing).
+    func commitPendingNotes() { changeLedgerPanel?.commitNote() }
+
     func windowShouldClose(_ sender: NSWindow) -> Bool { confirmCloseAll() }
 
     func windowWillClose(_ notification: Notification) {
@@ -971,6 +974,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     }
 
     func saveSession() {
+        commitPendingNotes()          // window close and app quit both end here
         guard SessionStore.enabled, !restoring, let root else { return }
         SessionStore.save(captureSession(), for: root)
     }

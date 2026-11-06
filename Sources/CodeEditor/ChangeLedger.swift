@@ -54,6 +54,8 @@ final class ChangeLedger {
     let root: URL
     var onChange: (() -> Void)?
     private var loaded: [LedgerSession]?
+    /// The file exists but could not be read: never write over it until a reload succeeds.
+    private var loadFailed = false
 
     init(root: URL) { self.root = root }
 
@@ -73,16 +75,22 @@ final class ChangeLedger {
 
     private func reload(notify: Bool) {
         loaded = []
-        if let data = try? Data(contentsOf: fileURL) {
-            let dec = JSONDecoder()
-            dec.dateDecodingStrategy = .iso8601
-            if let p = try? dec.decode(Payload.self, from: data), p.version == Self.version {
-                loaded = p.sessions
+        loadFailed = false
+        let fm = FileManager.default
+        if fm.fileExists(atPath: fileURL.path) {
+            if let data = try? Data(contentsOf: fileURL) {
+                let dec = JSONDecoder()
+                dec.dateDecodingStrategy = .iso8601
+                if let p = try? dec.decode(Payload.self, from: data), p.version == Self.version {
+                    loaded = p.sessions
+                } else {
+                    // Unreadable bytes or from a newer Kode: keep them aside (never over an earlier .bak), start empty.
+                    var bak = fileURL.path + ".bak", n = 0
+                    while fm.fileExists(atPath: bak) { n += 1; bak = fileURL.path + ".bak-\(n)" }
+                    try? fm.moveItem(atPath: fileURL.path, toPath: bak)
+                }
             } else {
-                // Unreadable or from a newer Kode: keep the bytes aside, start empty.
-                let bak = URL(fileURLWithPath: fileURL.path + ".bak")
-                try? FileManager.default.removeItem(at: bak)
-                try? FileManager.default.moveItem(at: fileURL, to: bak)
+                loadFailed = true      // exists but cannot be read (permissions, I/O): leave it alone
             }
         }
         if notify { onChange?() }
@@ -137,12 +145,17 @@ final class ChangeLedger {
         return try? enc.encode(Payload(version: Self.version, sessions: sessions))
     }
 
-    /// Writes the file after trimming (oldest sessions first, then the last files of a lone session) to fit `maxBytes`.
+    /// Writes the file after trimming it to `maxBytes`: first the symbol rows of the oldest sessions (they are regenerable), then
+    /// whole old sessions, and only then the last files of a lone session. Notes outlive everything else. Refuses to write while the
+    /// existing file could not be read.
     @discardableResult
     func save() -> Bool {
+        guard !loadFailed else { return false }
         var data = encoded()
         while let d = data, d.count > Self.maxBytes {
-            if sessions.count > 1 { sessions.removeLast() }
+            if let i = sessions.lastIndex(where: { $0.files.contains { !$0.symbols.isEmpty } }) {
+                sessions[i].files = sessions[i].files.map { var f = $0; f.symbols = []; return f }
+            } else if sessions.count > 1 { sessions.removeLast() }
             else if var s = sessions.first, s.files.count > 1 { s.files.removeLast(); sessions = [s] }
             else { break }
             data = encoded()

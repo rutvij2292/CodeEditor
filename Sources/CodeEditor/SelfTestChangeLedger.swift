@@ -82,6 +82,37 @@ enum SelfTestChangeLedger {
         try? Data().write(to: empty.fileURL)
         check("empty file loads empty without crashing", empty.sessions.isEmpty)
 
+        // Over the byte cap: bulky symbol rows go before anyone's notes
+        ChangeLedger.maxBytes = 30_000
+        let big = ChangeLedger(root: URL(fileURLWithPath: "/tmp/proj-big"))
+        for i in 0..<5 { big.record(id: "old\(i)", title: "old \(i)", started: t0, files: [file("f\(i).php", [sym("m\(i)")])], note: "my note \(i)", now: t0.addingTimeInterval(Double(i))) }
+        big.record(id: "huge", title: "huge refactor", started: t0, files: (0..<200).map { f in file("app/F\(f).php", (0..<40).map { sym("method\($0)", line: $0) }) }, note: "", now: t0.addingTimeInterval(100))
+        let bigSize = (try? FileManager.default.attributesOfItem(atPath: big.fileURL.path)[.size] as? Int) ?? 0
+        let reloaded = ChangeLedger(root: URL(fileURLWithPath: "/tmp/proj-big"))
+        check("over the cap, a huge session never wipes older sessions or their notes",
+              bigSize > 0 && bigSize <= 30_000 && reloaded.sessions.first?.id == "huge" && (0..<5).allSatisfy { i in reloaded.sessions.first { $0.id == "old\(i)" }?.note == "my note \(i)" })
+        ChangeLedger.maxBytes = 256 * 1024
+
+        // A read failure must not let the next write replace a good ledger
+        let ro = ChangeLedger(root: URL(fileURLWithPath: "/tmp/proj-ro"))
+        ro.record(id: "keep", title: "keep me", started: t0, files: [], note: "precious", now: t0)
+        let original = try? Data(contentsOf: ro.fileURL)
+        chmod(ro.fileURL.path, 0o000)
+        let blind = ChangeLedger(root: URL(fileURLWithPath: "/tmp/proj-ro"))
+        blind.record(id: "new", title: "new", started: t0, files: [], note: "", now: t0.addingTimeInterval(5))
+        chmod(ro.fileURL.path, 0o644)
+        check("unreadable ledger file is never overwritten", (try? Data(contentsOf: ro.fileURL)) == original)
+        blind.reload()
+        check("after a successful reload the ledger works again", blind.sessions.contains { $0.id == "keep" } && !blind.sessions.contains { $0.id == "new" })
+
+        let twice = ChangeLedger(root: URL(fileURLWithPath: "/tmp/proj-twice"))
+        try? "{bad one".write(to: twice.fileURL, atomically: true, encoding: .utf8)
+        _ = twice.sessions
+        try? "{bad two".write(to: twice.fileURL, atomically: true, encoding: .utf8)
+        twice.reload()
+        check("a second corrupt file does not destroy the first .bak",
+              (try? String(contentsOfFile: twice.fileURL.path + ".bak", encoding: .utf8)) == "{bad one" && (try? String(contentsOfFile: twice.fileURL.path + ".bak-1", encoding: .utf8)) == "{bad two")
+
         a.remove(id: "n4")
         check("remove persists", ChangeLedger(root: root).sessions.contains { $0.id == "n4" } == false)
     }
@@ -130,6 +161,8 @@ enum SelfTestChangeLedger {
         let lf = LedgerRecorder.file(af, rows: [row("total", 4), row("label", 9)])
         check("recorder: symbols from rows", lf.rel == "a.php" && lf.symbols.map { $0.name } == ["total", "label"] && lf.symbols[0].line == 4 && lf.symbols[0].kind == "method"
               && lf.symbols[0].added == 3 && lf.symbols[0].removed == 1 && lf.added == 6 && lf.removed == 2)
+        let plain = LedgerRecorder.file(af, rows: [ChangedSymbols.Row(path: "/p/a.txt", rel: "a.txt", name: "(file level)", kind: nil, line: 1, added: 2, removed: 0)])
+        check("recorder: the '(file level)' pseudo row is not a symbol", plain.symbols.isEmpty && plain.added == 6)
         let none = LedgerRecorder.file(ChangeReviewStore.AcceptedFile(path: "/p/b.png", rel: "b.png", baseline: nil, added: 5, removed: 0), rows: [])
         check("recorder: no baseline keeps file-level counts, no symbols", none.symbols.isEmpty && none.added == 5)
         let s1 = ChangeReviewStore.Session(id: 1, title: "t", started: Date(timeIntervalSince1970: 100))
@@ -141,7 +174,8 @@ enum SelfTestChangeLedger {
         let new = "<?php\nclass Invoice\n{\n    public function total(): int\n    {\n        $x = 2;\n        return $x;\n    }\n\n    public function label(): string\n    {\n        return 'a';\n    }\n}\n"
         let php = write(new, "Invoice.php")
         let saved = ChangeLedger.directory
-        defer { ChangeLedger.directory = saved }
+        let originalLedger = w.changeLedger
+        defer { ChangeLedger.directory = saved; w.changeLedger = originalLedger }
         ChangeLedger.directory = dir.appendingPathComponent("ledger")
         let ledger = ChangeLedger(root: dir)
         w.changeLedger = ledger
@@ -218,6 +252,35 @@ enum SelfTestChangeLedger {
         cr.reload()
         cr.acceptAllPending()
         check("claude changes: accepting with an empty field records an empty note", seen == "")
+
+        // Notes are never silently dropped
+        let session = store.sessions[0]
+        let done = session.entries[0]
+        check("claude changes: precondition, entry already accepted", done.state == .accepted)
+        seen = "untouched"
+        cr.noteField.stringValue = "keep me"
+        cr.accept(.file(session, done))
+        check("claude changes: accepting something already accepted keeps the note and fires nothing", cr.noteField.stringValue == "keep me" && seen == "untouched")
+        cr.acceptAllPending()
+        check("claude changes: Accept All with nothing pending keeps the note", cr.noteField.stringValue == "keep me" && seen == "untouched")
+        let h = dir.appendingPathComponent("h.txt")
+        try? "hh\n".write(to: h, atomically: true, encoding: .utf8)
+        store.recordBridgeEdit(url: h, original: "h\n", new: "hh\n")
+        cr.reload()
+        cr.noteFieldReturned()
+        check("claude changes: Return in the note field with nothing selected accepts nothing", store.pendingFileCount == 1 && cr.noteField.stringValue == "keep me")
+
+        // A typed ledger note survives closing the window
+        if let wp = w.changeLedgerPanel {
+            wp.ledger.record(id: "close-test", title: "close test", started: Date(), files: [], note: "before", now: Date())
+            wp.reload()
+            _ = wp.selectSession(id: "close-test")
+            wp.setNoteText("typed just before quitting")
+            w.commitPendingNotes()
+            check("ledger panel: a typed note is saved by commitPendingNotes (window close / quit)",
+                  ChangeLedger(root: w.root!).sessions.first { $0.id == "close-test" }?.note == "typed just before quitting")
+            wp.ledger.remove(id: "close-test")
+        } else { check("ledger panel: window has a ledger panel", false) }
 
         check("wiring: the Ledger tool window is registered", w.hasToolPanel("ledger") && w.changeLedgerPanel != nil)
 

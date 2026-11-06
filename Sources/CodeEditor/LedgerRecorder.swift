@@ -5,10 +5,10 @@ import SwiftTreeSitter
 enum LedgerRecorder {
     static func sessionID(_ s: ChangeReviewStore.Session) -> String { "\(s.id)-\(Int(s.started.timeIntervalSince1970))" }
 
-    /// File row with the changed symbols; without rows (no baseline, too large, unsupported language) only the file-level counts.
+    /// File row with the changed symbols (rows without a symbol kind, i.e. "(file level)" / "(new file)", are not symbols); without symbols only the file-level counts.
     static func file(_ f: ChangeReviewStore.AcceptedFile, rows: [ChangedSymbols.Row]) -> LedgerFile {
         LedgerFile(rel: f.rel, added: f.added, removed: f.removed,
-                   symbols: rows.map { LedgerSymbol(name: $0.name, kind: $0.kind?.rawValue, line: $0.line, added: $0.added, removed: $0.removed, isNewFile: $0.isNewFile) })
+                   symbols: rows.filter { $0.kind != nil }.map { LedgerSymbol(name: $0.name, kind: $0.kind?.rawValue, line: $0.line, added: $0.added, removed: $0.removed, isNewFile: $0.isNewFile) })
     }
 }
 

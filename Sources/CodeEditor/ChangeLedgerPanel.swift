@@ -7,7 +7,7 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
 
     let view = LedgerRootView()
     var openFile: ((URL, Int) -> Void)?
-    private let ledger: ChangeLedger
+    let ledger: ChangeLedger
     private let root: URL
     private let search = NSSearchField()
     private let sessionsTable = SpeedTableView()
@@ -63,6 +63,10 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
         noteHint.font = .systemFont(ofSize: 10.5)
         noteHint.textColor = .secondaryLabelColor
         noteView.isRichText = false
+        noteView.allowsUndo = true
+        noteView.isAutomaticQuoteSubstitutionEnabled = false
+        noteView.isAutomaticDashSubstitutionEnabled = false
+        noteView.isAutomaticTextReplacementEnabled = false
         noteView.font = .systemFont(ofSize: 12)
         noteView.isVerticallyResizable = true
         noteView.autoresizingMask = [.width]
@@ -96,7 +100,7 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
         shown = Self.filter(ledger.sessions, query: search.stringValue)
         sessionsTable.reloadData()
         if let id = selectedID, let i = shown.firstIndex(where: { $0.id == id }) { sessionsTable.selectRowIndexes([i], byExtendingSelection: false) }
-        else { selectedID = nil }
+        else { selectedID = nil; sessionsTable.deselectAll(nil) }
         updateRight()
         let none = ledger.sessions.isEmpty
         emptyLabel.stringValue = none ? "No reviewed agent changes yet. Accept changes in Claude Changes to start your ledger." : (shown.isEmpty ? "No ledger entries match." : "")
@@ -140,7 +144,7 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
         }
         for v in [titleLabel, noteHint, noteScroll, symbolsScroll] as [NSView] { v.isHidden = false }
         titleLabel.stringValue = "\(s.title)  ·  \(Self.date.string(from: s.started))"
-        noteView.string = s.note
+        if noteView.string != s.note { noteView.string = s.note }      // do not move the caret when nothing changed
         noteDirty = false
         symbolRows = s.files.flatMap { f in [SymbolRow.file(f)] + f.symbols.map { SymbolRow.symbol(f, $0) } }
         symbolsTable.reloadData()

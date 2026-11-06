@@ -105,7 +105,7 @@ final class BottomPanel: NSObject {
 
     /// Shortcut shown in tab tooltips.
     static let shortcutHints: [String: String] = ["find": "⌘4", "problems": "⌘5", "tests": "⌘6", "structure": "⌘7", "todo": "⌘8",
-                                                  "git": "⌘9", "bookmarks": "⌥⌘2", "http": "⌥⌘8", "terminal": "⌥F12"]
+                                                  "git": "⌘9", "bookmarks": "⌥⌘2", "http": "⌥⌘8", "ledger": "⌥⌘4", "terminal": "⌥F12"]
 
     private let defaults: UserDefaults
     private var persistenceKey: String?
