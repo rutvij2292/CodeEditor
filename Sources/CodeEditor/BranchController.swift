@@ -115,7 +115,7 @@ final class BranchController: NSObject {
     }
 
     /// Runs `job` off the main thread with a busy label in the widget, then `ok` / `fail` on main.
-    private func work<T>(_ label: String, _ job: @escaping (GitRepo) throws -> T, ok: @escaping (T) -> Void, fail: ((Error) -> Void)? = nil) {
+    func work<T>(_ label: String, _ job: @escaping (GitRepo) throws -> T, ok: @escaping (T) -> Void, fail: ((Error) -> Void)? = nil) {
         guard let repo else { return }
         busy += 1
         widget.setBusy(label)
@@ -135,7 +135,7 @@ final class BranchController: NSObject {
         }
     }
 
-    private func flash(_ text: String) {
+    func flash(_ text: String) {
         lastMessage = text
         project?.statusBar.flash(text, seconds: 6)
     }

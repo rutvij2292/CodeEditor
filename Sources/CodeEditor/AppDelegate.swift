@@ -302,6 +302,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func pushChanges(_ sender: Any?) { active?.showCommitPanel { $0.push() } }
     @objc func updateProject(_ sender: Any?) { active?.showCommitPanel { $0.pull() } }
     @objc func fetchChanges(_ sender: Any?) { active?.showCommitPanel { $0.fetch() } }
+    @objc func gitMerge(_ sender: Any?) { active?.branches.menuMerge() }
+    @objc func gitRebase(_ sender: Any?) { active?.branches.menuRebase() }
+    @objc func gitContinue(_ sender: Any?) { active?.branches.menuContinueOrAbort(abort: false) }
+    @objc func gitAbort(_ sender: Any?) { active?.branches.menuContinueOrAbort(abort: true) }
+    @objc func gitReset(_ sender: Any?) { active?.branches.menuReset() }
+    @objc func gitTag(_ sender: Any?) { active?.branches.menuTag() }
+    @objc func gitRemotes(_ sender: Any?) { active?.branches.menuRemotes() }
+    @objc func gitAddWorktree(_ sender: Any?) { active?.branches.menuAddWorktree() }
+    @objc func gitOpenWorktree(_ sender: Any?) { active?.branches.menuOpenWorktree() }
+    @objc func gitCreatePatch(_ sender: Any?) { active?.branches.menuCreatePatch() }
+    @objc func gitApplyPatch(_ sender: Any?) { active?.branches.menuApplyPatch() }
+    @objc func gitClone(_ sender: Any?) { GitClone.present(over: active?.window, app: self) }
+    @objc func gitStash(_ sender: Any?) { active?.showCommitPanel { $0.showTab(.stash) } }
     @objc func selectOpenedFile(_ sender: Any?) { active?.selectOpenedFile() }
     @objc func collapseAll(_ sender: Any?) { active?.collapseTree() }
     @objc func showFindTool(_ sender: Any?) { active?.toggleTool("find") }

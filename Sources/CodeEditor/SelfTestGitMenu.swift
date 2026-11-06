@@ -12,6 +12,19 @@ enum SelfTestGitMenu {
         defer { [dir, extra, cloneDest, patchFile].forEach { try? FileManager.default.removeItem(at: $0) } }
         let repo = GitRepo(root: dir)
 
+        // the menu: every Git item is wired to a live action, and the PhpStorm set is present
+        let gitMenu = NSApp.mainMenu?.items.first { $0.title == "Git" }?.submenu
+        let titles = Set(gitMenu?.items.map(\.title) ?? [])
+        let wanted = ["Merge…", "Rebase…", "Reset HEAD…", "Tag…", "Manage Remotes…", "Clone…", "Add Worktree…", "Open Worktree…",
+                      "Create Patch from Local Changes…", "Apply Patch…", "Stash Changes…", "Show Git Log"]
+        check("git menu: has every planned item", wanted.allSatisfy(titles.contains))
+        check("git menu: every item is wired to a responding target",
+              gitMenu?.items.filter { !$0.isSeparatorItem }.allSatisfy { $0.action != nil && ($0.target?.responds(to: $0.action) ?? false) } == true)
+        let keys = (gitMenu?.items ?? []).filter { !$0.keyEquivalent.isEmpty }.map { "\($0.keyEquivalent)\($0.keyEquivalentModifierMask.rawValue)" }
+        check("git menu: no duplicate shortcuts", keys.count == Set(keys).count)
+        // the busy-form helper's validation path is pure; the ref-name rule it relies on rejects bad tags
+        check("git menu: tag names are validated", GitRefName.validate("bad name") != nil && GitRefName.validate("v1.0") == nil)
+
         // tags
         try? repo.createTag("v1", at: nil, message: nil)
         try? repo.createTag("v2", at: "HEAD", message: "release two")

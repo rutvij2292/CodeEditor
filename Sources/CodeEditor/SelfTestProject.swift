@@ -523,7 +523,7 @@ extension SelfTest {
         check("Toggle Soft Wrap and tool windows exist", ["Toggle Soft Wrap", "Find Tool Window", "Problems Tool Window", "HTTP Client Tool Window",
                                                           "Include vendor in Go to File", "Reopen Windows on Launch"].allSatisfy { shortcut($0) != "missing" })
         check("Git panel is Cmd-9, Bookmarks Cmd-2, Tests Cmd-4, Focus Editor shows Esc, Go to Line Cmd-L",
-              shortcut("Show Git Panel") == "⌘9" && shortcut("Editor") == "⌘2" && shortcut("Claude Code") == "⌘3" && shortcut("Find Tool Window") == "⌘4" && shortcut("Tests Tool Window") == "⌘6"
+              shortcut("Show Git Log") == "⌘9" && shortcut("Editor") == "⌘2" && shortcut("Claude Code") == "⌘3" && shortcut("Find Tool Window") == "⌘4" && shortcut("Tests Tool Window") == "⌘6"
               && shortcut("Focus Editor") == "⌘⎋" && shortcut("Go to Line…") == "⌘L")
         check("explorer: 28 pt rows, own chevrons (no system triangle), panel hosts the tree",
               w.tree.outline.rowHeight == 28 && w.tree.outline.frameOfOutlineCell(atRow: 0) == .zero && w.tree.scrollView.superview === w.tree.panel)
