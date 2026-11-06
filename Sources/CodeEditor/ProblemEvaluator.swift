@@ -48,8 +48,7 @@ enum ProblemEvaluator {
     /// Extracts the first JSON array in `raw` (fences and prose around it are fine). Entries with unknown ids, bad enum values or
     /// missing fields are dropped.
     static func parse(_ raw: String, ids: [Int]) -> [Int: ProblemAnswer] {
-        guard let a = raw.firstIndex(of: "["), let b = raw.lastIndex(of: "]"), a < b,
-              let arr = (try? JSONSerialization.jsonObject(with: Data(raw[a...b].utf8))) as? [[String: Any]] else { return [:] }
+        guard let arr = jsonArray(in: raw) else { return [:] }
         var out: [Int: ProblemAnswer] = [:]
         for o in arr {
             guard let id = o["id"] as? Int, ids.contains(id),
@@ -60,6 +59,27 @@ enum ProblemEvaluator {
             out[id] = ProblemAnswer(verdict: v, difficulty: d, explanation: e, oldText: new == nil ? nil : old, newText: old == nil ? nil : new)
         }
         return out
+    }
+
+    /// The first bracket-balanced `[...]` in `text` that parses as an array of objects (skips prose like "see [1]").
+    static func jsonArray(in text: String) -> [[String: Any]]? {
+        let u = Array(text.utf8)
+        var start = 0
+        while start < u.count {
+            guard let a = u[start...].firstIndex(of: UInt8(ascii: "[")) else { return nil }
+            var depth = 0, inString = false, escaped = false, end: Int?
+            for i in a..<u.count {
+                let c = u[i]
+                if inString {
+                    if escaped { escaped = false } else if c == UInt8(ascii: "\\") { escaped = true } else if c == UInt8(ascii: "\"") { inString = false }
+                } else if c == UInt8(ascii: "\"") { inString = true }
+                else if c == UInt8(ascii: "[") { depth += 1 }
+                else if c == UInt8(ascii: "]") { depth -= 1; if depth == 0 { end = i; break } }
+            }
+            if let end, let arr = (try? JSONSerialization.jsonObject(with: Data(u[a...end]))) as? [[String: Any]] { return arr }
+            start = a + 1
+        }
+        return nil
     }
 
     /// Identifies a problem across edits: its message plus the trimmed text of its line.
