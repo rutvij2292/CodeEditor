@@ -2,6 +2,11 @@
 
 Version is `0.<commit count>` (see build-app.sh); the installer is `dist/Kode-<version>.dmg`.
 
+## 0.330
+- **Change Ledger**: when you accept agent changes in Claude Changes (a file, a session or all), Kode records them in a per-project ledger: the agent session title, date, files, and the changed methods / classes with +/- lines. Open it from the new **Ledger** tool window (⌥⌘4, tool strip, View menu).
+- **Your own notes**: the Claude Changes panel has a note field ("What does this change do, in your words?"). Whatever you type is saved with the next accept (empty is fine, Accept is never blocked). In the Ledger you can edit any note later, search across title, note, files and methods, and double-click a method to jump to it.
+- Stored as one small JSON file per project in Application Support (capped at 300 sessions / 256 KB, notes 2,000 characters); no AI calls, no background work. Per-hunk accepts from the editor gutter are not recorded yet.
+
 ## 0.324
 - Problems panel redone PhpStorm-style: **File** (current file, with its count), **Project Errors** and **Inspections** tabs, problems grouped by category then inspection, and a detail pane with the message, code snippet and Claude's answer.
 - **Project Errors** scans the whole project only when you press Scan (cancellable, one file at a time, low priority, capped at 5,000 problems). It skips `vendor`, `node_modules`, `public/build`, `.git`, `storage`, `bootstrap/cache` and other build output. Results are dropped when you leave the tab.
