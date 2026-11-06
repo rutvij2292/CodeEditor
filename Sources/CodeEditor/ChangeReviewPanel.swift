@@ -9,6 +9,8 @@ final class ChangeReviewPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
     private let table = SpeedTableView()
     private let speed = SpeedSearch()
     private let summary = NSTextField(labelWithString: "")
+    /// The user's own note for what they accept next (goes to the ledger); cleared by every accept.
+    let noteField = NSTextField()
     private let store: ChangeReviewStore
     private(set) var rows: [Row] = []
     var openFile: ((URL) -> Void)?
@@ -68,12 +70,19 @@ final class ChangeReviewPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
                                       button("Clear", #selector(clearTapped))])
         bar.spacing = 6
         bar.edgeInsets = NSEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
-        for v in [bar, scroll] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(v) }
+        noteField.placeholderString = "What does this change do, in your words? (optional, saved to the Ledger when you accept)"
+        noteField.font = .systemFont(ofSize: 12)
+        noteField.controlSize = .small
+        noteField.target = self
+        noteField.action = #selector(noteReturned)
+        for v in [bar, scroll, noteField] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(v) }
         NSLayoutConstraint.activate([
             bar.topAnchor.constraint(equalTo: view.topAnchor), bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             bar.trailingAnchor.constraint(equalTo: view.trailingAnchor), bar.heightAnchor.constraint(equalToConstant: 30),
             scroll.topAnchor.constraint(equalTo: bar.bottomAnchor), scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor), scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor), scroll.bottomAnchor.constraint(equalTo: noteField.topAnchor, constant: -4),
+            noteField.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10), noteField.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
+            noteField.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -6), noteField.heightAnchor.constraint(equalToConstant: 22),
         ])
         reload()
     }
@@ -148,7 +157,17 @@ final class ChangeReviewPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
         openFile?(e.url)
     }
 
+    /// Hands the typed note to the store for the next accept and clears the field.
+    private func takeNote() {
+        let n = noteField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        noteField.stringValue = ""
+        store.acceptNote = n
+    }
+
+    @objc private func noteReturned() { if let r = selectedRow { accept(r) } else { acceptAllPending() } }
+
     func accept(_ row: Row) {
+        takeNote()
         switch row {
         case .session(let s): store.acceptAll(in: s)
         case .file(_, let e): store.acceptFile(e)
@@ -171,7 +190,8 @@ final class ChangeReviewPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
 
     @objc private func acceptSelected() { if let r = selectedRow { accept(r) } }
     @objc private func rejectSelected() { if let r = selectedRow { reject(r) } }
-    @objc private func acceptAllTapped() { store.acceptAll() }
+    @objc private func acceptAllTapped() { acceptAllPending() }
+    func acceptAllPending() { takeNote(); store.acceptAll() }
     @objc private func rejectAllTapped() {
         guard store.pendingFileCount > 0, confirm("Reject all \(store.pendingFileCount) pending file(s) changed by agents?") else { return }
         report(store.rejectAll())
@@ -227,6 +247,13 @@ extension ProjectWindow {
         let ledger = ChangeLedger(root: root)
         changeLedger = ledger
         store.onAccept = { [weak self] session, files, note in self?.recordLedger(session: session, files: files, note: note) }
+        let ledgerPanel = ChangeLedgerPanel(ledger: ledger, root: root)
+        ledgerPanel.openFile = { [weak self] url, line in
+            self?.open(url, line: line)
+            self?.current?.textView.goToLine(line, column: 1)
+        }
+        changeLedgerPanel = ledgerPanel
+        registerToolPanel(id: "ledger", title: "Ledger", view: ledgerPanel.view)
         changeReview = store
         changeReviewPanel = panel
         registerToolPanel(id: "claude-changes", title: "Claude Changes", view: panel.view)

@@ -22,6 +22,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     var claudeBridge: ClaudeBridge?
     var changeReview: ChangeReviewStore?
     var changeLedger: ChangeLedger?
+    var changeLedgerPanel: ChangeLedgerPanel?
     var bookmarks: BookmarkStore?
     var bookmarkPanelRebuild: (() -> Void)?
     var todoRescan: (() -> Void)?
@@ -178,6 +179,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         bottom.onWillShow = { [weak self] id in
             if id == "git" { self?.ensureGitPanel() }
             if id == "problems" { self?.problemsPanel?.reload() }
+            if id == "ledger" { self?.changeLedgerPanel?.reload() }
             if id == "todo" { self?.todoRescan?() }
             if id == "structure" { DispatchQueue.main.async { self?.refreshStructure() } }
         }

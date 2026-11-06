@@ -20,6 +20,7 @@ enum SelfTestChangeLedger {
     static func run(w: ProjectWindow) {
         runStore()
         runAccept(w: w)
+        runPanel(w: w)
     }
 
     static func runStore() {
@@ -157,5 +158,72 @@ enum SelfTestChangeLedger {
         check("end to end: accepted change lands in the ledger with title, note and the changed method",
               finished && rec?.title == "Add totals" && rec?.note == "totals now go through $x"
               && rec?.files.first?.symbols.contains { $0.name.contains("total") } == true && rec?.files.first?.rel == "Invoice.php")
+    }
+
+    static func runPanel(w: ProjectWindow) {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let saved = ChangeLedger.directory
+        defer { ChangeLedger.directory = saved }
+        ChangeLedger.directory = dir
+        let root = URL(fileURLWithPath: "/tmp/proj-panel")
+        let ledger = ChangeLedger(root: root)
+        let t1 = Date(timeIntervalSince1970: 1_800_000_000), t2 = t1.addingTimeInterval(86_400)
+        ledger.record(id: "old", title: "Add soft delete to invoices", started: t1, files: [file("app/Invoice.php", [sym("delete", line: 12), sym("restore", line: 30)]), file("app/Other.php")],
+                      note: "invoices are never really deleted now", now: t1)
+        ledger.record(id: "new", title: "Refactor mailer", started: t2, files: [file("app/Mailer.php", [sym("send", line: 5, add: 4, rem: 2)])], note: "", now: t2)
+        let panel = ChangeLedgerPanel(ledger: ledger, root: root)
+        panel.reload()
+        let rows = panel.rowDescriptions
+        check("panel: newest session first, with file and symbol counts",
+              rows.count == 2 && rows[0].contains("Refactor mailer") && rows[0].contains("1 file · 1 symbol") && rows[1].contains("Add soft delete to invoices") && rows[1].contains("2 files · 2 symbols"))
+        check("panel: note preview in the row", rows[1].contains("invoices are never really deleted now") && !rows[0].contains(" — "))
+        check("panel: selecting a session shows its note and symbols", panel.selectSession(id: "old") && panel.noteText == "invoices are never really deleted now"
+              && panel.symbolRowDescriptions == ["FILE app/Invoice.php +2 −0", "  delete :12 +1 −0", "  restore :30 +1 −0", "FILE app/Other.php +0 −0"])
+        panel.setNoteText("soft delete: rows get deleted_at, never removed")
+        panel.commitNote()
+        check("panel: edited note is saved to the ledger file", ChangeLedger(root: root).sessions.first { $0.id == "old" }?.note == "soft delete: rows get deleted_at, never removed")
+        check("panel: editing a note does not reorder the sessions", panel.rowDescriptions[0].contains("Refactor mailer"))
+        let all = [ledger.sessions[0], ledger.sessions[1]]
+        check("search: matches title, note, file and symbol names, case-insensitively",
+              ChangeLedgerPanel.filter(all, query: "MAILER").map { $0.id } == ["new"] && ChangeLedgerPanel.filter(all, query: "deleted_at").map { $0.id } == ["old"]
+              && ChangeLedgerPanel.filter(all, query: "restore").map { $0.id } == ["old"] && ChangeLedgerPanel.filter(all, query: "Invoice.php").map { $0.id } == ["old"]
+              && ChangeLedgerPanel.filter(all, query: "  ").count == 2 && ChangeLedgerPanel.filter(all, query: "zzz").isEmpty)
+        var opened: (URL, Int)?
+        panel.openFile = { opened = ($0, $1) }
+        _ = panel.selectSession(id: "old")
+        panel.openSymbol(row: 1)
+        check("panel: opening a symbol jumps to its file and line", opened?.0.path == "/tmp/proj-panel/app/Invoice.php" && opened?.1 == 12)
+        panel.openSymbol(row: 0)
+        check("panel: opening a file row opens it at line 1", opened?.1 == 1)
+        let empty = ChangeLedgerPanel(ledger: ChangeLedger(root: URL(fileURLWithPath: "/tmp/proj-none")), root: URL(fileURLWithPath: "/tmp/proj-none"))
+        empty.reload()
+        check("panel: empty ledger explains how to start it", empty.rowDescriptions.isEmpty && empty.emptyText.contains("Accept"))
+
+        // Note field in Claude Changes
+        let store = ChangeReviewStore(root: dir)
+        store.activeAgent = { (4, "Agent four") }
+        var seen: String?
+        store.onAccept = { _, _, note in seen = note }
+        let f = dir.appendingPathComponent("n.txt")
+        try? "new\n".write(to: f, atomically: true, encoding: .utf8)
+        store.recordBridgeEdit(url: f, original: "old\n", new: "new\n")
+        let cr = ChangeReviewPanel(store: store)
+        cr.noteField.stringValue = "  it renames the thing  "
+        cr.accept(cr.rows[1])
+        check("claude changes: the note is attached to the accept and the field clears", seen == "it renames the thing" && cr.noteField.stringValue == "")
+        let g = dir.appendingPathComponent("m.txt")
+        try? "x\n".write(to: g, atomically: true, encoding: .utf8)
+        store.recordBridgeEdit(url: g, original: "y\n", new: "x\n")
+        cr.reload()
+        cr.acceptAllPending()
+        check("claude changes: accepting with an empty field records an empty note", seen == "")
+
+        check("wiring: the Ledger tool window is registered", w.hasToolPanel("ledger") && w.changeLedgerPanel != nil)
+
+        if let prefix = ProcessInfo.processInfo.environment["CE_LEDGER_SNAPSHOT"] {
+            _ = panel.selectSession(id: "old")
+            panel.snapshot(to: prefix + "-ledger.png")
+        }
     }
 }
