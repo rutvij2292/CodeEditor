@@ -4,6 +4,16 @@ enum GitLogAction {
     case copyHash, checkout, createBranch, cherryPick, cherryPickMany([GitCommit]), revert, reset(GitResetMode)
 }
 
+/// Soft rounded selection (no full-width blue bar); text colors stay put because the row never reports "emphasized".
+private final class LogRowView: NSTableRowView {
+    override var isEmphasized: Bool { get { false } set {} }
+    override func drawSelection(in dirtyRect: NSRect) {
+        let r = bounds.insetBy(dx: 4, dy: 1)
+        NSColor.controlAccentColor.withAlphaComponent(0.22).setFill()
+        NSBezierPath(roundedRect: r, xRadius: 5, yRadius: 5).fill()
+    }
+}
+
 private final class LogTable: NSTableView {
     var onEscape: (() -> Void)?
 }
@@ -34,10 +44,17 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private var detailsToken = 0
     private var dateChoice = "All"
     private let historyBar = NSStackView()
+    /// A hidden stack view still reserves its height; this pins it to zero until a file history is shown.
+    private lazy var historyCollapse = historyBar.heightAnchor.constraint(equalToConstant: 0)
     private let historyLabel = NSTextField(labelWithString: "")
     private let commitTable = LogTable()
     private let fileTable = NSTableView()
-    private var diffWindow: CommitDiffWindow?
+    private var diffView: CommitDiffView?
+    /// Display rows of the changed-files tree: folders (with depth and file count) and files (index into `files`).
+    private enum FileRow { case folder(name: String, depth: Int, count: Int); case file(index: Int, depth: Int) }
+    private var fileRows: [FileRow] = []
+    /// The host shows this view in an editor tab (a file's diff never opens a separate window).
+    var onShowFileDiff: ((CommitDiffView) -> Void)?
     private let status = NSTextField(labelWithString: "")
     private let split = NSSplitView()
     private let rightSplit = NSSplitView()
@@ -59,7 +76,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         graphRows = showsGraph ? GitGraphLayout.rows(for: commits) : []
         let col = commitTable.tableColumn(withIdentifier: NSUserInterfaceItemIdentifier("graph"))
         col?.isHidden = !showsGraph
-        if showsGraph, let col { col.width = GitGraphCell.width(forLanes: graphRows.map(\.laneCount).max() ?? 1) }
+        if showsGraph, let col { let w = GitGraphCell.width(forLanes: graphRows.map(\.laneCount).max() ?? 1); col.minWidth = w; col.maxWidth = w; col.width = w }
     }
 
     private static let dateFormat: DateFormatter = {
@@ -83,38 +100,38 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     // MARK: build
 
     private func build() {
-        search.placeholderString = "Search message, author or hash"
+        search.placeholderString = "Search commits"
         search.controlSize = .small
         search.font = .systemFont(ofSize: 12)
         search.delegate = self
+        search.focusRingType = .none
         search.translatesAutoresizingMaskIntoConstraints = false
+        search.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        search.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        branchButton.bezelStyle = .recessed
-        branchButton.controlSize = .small
-        branchButton.font = .systemFont(ofSize: 11, weight: .medium)
-        branchButton.imagePosition = .imageLeading
-        branchButton.image = NSImage(systemSymbolName: "arrow.triangle.branch", accessibilityDescription: nil)
-        branchButton.target = self
-        branchButton.action = #selector(showBranchMenu(_:))
-        branchButton.translatesAutoresizingMaskIntoConstraints = false
-        updateBranchTitle()
-
-        for (b, sel) in [(userButton, #selector(showUserMenu(_:))), (dateButton, #selector(showDateMenu(_:))), (pathButton, #selector(showPathMenu(_:)))] {
-            b.bezelStyle = .recessed
-            b.controlSize = .small
-            b.font = .systemFont(ofSize: 11)
+        for (b, sel) in [(branchButton, #selector(showBranchMenu(_:))), (userButton, #selector(showUserMenu(_:))),
+                         (dateButton, #selector(showDateMenu(_:))), (pathButton, #selector(showPathMenu(_:)))] {
             b.target = self
             b.action = sel
+            b.setContentHuggingPriority(.required, for: .horizontal)
+            b.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
         }
-        filterBar.setViews([userButton, dateButton, pathButton], in: .leading)
-        filterBar.orientation = .horizontal
-        filterBar.spacing = 6
+        updateBranchTitle()
         updateFilterTitles()
+
+        // One slim, borderless toolbar row (PhpStorm style): search, then flat text filters.
+        filterBar.setViews([search, branchButton, userButton, dateButton, pathButton], in: .leading)
+        filterBar.orientation = .horizontal
+        filterBar.spacing = 12
+        filterBar.alignment = .centerY
+        filterBar.edgeInsets = NSEdgeInsets(top: 7, left: 8, bottom: 7, right: 8)
+        search.widthAnchor.constraint(lessThanOrEqualToConstant: 200).isActive = true
+        search.widthAnchor.constraint(greaterThanOrEqualToConstant: 90).isActive = true
 
         details.isEditable = false
         details.drawsBackground = false
-        details.textContainerInset = NSSize(width: 8, height: 6)
-        details.font = .systemFont(ofSize: 12)
+        details.textContainerInset = NSSize(width: 10, height: 8)
+        details.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
 
         historyLabel.font = .systemFont(ofSize: 11, weight: .medium)
         historyLabel.lineBreakMode = .byTruncatingHead
@@ -125,10 +142,11 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         historyBar.setViews([historyLabel, clear], in: .leading)
         historyBar.orientation = .horizontal
         historyBar.spacing = 8
-        historyBar.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
+        historyBar.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 6, right: 8)
         historyBar.isHidden = true
+        historyCollapse.isActive = true
 
-        for (id, title, w) in [("graph", "", 60), ("subject", "Commit", 260), ("author", "Author", 120), ("date", "Date", 130)] {
+        for (id, title, w) in [("graph", "", 60), ("subject", "Commit", 260), ("author", "Author", 110), ("date", "Date", 84)] {
             let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             c.title = title
             c.width = CGFloat(w)
@@ -137,13 +155,15 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             c.resizingMask = id == "subject" ? .autoresizingMask : .userResizingMask
             commitTable.addTableColumn(c)
         }
-        commitTable.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
-        commitTable.rowHeight = 22
-        commitTable.intercellSpacing = NSSize(width: 6, height: 0)
+        commitTable.headerView = nil
+        commitTable.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        commitTable.rowHeight = 24
+        commitTable.intercellSpacing = NSSize(width: 8, height: 0)
         commitTable.allowsMultipleSelection = true
         commitTable.dataSource = self
         commitTable.delegate = self
         commitTable.usesAlternatingRowBackgroundColors = false
+        commitTable.selectionHighlightStyle = .regular
         let menu = NSMenu()
         menu.delegate = self
         commitTable.menu = menu
@@ -151,31 +171,23 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         commitScroll.documentView = commitTable
         commitScroll.hasVerticalScroller = true
         commitScroll.drawsBackground = false
+        commitScroll.scrollerStyle = .overlay
 
         status.font = .systemFont(ofSize: 11)
-        status.lineBreakMode = .byTruncatingTail
 
         let left = NSView()
-        for v in [branchButton, search, filterBar, historyBar, commitScroll, status] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; left.addSubview(v) }
+        for v in [filterBar, historyBar, commitScroll] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; left.addSubview(v) }
         NSLayoutConstraint.activate([
-            search.topAnchor.constraint(equalTo: left.topAnchor, constant: 6),
-            branchButton.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 8),
-            branchButton.centerYAnchor.constraint(equalTo: search.centerYAnchor),
-            branchButton.widthAnchor.constraint(lessThanOrEqualToConstant: 190),
-            search.leadingAnchor.constraint(equalTo: branchButton.trailingAnchor, constant: 8),
-            search.trailingAnchor.constraint(equalTo: left.trailingAnchor, constant: -8),
-            filterBar.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 4),
-            filterBar.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 8),
-            historyBar.topAnchor.constraint(equalTo: filterBar.bottomAnchor, constant: 4),
+            filterBar.topAnchor.constraint(equalTo: left.topAnchor),
+            filterBar.leadingAnchor.constraint(equalTo: left.leadingAnchor),
+            filterBar.trailingAnchor.constraint(lessThanOrEqualTo: left.trailingAnchor),
+            historyBar.topAnchor.constraint(equalTo: filterBar.bottomAnchor),
             historyBar.leadingAnchor.constraint(equalTo: left.leadingAnchor),
             historyBar.trailingAnchor.constraint(equalTo: left.trailingAnchor),
-            commitScroll.topAnchor.constraint(equalTo: historyBar.bottomAnchor, constant: 4),
+            commitScroll.topAnchor.constraint(equalTo: historyBar.bottomAnchor),
             commitScroll.leadingAnchor.constraint(equalTo: left.leadingAnchor),
             commitScroll.trailingAnchor.constraint(equalTo: left.trailingAnchor),
-            commitScroll.bottomAnchor.constraint(equalTo: status.topAnchor, constant: -2),
-            status.leadingAnchor.constraint(equalTo: left.leadingAnchor, constant: 8),
-            status.trailingAnchor.constraint(equalTo: left.trailingAnchor, constant: -8),
-            status.bottomAnchor.constraint(equalTo: left.bottomAnchor, constant: -3),
+            commitScroll.bottomAnchor.constraint(equalTo: left.bottomAnchor),
             left.widthAnchor.constraint(greaterThanOrEqualToConstant: 260),
         ])
 
@@ -183,7 +195,8 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         fileCol.resizingMask = .autoresizingMask
         fileTable.addTableColumn(fileCol)
         fileTable.headerView = nil
-        fileTable.rowHeight = 20
+        fileTable.rowHeight = 22
+        fileTable.intercellSpacing = NSSize(width: 0, height: 0)
         fileTable.dataSource = self
         fileTable.delegate = self
         fileTable.target = self
@@ -192,6 +205,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         fileScroll.documentView = fileTable
         fileScroll.hasVerticalScroller = true
         fileScroll.drawsBackground = false
+        fileScroll.scrollerStyle = .overlay
         fileScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 50).isActive = true
 
         rightSplit.isVertical = false
@@ -200,13 +214,15 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         detailsScroll.documentView = details
         detailsScroll.hasVerticalScroller = true
         detailsScroll.drawsBackground = false
+        detailsScroll.scrollerStyle = .overlay
         detailsScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 60).isActive = true
         details.isVerticallyResizable = true
         details.autoresizingMask = [.width]
-        rightSplit.addArrangedSubview(detailsScroll)
+        // Changed files (a folder tree) on top, the commit message underneath.
         rightSplit.addArrangedSubview(fileScroll)
-        rightSplit.setHoldingPriority(.init(260), forSubviewAt: 0)
-        rightSplit.setHoldingPriority(.init(250), forSubviewAt: 1)
+        rightSplit.addArrangedSubview(detailsScroll)
+        rightSplit.setHoldingPriority(.init(250), forSubviewAt: 0)
+        rightSplit.setHoldingPriority(.init(260), forSubviewAt: 1)
         split.isVertical = true
         split.dividerStyle = .thin
         split.addArrangedSubview(left)
@@ -225,9 +241,9 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         if !positioned, bounds.width > 200, bounds.height > 100 {
             positioned = true
             split.layoutSubtreeIfNeeded()
-            split.setPosition(min(640, bounds.width * 0.55), ofDividerAt: 0)
+            split.setPosition(min(720, bounds.width * 0.58), ofDividerAt: 0)
             rightSplit.layoutSubtreeIfNeeded()
-            rightSplit.setPosition(min(128, rightSplit.bounds.height * 0.28), ofDividerAt: 0)
+            rightSplit.setPosition(rightSplit.bounds.height * 0.60, ofDividerAt: 0)
         }
     }
 
@@ -239,6 +255,8 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         status.textColor = Theme.gutter
         details.textColor = Theme.foreground
         historyLabel.textColor = Theme.foreground
+        updateBranchTitle()
+        updateFilterTitles()
         commitTable.reloadData()
         fileTable.reloadData()
     }
@@ -299,11 +317,21 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     // MARK: filters
 
+    /// Flat, borderless toolbar filter: dim label with a small chevron; accent-colored while it narrows the list.
+    private func flat(_ b: NSButton, _ title: String, active: Bool) {
+        let color = active ? NSColor.controlAccentColor : Theme.gutter
+        b.isBordered = false
+        b.imagePosition = .imageTrailing
+        b.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 8, weight: .semibold))
+        b.contentTintColor = color
+        b.attributedTitle = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: color])
+        b.sizeToFit()
+    }
+
     private func updateFilterTitles() {
-        userButton.title = "User: " + (filter.user ?? "All")
-        dateButton.title = "Date: " + dateChoice
-        pathButton.title = "Path: " + (filter.path.map { ($0 as NSString).lastPathComponent } ?? "All")
-        for b in [userButton, dateButton, pathButton] { b.sizeToFit() }
+        flat(userButton, filter.user.map { "User: \($0)" } ?? "User", active: filter.user != nil)
+        flat(dateButton, dateChoice == "All" ? "Date" : dateChoice, active: dateChoice != "All")
+        flat(pathButton, filter.path.map { "Path: " + ($0 as NSString).lastPathComponent } ?? "Path", active: filter.path != nil)
     }
 
     private func applyFilter(_ new: GitLogFilter) {
@@ -405,7 +433,6 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         detailsToken += 1
         let token = detailsToken
         let repo = repo
-        let refs = c.refs
         reader.async {
             let info = try? repo.commitInfo(hash: c.hash)
             DispatchQueue.main.async { [weak self] in
@@ -415,21 +442,16 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
                     let p = NSMutableParagraphStyle(); p.paragraphSpacing = gap
                     out.append(NSAttributedString(string: text + "\n", attributes: [.font: font, .foregroundColor: color, .paragraphStyle: p]))
                 }
-                let message = info?.message ?? c.subject
+                let mono = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+                let message = (info?.message ?? c.subject).trimmingCharacters(in: .whitespacesAndNewlines)
                 let parts = message.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
-                line(parts.first ?? c.subject, font: .systemFont(ofSize: 13, weight: .semibold), color: Theme.foreground, gap: 4)
+                line(parts.first ?? c.subject, font: .monospacedSystemFont(ofSize: 12, weight: .bold), color: Theme.foreground, gap: 6)
                 if parts.count > 1, !parts[1].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    line(parts[1].trimmingCharacters(in: .whitespacesAndNewlines), font: .systemFont(ofSize: 12), color: Theme.foreground, gap: 6)
+                    line(parts[1].trimmingCharacters(in: .whitespacesAndNewlines), font: mono, color: Theme.foreground, gap: 10)
                 }
                 let when = info.map { Self.dateFormat.string(from: Date(timeIntervalSince1970: $0.authorTime)) } ?? c.relativeDate
-                let who = info.map { "\($0.author) <\($0.mail)>" } ?? c.author
-                line("\(c.shortHash)  ·  \(who)  ·  \(when)", font: .monospacedSystemFont(ofSize: 11, weight: .regular), color: Theme.gutter)
-                if let info, info.parents.count > 0 {
-                    line("Parent\(info.parents.count > 1 ? "s" : ""): " + info.parents.map { String($0.prefix(7)) }.joined(separator: ", "),
-                         font: .monospacedSystemFont(ofSize: 11, weight: .regular), color: Theme.gutter)
-                }
-                if !refs.isEmpty { line("In: " + refs.joined(separator: ", "), font: .systemFont(ofSize: 11), color: Theme.gutter) }
-                if let info { line("\(info.fileCount) file\(info.fileCount == 1 ? "" : "s") changed", font: .systemFont(ofSize: 11), color: Theme.gutter) }
+                let who = info?.author ?? c.author
+                line("\(c.shortHash) \u{00B7} \(who) \u{00B7} \(when)", font: .monospacedSystemFont(ofSize: 11, weight: .regular), color: Theme.gutter)
                 self.details.textStorage?.setAttributedString(out)
                 self.details.scrollToBeginningOfDocument(nil)
             }
@@ -448,8 +470,8 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     }
 
     private func updateBranchTitle() {
-        branchButton.title = revision == "HEAD" ? "HEAD" : revision
-        branchButton.toolTip = "Branch: \(branchButton.title)"
+        flat(branchButton, "Branch: " + (revision == "HEAD" ? "HEAD" : (revision.count > 28 ? String(revision.prefix(27)) + "\u{2026}" : revision)), active: revision != "HEAD")
+        branchButton.toolTip = revision
     }
 
     @objc private func showBranchMenu(_ sender: NSButton) {
@@ -527,6 +549,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         historyPath = path
         follow = path != nil
         historyBar.isHidden = path == nil
+        historyCollapse.isActive = path == nil
         historyLabel.stringValue = path.map { "History of \($0)" } ?? ""
         preferredFile = path
         search.stringValue = ""
@@ -586,6 +609,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private func clearSelectionUI(_ message: String) {
         detailsToken += 1
         files = []
+        fileRows = []
         fileTable.reloadData()
         details.string = message
     }
@@ -604,13 +628,16 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
                 switch r {
                 case .success(let list):
                     self.files = list
+                    self.fileRows = Self.tree(list)
                     self.fileTable.reloadData()
                     if list.isEmpty { self.clearSelectionUI("No file changes in this commit"); self.onIdle?(); return }
                     if let pf = self.preferredFile,
                        let idx = list.firstIndex(where: { $0.path == pf })
                         ?? list.firstIndex(where: { ($0.path as NSString).lastPathComponent == (pf as NSString).lastPathComponent }) {
-                        self.fileTable.selectRowIndexes([idx], byExtendingSelection: false)
-                        self.fileTable.scrollRowToVisible(idx)
+                        if let row = self.fileRows.firstIndex(where: { if case .file(let i, _) = $0 { return i == idx }; return false }) {
+                            self.fileTable.selectRowIndexes([row], byExtendingSelection: false)
+                            self.fileTable.scrollRowToVisible(row)
+                        }
                     }
                     self.onIdle?()
                 case .failure(let e): self.clearSelectionUI(e.localizedDescription); self.onIdle?()
@@ -619,17 +646,65 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         }
     }
 
-    /// Double-click on a file: its side-by-side diff opens on demand in a separate window (steppable across the commit's files).
+    /// Double-click on a file: its side-by-side diff opens in an editor tab (steppable across the commit's files).
     @objc private func openFileDiff() {
-        let r = fileTable.clickedRow >= 0 ? fileTable.clickedRow : fileTable.selectedRow
-        guard r >= 0, r < files.count, let c = selectedCommit else { return }
-        if diffWindow == nil { diffWindow = CommitDiffWindow(repo: repo) }
-        diffWindow?.show(commit: c, files: files, index: r, over: window)
+        let row = fileTable.clickedRow >= 0 ? fileTable.clickedRow : fileTable.selectedRow
+        guard row >= 0, row < fileRows.count, case .file(let r, _) = fileRows[row], let c = selectedCommit else { return }
+        let v = diffView ?? CommitDiffView(repo: repo)
+        diffView = v
+        v.show(commit: c, files: files, index: r)
+        onShowFileDiff?(v)
     }
+
+    /// Flattens sorted paths into folder + file rows (every folder expanded, with the number of files beneath it).
+    private static func tree(_ list: [GitFileChange]) -> [FileRow] {
+        let order = list.indices.sorted { list[$0].path.localizedStandardCompare(list[$1].path) == .orderedAscending }
+        var counts: [String: Int] = [:]
+        for f in list {
+            var prefix = ""
+            for part in f.path.split(separator: "/").dropLast() { prefix += part + "/"; counts[prefix, default: 0] += 1 }
+        }
+        var rows: [FileRow] = []
+        var open: [String] = []
+        for i in order {
+            let comps = list[i].path.split(separator: "/").map(String.init)
+            let dirs = Array(comps.dropLast())
+            var common = 0
+            while common < open.count, common < dirs.count, open[common] == dirs[common] { common += 1 }
+            open = Array(open.prefix(common))
+            for d in dirs[common...] {
+                open.append(d)
+                rows.append(.folder(name: d, depth: open.count - 1, count: counts[open.joined(separator: "/") + "/"] ?? 0))
+            }
+            rows.append(.file(index: i, depth: dirs.count))
+        }
+        return rows
+    }
+
+    /// Short, quiet date: relative within a week, then "21 Aug" / "21 Aug 25".
+    private static func shortDate(_ ts: TimeInterval) -> String {
+        let d = Date(timeIntervalSince1970: ts), age = Date().timeIntervalSince(d)
+        if age < 60 { return "now" }
+        if age < 3600 { return "\(Int(age / 60))m ago" }
+        if age < 86_400 { return "\(Int(age / 3600))h ago" }
+        if age < 7 * 86_400 { return "\(Int(age / 86_400))d ago" }
+        let cal = Calendar.current
+        return (cal.component(.year, from: d) == cal.component(.year, from: Date()) ? dayMonth : dayMonthYear).string(from: d)
+    }
+    private static let dayMonth: DateFormatter = { let f = DateFormatter(); f.dateFormat = "d MMM"; return f }()
+    private static let dayMonthYear: DateFormatter = { let f = DateFormatter(); f.dateFormat = "d MMM yy"; return f }()
 
     // MARK: table
 
-    func numberOfRows(in t: NSTableView) -> Int { t === fileTable ? files.count : commits.count }
+    func numberOfRows(in t: NSTableView) -> Int { t === fileTable ? fileRows.count : commits.count }
+
+    func tableView(_ t: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { LogRowView() }
+
+    func tableView(_ t: NSTableView, shouldSelectRow row: Int) -> Bool {
+        guard t === fileTable else { return true }
+        if row < fileRows.count, case .file = fileRows[row] { return true }
+        return false
+    }
 
     private static func refColor(_ ref: String) -> NSColor {
         if ref.hasPrefix("tag:") { return NSColor(srgbRed: 0.80, green: 0.55, blue: 0.15, alpha: 1) }
@@ -647,12 +722,32 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             return f
         }()
         if t === fileTable {
-            guard row < files.count else { return cell }
-            let f = files[row]
-            let color: NSColor = f.status == "A" ? NSColor.systemGreen : f.status == "D" ? NSColor.systemGray : NSColor.systemBlue
-            let s = NSMutableAttributedString(string: f.status + "  ", attributes: [.foregroundColor: color, .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .bold)])
-            let name = f.oldPath.map { "\($0) \u{2192} \(f.path)" } ?? f.path
-            s.append(NSAttributedString(string: name, attributes: [.foregroundColor: Theme.foreground, .font: NSFont.systemFont(ofSize: 12)]))
+            guard row < fileRows.count else { return cell }
+            let para = NSMutableParagraphStyle()
+            func icon(_ symbol: String, _ color: NSColor) -> NSAttributedString {
+                let att = NSTextAttachment()
+                let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+                    .withSymbolConfiguration(.init(pointSize: 12, weight: .regular).applying(.init(paletteColors: [color])))
+                att.image = img
+                att.bounds = NSRect(x: 0, y: -2, width: 14, height: 13)
+                return NSAttributedString(attachment: att)
+            }
+            let s = NSMutableAttributedString()
+            switch fileRows[row] {
+            case .folder(let name, let depth, let count):
+                para.firstLineHeadIndent = 8 + CGFloat(depth) * 14
+                s.append(icon("folder", Theme.gutter))
+                s.append(NSAttributedString(string: " \(name)", attributes: [.foregroundColor: Theme.foreground, .font: NSFont.systemFont(ofSize: 12)]))
+                s.append(NSAttributedString(string: "  \(count) file\(count == 1 ? "" : "s")", attributes: [.foregroundColor: Theme.gutter, .font: NSFont.systemFont(ofSize: 11)]))
+            case .file(let i, let depth):
+                let f = files[i]
+                para.firstLineHeadIndent = 8 + CGFloat(depth) * 14
+                let color: NSColor = f.status == "A" ? .systemGreen : f.status == "D" ? .systemGray : f.status == "R" ? .systemPurple : .systemBlue
+                s.append(icon("doc.text", color))
+                let shown = f.oldPath != nil ? "\((f.oldPath! as NSString).lastPathComponent) \u{2192} \((f.path as NSString).lastPathComponent)" : (f.path as NSString).lastPathComponent
+                s.append(NSAttributedString(string: " " + shown, attributes: [.foregroundColor: color, .font: NSFont.systemFont(ofSize: 12)]))
+            }
+            s.addAttribute(.paragraphStyle, value: para, range: NSRange(location: 0, length: s.length))
             cell.attributedStringValue = s
             return cell
         }
@@ -669,12 +764,15 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             return g
         case "subject":
             let s = NSMutableAttributedString()
-            for ref in c.refs {
-                let name = ref.replacingOccurrences(of: "HEAD -> ", with: "\u{25B8} ")
-                s.append(NSAttributedString(string: " \(name) ", attributes: [
-                    .font: NSFont.systemFont(ofSize: 10, weight: .semibold), .foregroundColor: Self.refColor(ref),
-                    .backgroundColor: Self.refColor(ref).withAlphaComponent(0.16)]))
-                s.append(NSAttributedString(string: " "))
+            // At most two quiet ref pills; a local branch and its remote twin collapse into one.
+            var shown: [String] = []
+            for ref in c.refs where !shown.contains(where: { $0 == ref || ref.hasSuffix("/" + $0.replacingOccurrences(of: "HEAD -> ", with: "")) }) { shown.append(ref) }
+            for ref in shown.prefix(2) {
+                let name = ref.replacingOccurrences(of: "HEAD -> ", with: "")
+                s.append(NSAttributedString(string: "\u{2009}\(name)\u{2009}", attributes: [
+                    .font: NSFont.systemFont(ofSize: 10, weight: .medium), .foregroundColor: Self.refColor(ref),
+                    .backgroundColor: Self.refColor(ref).withAlphaComponent(0.12)]))
+                s.append(NSAttributedString(string: "  "))
             }
             let isMerge = c.parents.count > 1
             s.append(NSAttributedString(string: c.subject, attributes: [.foregroundColor: isMerge ? Theme.gutter : Theme.foreground, .font: NSFont.systemFont(ofSize: 12)]))
@@ -682,11 +780,13 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         case "author":
             let mine = !myName.isEmpty && c.author == myName
             cell.stringValue = c.author
-            cell.textColor = c.parents.count > 1 ? Theme.gutter : Theme.foreground
-            cell.font = .systemFont(ofSize: 12, weight: mine ? .bold : .regular)
-        case "date":
-            cell.stringValue = Self.dateFormat.string(from: Date(timeIntervalSince1970: c.timestamp))
             cell.textColor = Theme.gutter
+            cell.font = .systemFont(ofSize: 12, weight: mine ? .medium : .regular)
+        case "date":
+            cell.stringValue = Self.shortDate(c.timestamp)
+            cell.toolTip = Self.dateFormat.string(from: Date(timeIntervalSince1970: c.timestamp))
+            cell.textColor = Theme.gutter
+            cell.alignment = .right
         default:
             cell.stringValue = c.shortHash
             cell.textColor = Theme.gutter

@@ -38,7 +38,7 @@ final class ToolStripView: NSView {
         Entry(id: "laravel", symbol: "map", title: "Laravel Routes", shortcut: nil, kind: .routes),
         Entry(id: "tests", symbol: "play", title: "Run / Tests", shortcut: "⌘6", kind: .bottom("tests")),
         Entry(id: "problems", symbol: "exclamationmark.circle", title: "Problems", shortcut: "⌘5", kind: .bottom("problems")),
-        Entry(id: "git", symbol: "arrow.triangle.branch", title: "Git", shortcut: "⌘9", kind: .bottom("git")),
+        Entry(id: "git", symbol: "kode.gitgraph", title: "Git", shortcut: "⌘9", kind: .bottom("git")),
     ]
 
     weak var project: ProjectWindow?
@@ -100,7 +100,25 @@ final class ToolStripView: NSView {
         return b
     }
 
+    /// Custom commit-graph glyph for the Git tool window: two lanes, a merge curve and filled nodes (template, so it follows the theme).
+    static let gitGraphIcon: NSImage = {
+        let img = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            NSColor.black.setStroke(); NSColor.black.setFill()
+            let lane = NSBezierPath(); lane.lineWidth = 1.5; lane.lineCapStyle = .round
+            lane.move(to: NSPoint(x: 5, y: 2.5)); lane.line(to: NSPoint(x: 5, y: 15.5))          // main lane
+            lane.move(to: NSPoint(x: 5, y: 6)); lane.curve(to: NSPoint(x: 13, y: 10), controlPoint1: NSPoint(x: 5, y: 9), controlPoint2: NSPoint(x: 13, y: 7))   // branch off
+            lane.stroke()
+            for p in [NSPoint(x: 5, y: 3.5), NSPoint(x: 5, y: 14.5), NSPoint(x: 13, y: 12.5)] {
+                NSBezierPath(ovalIn: NSRect(x: p.x - 2.4, y: p.y - 2.4, width: 4.8, height: 4.8)).fill()
+            }
+            return true
+        }
+        img.isTemplate = true
+        return img
+    }()
+
     static func icon(_ symbol: String, _ label: String) -> NSImage? {
+        if symbol == "kode.gitgraph" { let i = gitGraphIcon.copy() as? NSImage; i?.isTemplate = true; i?.accessibilityDescription = label; return i }
         let cfg = NSImage.SymbolConfiguration(pointSize: 16, weight: .light)
         return NSImage(systemSymbolName: symbol, accessibilityDescription: label)?.withSymbolConfiguration(cfg)
     }

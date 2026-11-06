@@ -1266,6 +1266,12 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         let panel = GitPanelController(root: repo) { [weak self] url in self?.open(url) }
         panel.onStatusChange = { [weak self] in self?.refreshGitStatus(); self?.tree.refresh() }
         git = panel
+        panel.onShowCommitDiff = { [weak self] v in
+            guard let self else { return }
+            let id = "git.commit-diff"
+            v.onTitle = { [weak self] t in self?.tabs.setTitle(t, for: id) }
+            self.showAuxiliaryTab(id: id, title: v.tabTitle, view: v)
+        }
         panel.onRequestClose = { [weak self] in self?.bottom.hide(); self?.focusEditor() }
         panel.onFocusEditor = { [weak self] in self?.focusEditor() }
         panel.onSummaryChange = { [weak self] summary in

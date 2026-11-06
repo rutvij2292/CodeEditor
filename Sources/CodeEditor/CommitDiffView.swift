@@ -1,14 +1,9 @@
 import AppKit
 
-/// On-demand diff window for one file of a log commit (double-click a file in the Log tab). One window is reused:
-/// the arrows step through the commit's files, Esc closes it.
-private final class EscWindow: NSWindow {
-    override func cancelOperation(_ sender: Any?) { performClose(nil) }
-}
-
-final class CommitDiffWindow: NSObject, NSWindowDelegate {
+/// On-demand diff for one file of a log commit (double-click a file in the Log tab). It lives in an editor tab (like the
+/// Commit panel's diff), not a separate window: the arrows step through the commit's files.
+final class CommitDiffView: NSView {
     private let repo: GitRepo
-    private let window: NSWindow
     private let diffView = SideBySideDiffView()
     private let message = NSTextField(labelWithString: "")
     private let pathLabel = NSTextField(labelWithString: "")
@@ -20,19 +15,15 @@ final class CommitDiffWindow: NSObject, NSWindowDelegate {
     private var files: [GitFileChange] = []
     private var index = 0
     private var token = 0
+    /// Title for the hosting tab, updated on every file change.
+    var onTitle: ((String) -> Void)?
 
     init(repo: GitRepo) {
         self.repo = repo
-        window = EscWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
-                          styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-        super.init()
-        window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 640, height: 400)
-        window.delegate = self
-        window.tabbingMode = .disallowed
+        super.init(frame: .zero)
         build()
-        if !AppEnv.headless { window.setFrameAutosaveName("CommitDiffWindow2") }
     }
+    required init?(coder: NSCoder) { fatalError() }
 
     private func build() {
         for (b, name, tip) in [(prev, "chevron.left", "Previous file"), (next, "chevron.right", "Next file")] {
@@ -46,6 +37,7 @@ final class CommitDiffWindow: NSObject, NSWindowDelegate {
         next.action = #selector(stepNext)
         counter.font = .systemFont(ofSize: 12, weight: .medium)
         pathLabel.font = .systemFont(ofSize: 12)
+        pathLabel.textColor = .secondaryLabelColor
         pathLabel.lineBreakMode = .byTruncatingHead
         pathLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         message.font = .systemFont(ofSize: 13)
@@ -54,30 +46,27 @@ final class CommitDiffWindow: NSObject, NSWindowDelegate {
         let bar = NSStackView(views: [prev, counter, next, pathLabel])
         bar.spacing = 8
         bar.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
-        let root = NSView()
-        for v in [bar, diffView, message] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(v) }
+        for v in [bar, diffView, message] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
         NSLayoutConstraint.activate([
-            bar.topAnchor.constraint(equalTo: root.topAnchor), bar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            bar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            diffView.topAnchor.constraint(equalTo: bar.bottomAnchor), diffView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            diffView.leadingAnchor.constraint(equalTo: root.leadingAnchor), diffView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            message.centerXAnchor.constraint(equalTo: root.centerXAnchor), message.centerYAnchor.constraint(equalTo: root.centerYAnchor),
+            bar.topAnchor.constraint(equalTo: topAnchor), bar.leadingAnchor.constraint(equalTo: leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: trailingAnchor),
+            diffView.topAnchor.constraint(equalTo: bar.bottomAnchor), diffView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            diffView.leadingAnchor.constraint(equalTo: leadingAnchor), diffView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            message.centerXAnchor.constraint(equalTo: centerXAnchor), message.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
-        window.contentView = root
     }
 
-    func show(commit: GitCommit, files: [GitFileChange], index: Int, over parent: NSWindow?) {
+    func show(commit: GitCommit, files: [GitFileChange], index: Int) {
         self.commit = commit
         self.files = files
         self.index = index
-        if !window.isVisible, !AppEnv.headless {
-            // Remembered size wins; first open fills the screen's usable area (v2 name drops the old half-width frame).
-            if !window.setFrameUsingName("CommitDiffWindow2"), let screen = parent?.screen ?? NSScreen.main {
-                window.setFrame(screen.visibleFrame, display: false)
-            }
-        }
-        if !AppEnv.headless { window.makeKeyAndOrderFront(nil) }
         load()
+    }
+
+    /// Title for the tab the host shows this view in.
+    var tabTitle: String {
+        guard let c = commit, index < files.count else { return "Diff" }
+        return "\((files[index].path as NSString).lastPathComponent) @ \(c.shortHash)"
     }
 
     @objc private func stepPrev() { step(-1) }
@@ -92,7 +81,7 @@ final class CommitDiffWindow: NSObject, NSWindowDelegate {
     private func load() {
         guard let c = commit, index < files.count else { return }
         let file = files[index]
-        window.title = "\(c.shortHash) — \((file.path as NSString).lastPathComponent)"
+        onTitle?(tabTitle)
         counter.stringValue = "\(index + 1)/\(files.count) files"
         pathLabel.stringValue = file.path
         prev.isEnabled = index > 0
@@ -118,6 +107,4 @@ final class CommitDiffWindow: NSObject, NSWindowDelegate {
             }
         }
     }
-
-    func windowWillClose(_ notification: Notification) { token += 1 }
 }

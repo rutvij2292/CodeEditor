@@ -300,6 +300,8 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     let view: NSView
     /// Sidebar layout: the user picked a file in the tree; the host should show `diffHost` in the editor area.
     var onShowDiff: (() -> Void)?
+    /// Log: a file of a commit was opened; the host shows the view in an editor tab.
+    var onShowCommitDiff: ((CommitDiffView) -> Void)? { didSet { logView.onShowFileDiff = onShowCommitDiff } }
     var onStatusChange: (() -> Void)?
     /// Set by the Commit panel: opens the shared branch popup instead of the plain menu below.
     var onShowBranches: (() -> Void)?
