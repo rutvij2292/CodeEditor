@@ -59,12 +59,14 @@ enum SelfTestProblems {
         check("cache: invalidate(path:) drops that file's entries only", cache.get("/p/f5.php|k") == nil && cache.get("/p/f6.php|k") == ans)
     }
 
-    static func wait(_ seconds: TimeInterval = 20, until done: () -> Bool) {
-        let end = Date().addingTimeInterval(seconds)
-        let tick = Timer(timeInterval: 0.01, repeats: true) { _ in }      // keeps the run loop (and the main queue) turning
-        RunLoop.current.add(tick, forMode: .default)
-        defer { tick.invalidate() }
-        while !done(), Date() < end { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+    /// Runs `scan` with callbacks on a private queue and waits for it (no dependence on the main run loop).
+    static func finish(_ scan: ProjectScan) -> (results: [FileProblems], cancelled: Bool)? {
+        let sem = DispatchSemaphore(value: 0)
+        var out: (results: [FileProblems], cancelled: Bool)?
+        scan.callbackQueue = DispatchQueue(label: "kode.selftest.scan")
+        scan.onFinish = { r, c in out = (r, c); sem.signal() }
+        scan.start()
+        return sem.wait(timeout: .now() + 30) == .success ? out : nil
     }
 
     static func runScanner() {
@@ -89,10 +91,8 @@ enum SelfTestProblems {
         put("node_modules/n.php", "<?php function {")
         put("public/build/b.php", "<?php function {")
         let scan = ProjectScan(root: dir)
-        var res: [FileProblems]?, cancelled = true
-        scan.onFinish = { r, c in res = r; cancelled = c }
-        scan.start()
-        wait { res != nil }
+        let r1 = finish(scan)
+        let res = r1?.results, cancelled = r1?.cancelled ?? true
         check("scan: only the non-skipped file with a problem is reported", res?.map { $0.url.lastPathComponent } == ["a.php"] && cancelled == false)
         check("scan: problem has position and source", res?.first?.diagnostics.first.map { $0.line == 1 && $0.source == "PHP" } == true)
 
@@ -106,19 +106,13 @@ enum SelfTestProblems {
         // Cap and cancel via the analyzer hook
         for i in 0..<8 { put("many/f\(i).php", "x") }
         ProjectProblemScanner.analyzerOverride = { url, _ in url.path.contains("/many/") ? (0..<1000).map { diag(2, "m\($0)", line: 1) } : [] }
-        var capped: [FileProblems]?
-        let s2 = ProjectScan(root: dir.appendingPathComponent("many"))
-        s2.onFinish = { r, _ in capped = r }
-        s2.start()
-        wait { capped != nil }
+        let capped = finish(ProjectScan(root: dir.appendingPathComponent("many")))?.results
         check("scan: at most 5,000 problems kept", capped.map { $0.reduce(0) { $0 + $1.diagnostics.count } } == 5000)
 
-        var calls = 0, done2: Bool?
+        var calls = 0
         let s3 = ProjectScan(root: dir.appendingPathComponent("many"))
         ProjectProblemScanner.analyzerOverride = { _, _ in calls += 1; s3.cancel(); return [] }
-        s3.onFinish = { _, c in done2 = c }
-        s3.start()
-        wait { done2 != nil }
+        let done2 = finish(s3)?.cancelled
         check("scan: cancel stops after the current file", done2 == true && calls == 1)
         ProjectProblemScanner.analyzerOverride = nil
     }

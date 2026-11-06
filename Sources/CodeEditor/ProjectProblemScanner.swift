@@ -30,10 +30,12 @@ final class ProjectScan {
     let root: URL
     /// (files scanned, problems so far); main queue, every 20 files.
     var onProgress: ((Int, Int) -> Void)?
-    /// (results sorted by path, wasCancelled); main queue.
+    /// (results sorted by path, wasCancelled); callback queue.
     var onFinish: (([FileProblems], Bool) -> Void)?
     /// Evaluated on the main queue between files; while true the scan waits (no timer: a short sleep loop on the scan queue).
     var isPaused: (() -> Bool)?
+    /// Queue the callbacks run on (main by default; tests use their own).
+    var callbackQueue: DispatchQueue = .main
 
     private let lock = NSLock()
     private var _cancelled = false
@@ -66,12 +68,12 @@ final class ProjectScan {
                     total += f.diagnostics.count
                     results.append(f)
                 }
-                if scanned % 20 == 0 { let (s, t) = (scanned, total); DispatchQueue.main.async { self.onProgress?(s, t) } }
+                if scanned % 20 == 0 { let (s, t) = (scanned, total); callbackQueue.async { self.onProgress?(s, t) } }
             }
             let wasCancelled = cancelled
             results.sort { $0.url.path < $1.url.path }
             let (s, t) = (scanned, total)
-            DispatchQueue.main.async { self.onProgress?(s, t); self.onFinish?(results, wasCancelled) }
+            callbackQueue.async { self.onProgress?(s, t); self.onFinish?(results, wasCancelled) }
         }
     }
 
