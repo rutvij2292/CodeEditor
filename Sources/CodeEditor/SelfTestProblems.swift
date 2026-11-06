@@ -10,6 +10,7 @@ enum SelfTestProblems {
 
     static func run(w: ProjectWindow) {
         runGrouping()
+        runEvaluator()
     }
 
     static func runGrouping() {
@@ -27,5 +28,33 @@ enum SelfTestProblems {
         check("grouping: items counted", php?.inspections.first { $0.name == "unused-import" }?.items.count == 2)
         check("grouping: general uses first 40 chars of message", g.first { $0.category == "General" }?.inspections.first?.name == String("Something odd happened here in this file for sure".prefix(40)))
         check("grouping: intelephense maps to PHP, JS to JavaScript", ProblemGrouping.category(for: diag(1, "x", source: "intelephense")) == "PHP" && ProblemGrouping.category(for: diag(1, "x", source: "JS")) == "JavaScript")
+    }
+
+    static func ref(_ id: Int, text: String? = "a\nb\nc\nd") -> ProblemRef {
+        ProblemRef(id: id, url: URL(fileURLWithPath: "/p/app/A.php"), relPath: "app/A.php", d: diag(2, "Unused import X\(id)", line: 2, source: "PHP", code: "unused-import"), fileText: text)
+    }
+
+    static func runEvaluator() {
+        let json = #"[{"id":1,"verdict":"real","difficulty":"easy","explanation":"Remove it","oldText":"use X;","newText":""},{"id":2,"verdict":"false_positive","difficulty":"hard","explanation":"Used by magic"}]"#
+        let a = ProblemEvaluator.parse(json, ids: [1, 2])
+        check("parse: bare array", a.count == 2 && a[1]?.verdict == .real && a[1]?.difficulty == .easy && a[1]?.oldText == "use X;" && a[1]?.newText == "" && a[2]?.verdict == .falsePositive && a[2]?.oldText == nil)
+        let fenced = "Sure!\n```json\n" + json + "\n```\nHope that helps [1]."
+        check("parse: fenced with prose", ProblemEvaluator.parse(fenced, ids: [1, 2]).count == 2)
+        check("parse: missing id and unknown id", ProblemEvaluator.parse(json, ids: [1, 3]).keys.sorted() == [1])
+        check("parse: invalid enum drops entry", ProblemEvaluator.parse(#"[{"id":1,"verdict":"maybe","difficulty":"easy","explanation":"x"}]"#, ids: [1]).isEmpty)
+        check("parse: garbage", ProblemEvaluator.parse("I cannot help", ids: [1]).isEmpty && ProblemEvaluator.parse("[not json]", ids: [1]).isEmpty)
+        let p = ProblemEvaluator.prompt([ref(1), ref(2)])
+        check("prompt: ids, location, message, snippet, JSON-only", p.contains("Problem 1") && p.contains("Problem 2"))
+        check("prompt: carries path:line and message", p.contains("app/A.php:2") && p.contains("Unused import X2") && p.contains("```") && p.lowercased().contains("only"))
+        var failed = ""
+        ProblemEvaluator.evaluate((1...21).map { ref($0) }) { r in if case .failure(let f) = r { failed = f.message } }
+        check("evaluate: over 20 problems fails mentioning 20", failed.contains("20"))
+        check("fingerprint: stable, changes with line text", ProblemEvaluator.fingerprint(ref(1)) == ProblemEvaluator.fingerprint(ref(1)) && ProblemEvaluator.fingerprint(ref(1)) != ProblemEvaluator.fingerprint(ref(1, text: "a\nCHANGED\nc")))
+        let cache = ProblemAnswerCache()
+        let ans = ProblemAnswer(verdict: .real, difficulty: .easy, explanation: "e", oldText: nil, newText: nil)
+        for i in 0...200 { cache.set("/p/f\(i).php|k", ans) }
+        check("cache: capped at 200, oldest evicted", cache.count == 200 && cache.get("/p/f0.php|k") == nil && cache.get("/p/f200.php|k") == ans)
+        cache.invalidate(path: "/p/f5.php")
+        check("cache: invalidate(path:) drops that file's entries only", cache.get("/p/f5.php|k") == nil && cache.get("/p/f6.php|k") == ans)
     }
 }
