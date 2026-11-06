@@ -2,6 +2,11 @@
 
 Version is `0.<commit count>` (see build-app.sh); the installer is `dist/Kode-<version>.dmg`.
 
+## 0.324
+- Problems panel redone PhpStorm-style: **File** (current file, with its count), **Project Errors** and **Inspections** tabs, problems grouped by category then inspection, and a detail pane with the message, code snippet and Claude's answer.
+- **Project Errors** scans the whole project only when you press Scan (cancellable, one file at a time, low priority, capped at 5,000 problems). It skips `vendor`, `node_modules`, `public/build`, `.git`, `storage`, `bootstrap/cache` and other build output. Results are dropped when you leave the tab.
+- **Evaluate with Claude** (right-click a problem, group or file, or the button in the detail pane): one one-shot call for up to 20 problems, answered separately per problem (real / false positive / ignorable, how hard, explanation, proposed fix). Easy fixes get **Apply fix** (one undoable edit, refused unless the text matches exactly once); harder ones get **Hand to agent**. Only runs when asked.
+
 ## 0.279
 - Soft wrap: the Edit-menu toggle and Settings / View now share one preference; end-to-end wrap test.
 - Markdown / viewer files: the breadcrumb bar keeps room for the Source / Split / Preview switch (no more overprinting); calmer notice banner (icon, light tint, recessed buttons, 26 pt); GitHub-style preview headings and no underline on links.
