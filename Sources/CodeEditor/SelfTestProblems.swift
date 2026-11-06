@@ -9,6 +9,7 @@ enum SelfTestProblems {
     }
 
     static func run(w: ProjectWindow) {
+        if let dir = ProcessInfo.processInfo.environment["CE_PROBLEMS_RAM"] { runRAM(URL(fileURLWithPath: dir)); exit(0) }
         runGrouping()
         runEvaluator()
         runScanner()
@@ -248,5 +249,31 @@ enum SelfTestProblems {
         check("applyFix: unique text is replaced on disk", w.applyProblemFix(url: u, old: "use A;\n", new: "") && (try? String(contentsOf: u, encoding: .utf8)) == "use B;\nuse B2;\n")
         check("applyFix: text found twice is refused and the file is untouched", !w.applyProblemFix(url: u, old: "use B", new: "X") && (try? String(contentsOf: u, encoding: .utf8)) == "use B;\nuse B2;\n")
         check("applyFix: missing text is refused", !w.applyProblemFix(url: u, old: "nope", new: "X") && !w.applyProblemFix(url: u, old: "", new: "X"))
+    }
+
+    /// CE_PROBLEMS_RAM=<project dir>: footprint before / during / after a whole-project scan, printed as `PRAM ...`, then exit.
+    static func runRAM(_ dir: URL) {
+        func mb() -> Double { NativePHPBench.footprintMB() }
+        func line(_ s: String) { fputs("PRAM \(s) footprintMB=\(Int(mb()))\n", stderr) }
+        line("baseline")
+        let panel = ProblemsPanelController(root: dir) { _, _, _ in }
+        panel.problemsProvider = { [] }
+        panel.select(tab: .project)
+        line("panel on Project Errors tab (idle)")
+        final class Box { var running = true; var peak = 0.0 }
+        let box = Box()
+        DispatchQueue.global(qos: .utility).async { while box.running { box.peak = max(box.peak, mb()); usleep(25_000) } }
+        let t0 = Date()
+        let r = finish(ProjectScan(root: dir))
+        box.running = false
+        let results = r?.results ?? []
+        fputs("PRAM scan seconds=\(String(format: "%.1f", Date().timeIntervalSince(t0))) files=\(results.count) problems=\(results.reduce(0) { $0 + $1.diagnostics.count }) peakDuringScanMB=\(Int(box.peak))\n", stderr)
+        line("scan finished, results in memory")
+        panel.setProjectResults(results)
+        line("results shown in the panel")
+        panel.select(tab: .file)
+        autoreleasepool { _ = 0 }
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        line("left the tab (results dropped)")
     }
 }
