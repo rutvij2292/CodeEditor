@@ -11,6 +11,7 @@ enum SelfTestProblems {
     static func run(w: ProjectWindow) {
         runGrouping()
         runEvaluator()
+        runScanner()
     }
 
     static func runGrouping() {
@@ -56,5 +57,66 @@ enum SelfTestProblems {
         check("cache: capped at 200, oldest evicted", cache.count == 200 && cache.get("/p/f0.php|k") == nil && cache.get("/p/f200.php|k") == ans)
         cache.invalidate(path: "/p/f5.php")
         check("cache: invalidate(path:) drops that file's entries only", cache.get("/p/f5.php|k") == nil && cache.get("/p/f6.php|k") == ans)
+    }
+
+    static func wait(_ seconds: TimeInterval = 20, until done: () -> Bool) {
+        let end = Date().addingTimeInterval(seconds)
+        while !done(), Date() < end { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+    }
+
+    static func runScanner() {
+        let skip = ProjectProblemScanner.shouldSkip
+        check("scan skip: vendor, nested vendor, node_modules, build output, caches",
+              skip("vendor", true) && skip("src/vendor", true) && skip("node_modules/a", false) && skip("public/build", true) && skip("public/build/x.js", false)
+              && skip("bootstrap/cache", true) && skip("storage", true) && skip(".git", true) && skip("dist/a.js", false))
+        check("scan skip: minified and map files", skip("a.min.js", false) && skip("css/a.min.css", false) && skip("a.js.map", false))
+        check("scan keep: ordinary source", !skip("public/index.php", false) && !skip("bootstrap/app.php", false) && !skip("app/Build.php", false) && !skip("app/Http/C.php", false))
+
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("kode-scan-\(UUID().uuidString)")
+        func put(_ rel: String, _ text: String) {
+            let u = dir.appendingPathComponent(rel)
+            try? fm.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? text.write(to: u, atomically: true, encoding: .utf8)
+        }
+        defer { try? fm.removeItem(at: dir) }
+        put("a.php", "<?php function {")
+        put("ok.php", "<?php\nfunction f() { return 1; }\n")
+        put("vendor/v.php", "<?php function {")
+        put("node_modules/n.php", "<?php function {")
+        put("public/build/b.php", "<?php function {")
+        let scan = ProjectScan(root: dir)
+        var res: [FileProblems]?, cancelled = true
+        scan.onFinish = { r, c in res = r; cancelled = c }
+        scan.start()
+        wait { res != nil }
+        check("scan: only the non-skipped file with a problem is reported", res?.map { $0.url.lastPathComponent } == ["a.php"] && cancelled == false)
+        check("scan: problem has position and source", res?.first?.diagnostics.first.map { $0.line == 1 && $0.source == "PHP" } == true)
+
+        // 5,000,001-byte file is skipped
+        let big = dir.appendingPathComponent("big.php")
+        try? Data(count: 5_000_001).write(to: big)
+        check("scan: file over 5,000,000 bytes is skipped", ProjectScan.analyzeFile(url: big, root: dir) == nil)
+        try? Data([0, 1, 2, 0, 255]).write(to: dir.appendingPathComponent("bin.php"))
+        check("scan: binary file is skipped", ProjectScan.analyzeFile(url: dir.appendingPathComponent("bin.php"), root: dir) == nil)
+
+        // Cap and cancel via the analyzer hook
+        for i in 0..<8 { put("many/f\(i).php", "x") }
+        ProjectProblemScanner.analyzerOverride = { url, _ in url.path.contains("/many/") ? (0..<1000).map { diag(2, "m\($0)", line: 1) } : [] }
+        var capped: [FileProblems]?
+        let s2 = ProjectScan(root: dir.appendingPathComponent("many"))
+        s2.onFinish = { r, _ in capped = r }
+        s2.start()
+        wait { capped != nil }
+        check("scan: at most 5,000 problems kept", capped.map { $0.reduce(0) { $0 + $1.diagnostics.count } } == 5000)
+
+        var calls = 0, done2: Bool?
+        let s3 = ProjectScan(root: dir.appendingPathComponent("many"))
+        ProjectProblemScanner.analyzerOverride = { _, _ in calls += 1; s3.cancel(); return [] }
+        s3.onFinish = { _, c in done2 = c }
+        s3.start()
+        wait { done2 != nil }
+        check("scan: cancel stops after the current file", done2 == true && calls == 1)
+        ProjectProblemScanner.analyzerOverride = nil
     }
 }
