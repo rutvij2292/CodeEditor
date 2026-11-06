@@ -61,6 +61,9 @@ enum SelfTestProblems {
 
     static func wait(_ seconds: TimeInterval = 20, until done: () -> Bool) {
         let end = Date().addingTimeInterval(seconds)
+        let tick = Timer(timeInterval: 0.01, repeats: true) { _ in }      // keeps the run loop (and the main queue) turning
+        RunLoop.current.add(tick, forMode: .default)
+        defer { tick.invalidate() }
         while !done(), Date() < end { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
     }
 
