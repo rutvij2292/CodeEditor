@@ -12,6 +12,8 @@ enum SelfTestProblems {
         runGrouping()
         runEvaluator()
         runScanner()
+        runPanel()
+        runApplyFix(w: w)
     }
 
     static func runGrouping() {
@@ -115,5 +117,93 @@ enum SelfTestProblems {
         let done2 = finish(s3)?.cancelled
         check("scan: cancel stops after the current file", done2 == true && calls == 1)
         ProjectProblemScanner.analyzerOverride = nil
+    }
+
+    static func runPanel() {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("kode-pp-\(UUID().uuidString)")
+        let a = dir.appendingPathComponent("a.php"), b = dir.appendingPathComponent("b.php")
+        let text = (1...8).map { "line \($0)" }.joined(separator: "\n")
+        let fa = FileProblems(url: a, diagnostics: [
+            diag(2, "Unused import X", line: 1, source: "PHP", code: "unused-import"),
+            diag(2, "Unused import Y", line: 2, source: "PHP", code: "unused-import"),
+            diag(1, "Undefined variable $x", line: 4, source: "intelephense", code: "P1008")])
+        let fb = FileProblems(url: b, diagnostics: [diag(2, "Other thing", line: 3, source: "JS", code: "no-unused")])
+        let p = ProblemsPanelController(root: dir) { _, _, _ in }
+        p.problemsProvider = { [fa, fb] }
+        p.currentFileProvider = { a }
+        p.textProvider = { _ in text }
+
+        p.select(tab: .file)
+        var rows = p.rowDescriptions
+        check("tabs: File lists only the current file", rows.count == 4 && rows[0].hasPrefix("FILE a.php") && !rows.contains { $0.contains("Other thing") })
+
+        p.select(tab: .inspections)
+        rows = p.rowDescriptions
+        check("tabs: Inspections groups category, then inspection, current file only",
+              rows.first == "GROUP PHP (3)" && rows.contains("GROUP P1008 (1)") && rows.contains("GROUP unused-import (2)") && !rows.contains { $0.contains("Other thing") })
+
+        p.select(tab: .project)
+        check("tabs: Project Errors is idle until scanned", p.rowDescriptions.isEmpty && p.emptyText.contains("Scan"))
+        p.setProjectResults([fa, fb])
+        rows = p.rowDescriptions
+        check("tabs: Project Errors lists scan results of every file", p.projectResultCount == 2 && rows.contains { $0.hasPrefix("FILE a.php") } && rows.contains { $0.hasPrefix("FILE b.php") })
+        p.select(tab: .file)
+        check("tabs: leaving Project Errors drops its results", p.projectResultCount == 0)
+
+        check("detail: selecting a problem shows its message", p.selectRow(containing: "Undefined variable") && p.detail.messageText.contains("Undefined variable $x"))
+
+        p.select(tab: .inspections)
+        var calls = 0, lastCount = 0
+        p.evaluateOverride = { refs, done in
+            calls += 1; lastCount = refs.count
+            var m: [Int: ProblemAnswer] = [:]
+            for r in refs {
+                let first = r.d.message.hasPrefix("Undefined")
+                m[r.id] = ProblemAnswer(verdict: .real, difficulty: first ? .easy : .hard, explanation: "expl " + r.d.message, oldText: first ? "line 4" : nil, newText: first ? "" : nil)
+            }
+            done(.success(m))
+        }
+        check("evaluate: selecting the category row", p.selectRow(containing: "GROUP PHP"))
+        p.evaluateSelection()
+        check("evaluate: a group of 3 is ONE call", calls == 1 && lastCount == 3)
+        var ok = true
+        for m in ["Unused import X", "Unused import Y", "Undefined variable $x"] {
+            ok = ok && p.selectRow(containing: m) && p.detail.explanationText == "expl " + m
+        }
+        check("evaluate: each problem shows its own answer", ok)
+
+        var applied: (String, String)?, handed = 0
+        p.applyFix = { _, o, n in applied = (o, n); return true }
+        p.handOff = { _, _ in handed += 1 }
+        _ = p.selectRow(containing: "Undefined variable")
+        check("apply: easy answer with a fix shows Apply, not Hand to agent", p.detail.applyVisible && !p.detail.handOffVisible)
+        p.detail.performApply()
+        check("apply: calls applyFix once with old/new text", applied?.0 == "line 4" && applied?.1 == "")
+        _ = p.selectRow(containing: "Unused import X")
+        check("apply: hard answer shows Hand to agent, not Apply", !p.detail.applyVisible && p.detail.handOffVisible)
+        p.detail.performHandOff()
+        check("apply: Hand to agent calls handOff once", handed == 1)
+
+        // More than 20 problems: one call of 20, the rest reported
+        let many = FileProblems(url: a, diagnostics: (1...25).map { diag(2, "m\($0)", line: min($0, 8), source: "PHP", code: "c\($0)") })
+        p.problemsProvider = { [many] }
+        p.select(tab: .file)
+        calls = 0
+        _ = p.selectRow(containing: "FILE a.php")
+        p.evaluateSelection()
+        check("evaluate: 25 problems send 20 and report the rest", calls == 1 && lastCount == 20 && p.statusText.contains("5 more"))
+    }
+
+    static func runApplyFix(w: ProjectWindow) {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("kode-fix-\(UUID().uuidString)")
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let u = dir.appendingPathComponent("f.php")
+        try? "use A;\nuse B;\nuse B2;\n".write(to: u, atomically: true, encoding: .utf8)
+        check("applyFix: unique text is replaced on disk", w.applyProblemFix(url: u, old: "use A;\n", new: "") && (try? String(contentsOf: u, encoding: .utf8)) == "use B;\nuse B2;\n")
+        check("applyFix: text found twice is refused and the file is untouched", !w.applyProblemFix(url: u, old: "use B", new: "X") && (try? String(contentsOf: u, encoding: .utf8)) == "use B;\nuse B2;\n")
+        check("applyFix: missing text is refused", !w.applyProblemFix(url: u, old: "nope", new: "X") && !w.applyProblemFix(url: u, old: "", new: "X"))
     }
 }

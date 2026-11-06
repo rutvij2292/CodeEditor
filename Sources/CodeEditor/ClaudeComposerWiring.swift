@@ -81,9 +81,9 @@ extension ProjectWindow {
 
     func indexSearch(_ q: String, limit: Int) -> [String] { index?.search(q, limit: limit).map(\.path) ?? [] }
 
-    private func relPath(_ url: URL) -> String { root.map { TerminalBridge.relativePath(url, root: $0) } ?? url.path }
+    func relPath(_ url: URL) -> String { root.map { TerminalBridge.relativePath(url, root: $0) } ?? url.path }
 
-    private func readText(_ url: URL) -> String? {
+    func readText(_ url: URL) -> String? {
         if let tab = editors[url.standardizedFileURL.path] { return tab.textView.string }
         guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? h.close() }
@@ -93,6 +93,24 @@ extension ProjectWindow {
     func fixProblemWithClaude(url: URL, _ d: FileProblems.Diagnostic) {
         fixWithClaude(prompt: FixWithClaude.problemPrompt(path: relPath(url), line: d.line, column: d.column, severity: d.severity,
                                                           message: d.message, source: d.source, code: d.code, fileText: readText(url)))
+    }
+
+    /// Problems panel "Apply fix": replaces `old` with `new` when `old` occurs exactly once. In an open buffer it is one undoable edit
+    /// (left dirty); otherwise the file is rewritten. False when the text is not found exactly once.
+    func applyProblemFix(url: URL, old: String, new: String) -> Bool {
+        guard !old.isEmpty else { return false }
+        func replaced(in text: String) -> String? {
+            let parts = text.components(separatedBy: old)
+            return parts.count == 2 ? parts[0] + new + parts[1] : nil
+        }
+        if let tab = editors[url.standardizedFileURL.path] {
+            guard let out = replaced(in: tab.textView.string) else { return false }
+            tab.replaceText(out, actionName: "Apply Claude Fix")
+            return true
+        }
+        guard let data = try? Data(contentsOf: url), data.count <= 5_000_000, let text = String(data: data, encoding: .utf8),
+              let out = replaced(in: text), (try? out.write(to: url, atomically: true, encoding: .utf8)) != nil else { return false }
+        return true
     }
 
     func fixTestWithClaude(_ r: TestResult) {

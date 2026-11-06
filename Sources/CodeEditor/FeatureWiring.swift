@@ -67,6 +67,8 @@ extension ProjectWindow {
         }
         problems.currentFileProvider = { [weak self] in self?.current?.url }
         problems.onFixWithClaude = { [weak self] url, d in self?.fixProblemWithClaude(url: url, d) }
+        problems.textProvider = { [weak self] url in self?.readText(url) }
+        problems.applyFix = { [weak self] url, old, new in self?.applyProblemFix(url: url, old: old, new: new) ?? false }
         problemsPanel = problems
         registerToolPanel(id: "problems", title: "Problems", view: problems.view)
         problemsObserver = NotificationCenter.default.addObserver(forName: LanguageServers.problemsDidChange, object: nil, queue: .main) { [weak self] _ in
