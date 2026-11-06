@@ -141,6 +141,7 @@ enum SelfTest {
                     SelfTestStructure.run(w: w)
                     SelfTestToolStrip.run(w: w)
                     SelfTestCommitPanel.run(w: w)
+                    SelfTestGitMenu.run(w: w)
                     SelfTestKeymap.run(app: app)
                     SelfTestClaudeData.run()
                     SelfTestRulesSkills.run()
