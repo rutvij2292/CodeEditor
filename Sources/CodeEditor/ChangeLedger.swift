@@ -37,7 +37,10 @@ struct LedgerSession: Codable, Equatable {
 /// The user's memory of what agents changed in one project: small, capped, persisted as one JSON file per project under
 /// Application Support. Loaded lazily on first access; no timers, no polling, no AI.
 final class ChangeLedger {
-    static var directory: URL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support/Kode/ledger")
+    /// Headless runs (self-tests, snapshots) never touch the real Application Support folder.
+    static var directory: URL = AppEnv.headless
+        ? FileManager.default.temporaryDirectory.appendingPathComponent("kode-ledger-headless")
+        : URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support/Kode/ledger")
     static var maxSessions = 300
     static var maxBytes = 256 * 1024
     static var maxFilesPerSession = 200

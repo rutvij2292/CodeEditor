@@ -20,6 +20,15 @@ final class ChangeReviewStore {
     }
     enum State { case pending, accepted, rejected }
 
+    /// What the change ledger needs about a file that was just accepted (the baseline is dropped right after).
+    struct AcceptedFile {
+        let path: String
+        let rel: String
+        let baseline: String?
+        let added: Int
+        let removed: Int
+    }
+
     final class Entry {
         let path: String
         var rel: String
@@ -62,6 +71,11 @@ final class ChangeReviewStore {
     /// Restores a whole file; the window routes this through an open editor (undoable) when there is one.
     var restore: (URL, String) -> Bool = { HunkActions.writeDisk($1, to: $0) }
     var now: () -> Date = Date.init
+    /// Fired once per session for every accept call (file / session / all) with what was accepted and `acceptNote`.
+    /// Hunk-level accepts do not fire it.
+    var onAccept: ((Session, [AcceptedFile], String) -> Void)?
+    /// The user's one-line note for the next accept; consumed (reset to "") by every accept call.
+    var acceptNote = ""
 
     private let queue = DispatchQueue(label: "ChangeReview", qos: .utility)
 
@@ -205,10 +219,23 @@ final class ChangeReviewStore {
         return true
     }
 
-    func acceptFile(_ e: Entry) {
-        guard e.state == .pending else { return }
-        e.state = .accepted
-        e.baseline = nil
+    func acceptFile(_ e: Entry) { accept([e]) }
+
+    private func accept(_ entries: [Entry]) {
+        var groups: [(session: Session, files: [AcceptedFile])] = []
+        var any = false
+        for e in entries where e.state == .pending {
+            any = true
+            let file = AcceptedFile(path: e.path, rel: e.rel, baseline: e.baseline, added: e.added, removed: e.removed)
+            e.state = .accepted
+            e.baseline = nil
+            guard let s = sessions.first(where: { $0.entries.contains { $0 === e } }) else { continue }
+            if let i = groups.firstIndex(where: { $0.session === s }) { groups[i].files.append(file) } else { groups.append((s, [file])) }
+        }
+        let note = acceptNote
+        acceptNote = ""
+        guard any else { return }
+        for g in groups { onAccept?(g.session, g.files, note) }
         changed()
     }
 
@@ -224,8 +251,8 @@ final class ChangeReviewStore {
         return true
     }
 
-    func acceptAll(in s: Session) { for e in s.pending { acceptFile(e) } }
-    func acceptAll() { for s in sessions { acceptAll(in: s) } }
+    func acceptAll(in s: Session) { accept(s.pending) }
+    func acceptAll() { accept(sessions.flatMap { $0.pending }) }
 
     /// Returns how many files could not be rejected (no baseline or write failure).
     @discardableResult

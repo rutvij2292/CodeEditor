@@ -21,6 +21,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     /// Claude Code CLI integration (ClaudeBridge.swift).
     var claudeBridge: ClaudeBridge?
     var changeReview: ChangeReviewStore?
+    var changeLedger: ChangeLedger?
     var bookmarks: BookmarkStore?
     var bookmarkPanelRebuild: (() -> Void)?
     var todoRescan: (() -> Void)?

@@ -224,6 +224,9 @@ extension ProjectWindow {
         }
         let panel = ChangeReviewPanel(store: store)
         panel.openFile = { [weak self] url in self?.open(url) }
+        let ledger = ChangeLedger(root: root)
+        changeLedger = ledger
+        store.onAccept = { [weak self] session, files, note in self?.recordLedger(session: session, files: files, note: note) }
         changeReview = store
         changeReviewPanel = panel
         registerToolPanel(id: "claude-changes", title: "Claude Changes", view: panel.view)
