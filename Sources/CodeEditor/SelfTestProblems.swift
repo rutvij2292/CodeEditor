@@ -185,6 +185,15 @@ enum SelfTestProblems {
         p.detail.performHandOff()
         check("apply: Hand to agent calls handOff once", handed == 1)
 
+        if let png = ProcessInfo.processInfo.environment["CE_PROBLEMS_SNAPSHOT"] {      // headless render for eyeballing the layout
+            _ = p.selectRow(containing: "Undefined variable")
+            p.snapshot(to: png + "-inspections.png")
+            p.select(tab: .file)
+            _ = p.selectRow(containing: "Unused import Y")
+            p.snapshot(to: png + "-file.png")
+            p.select(tab: .inspections)
+        }
+
         // More than 20 problems: one call of 20, the rest reported
         let many = FileProblems(url: a, diagnostics: (1...25).map { diag(2, "m\($0)", line: min($0, 8), source: "PHP", code: "c\($0)") })
         p.problemsProvider = { [many] }
