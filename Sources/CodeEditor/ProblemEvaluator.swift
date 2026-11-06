@@ -51,7 +51,7 @@ enum ProblemEvaluator {
         guard let arr = jsonArray(in: raw) else { return [:] }
         var out: [Int: ProblemAnswer] = [:]
         for o in arr {
-            guard let id = o["id"] as? Int, ids.contains(id),
+            guard let id = (o["id"] as? Int) ?? (o["id"] as? String).flatMap({ Int($0) }), ids.contains(id),
                   let v = (o["verdict"] as? String).flatMap(ProblemAnswer.Verdict.init(rawValue:)),
                   let d = (o["difficulty"] as? String).flatMap(ProblemAnswer.Difficulty.init(rawValue:)),
                   let e = o["explanation"] as? String else { continue }

@@ -348,13 +348,13 @@ final class ProblemsPanelController: NSObject, NSOutlineViewDataSource, NSOutlin
         scanProgress = "Scanning…"
         let s = ProjectScan(root: root)
         s.isPaused = { [weak self] in PowerState.windowHidden(self?.view) }
-        s.onProgress = { [weak self] files, problems in
-            guard let self, self.scan === s, self.scanState == .running else { return }
+        s.onProgress = { [weak self, weak s] files, problems in
+            guard let self, let s, self.scan === s, self.scanState == .running else { return }
             self.scanProgress = "Scanning… \(files) files, \(problems) problems"
             self.updateSummary()
         }
-        s.onFinish = { [weak self] results, cancelled in
-            guard let self, self.scan === s else { return }
+        s.onFinish = { [weak self, weak s] results, cancelled in
+            guard let self, let s, self.scan === s else { return }
             self.scanResults = results
             self.scanState = .done
             self.scanCancelled = cancelled
@@ -476,7 +476,7 @@ final class ProblemsPanelController: NSObject, NSOutlineViewDataSource, NSOutlin
         let source: [FileProblems]
         switch tab {
         case .file, .inspections: source = live.filter { $0.url.standardizedFileURL.path == cur }
-        case .project: source = scanState == .idle ? [] : mergedProject(live)
+        case .project: source = mergedProject(live)        // before a scan: the open files' problems only
         }
         let showE = errorsButton.state == .on, showW = warningsButton.state == .on
         let rp = root.path + "/"
@@ -527,7 +527,7 @@ final class ProblemsPanelController: NSObject, NSOutlineViewDataSource, NSOutlin
         func plural(_ n: Int, _ s: String) -> String { "\(n) \(s)\(n == 1 ? "" : "s")" }
         if tab == .project {
             switch scanState {
-            case .idle: return "Not scanned"
+            case .idle: return files == 0 ? "Not scanned" : "\(plural(errors, "error")) · \(plural(warnings, "warning")) in open files — press Scan for the whole project"
             case .running: return scanProgress
             case .done:
                 let counts = files == 0 ? "No problems" : "\(plural(errors, "error")) · \(plural(warnings, "warning")) · \(plural(files, "file"))"
@@ -735,7 +735,7 @@ final class ProblemsPanelController: NSObject, NSOutlineViewDataSource, NSOutlin
             texts[u.path] = t
             return t
         }
-        let refs = batch.enumerated().map { ProblemRef(id: $0.offset, url: $0.element.url, relPath: relPath($0.element.url), d: $0.element.d, fileText: text($0.element.url)) }
+        let refs = batch.enumerated().map { ProblemRef(id: $0.offset + 1, url: $0.element.url, relPath: relPath($0.element.url), d: $0.element.d, fileText: text($0.element.url)) }
         for n in batch { evaluating.insert(n.key); failures[n.key] = nil }
         evalNote = "Asking Claude about \(batch.count) problem\(batch.count == 1 ? "" : "s")…"
         updateSummary(); updateDetail()
@@ -750,7 +750,7 @@ final class ProblemsPanelController: NSObject, NSOutlineViewDataSource, NSOutlin
             case .success(let answers):
                 var got = 0
                 for (i, n) in batch.enumerated() {
-                    if let a = answers[i] {
+                    if let a = answers[i + 1] {
                         let ck = n.url.path + "|" + ProblemEvaluator.fingerprint(refs[i])
                         ProblemAnswerCache.shared.set(ck, a)
                         self.evaluated[n.key] = ck

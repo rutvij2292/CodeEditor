@@ -8,7 +8,8 @@ enum FastTier {
         set { UserDefaults.standard.set(newValue, forKey: "fastTier.enabled") }
     }
 
-    private static var rootCache: [String: String] = [:]     // dir -> project root ("" = none); main thread only
+    private static var rootCache: [String: String] = [:]     // dir -> project root ("" = none); guarded by rootLock (the Problems scan calls root(for:) off the main thread)
+    private static let rootLock = NSLock()
 
     static func register() {
         CompletionRegistry.register(FastTierProvider(), forExtensions: ["php", "phtml"])
@@ -18,7 +19,7 @@ enum FastTier {
     static func invalidate(root: URL) {
         FastProject.existing(root: root)?.markDirty()
         NativeEngines.invalidate(root: root)            // the other native engines (web, vue, js)
-        rootCache = rootCache.filter { $0.value == "" ? false : true }
+        rootLock.lock(); rootCache = rootCache.filter { $0.value == "" ? false : true }; rootLock.unlock()
     }
 
     /// Hot update from an FSEvents batch: the changed paths decide what is re-checked (see FastProject.noteChanged). Saving a PHP
@@ -26,14 +27,15 @@ enum FastTier {
     static func invalidate(root: URL, paths: [String]) {
         FastProject.existing(root: root)?.noteChanged(paths)
         NativeEngines.invalidate(root: root, paths: paths)
-        rootCache = rootCache.filter { $0.value == "" ? false : true }
+        rootLock.lock(); rootCache = rootCache.filter { $0.value == "" ? false : true }; rootLock.unlock()
     }
 
     /// Project root for a file: the Laravel root, else the nearest directory with composer.json.
     static func root(for file: URL) -> String? {
         var dir = file.deletingLastPathComponent().standardizedFileURL.path
         let start = dir
-        if let c = rootCache[start] { return c.isEmpty ? nil : c }
+        rootLock.lock(); let cached = rootCache[start]; rootLock.unlock()
+        if let c = cached { return c.isEmpty ? nil : c }
         // The project root is the nearest ancestor that is really a Laravel / Composer application (artisan or an installed vendor/).
         // A bare composer.json does not count by itself: nwidart modules (Modules/Users/composer.json) carry one each, and treating the
         // module as the project made every `App\...` import of its files "undefined". Without such an ancestor, the nearest composer.json wins.
@@ -47,8 +49,7 @@ enum FastTier {
             dir = parent
         }
         if result.isEmpty { result = firstComposer }
-        if rootCache.count > 300 { rootCache.removeAll() }
-        rootCache[start] = result
+        rootLock.lock(); if rootCache.count > 300 { rootCache.removeAll() }; rootCache[start] = result; rootLock.unlock()
         return result.isEmpty ? nil : result
     }
 

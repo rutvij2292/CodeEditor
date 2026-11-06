@@ -45,6 +45,7 @@ enum SelfTestProblems {
         check("parse: fenced with prose", ProblemEvaluator.parse(fenced, ids: [1, 2]).count == 2)
         check("parse: missing id and unknown id", ProblemEvaluator.parse(json, ids: [1, 3]).keys.sorted() == [1])
         check("parse: invalid enum drops entry", ProblemEvaluator.parse(#"[{"id":1,"verdict":"maybe","difficulty":"easy","explanation":"x"}]"#, ids: [1]).isEmpty)
+        check("parse: string ids are accepted", ProblemEvaluator.parse(#"[{"id":"1","verdict":"real","difficulty":"easy","explanation":"x"}]"#, ids: [1]).count == 1)
         check("parse: garbage", ProblemEvaluator.parse("I cannot help", ids: [1]).isEmpty && ProblemEvaluator.parse("[not json]", ids: [1]).isEmpty)
         let p = ProblemEvaluator.prompt([ref(1), ref(2)])
         check("prompt: ids, location, message, snippet, JSON-only", p.contains("Problem 1") && p.contains("Problem 2"))
@@ -98,6 +99,24 @@ enum SelfTestProblems {
         check("scan: only the non-skipped file with a problem is reported", res?.map { $0.url.lastPathComponent } == ["a.php"] && cancelled == false)
         check("scan: problem has position and source", res?.first?.diagnostics.first.map { $0.line == 1 && $0.source == "PHP" } == true)
 
+        let before = ProjectProblemScanner.filesRead
+        for name in ["composer.lock", "x.blade.php", "README.md", "data.json", "icon.svg"] { put(name, "{}"); _ = ProjectScan.analyzeFile(url: dir.appendingPathComponent(name), root: dir) }
+        check("scan: files no engine handles are not even read", ProjectProblemScanner.filesRead == before)
+        _ = ProjectScan.analyzeFile(url: dir.appendingPathComponent("ok.php"), root: dir)
+        check("scan: a PHP file is read", ProjectProblemScanner.filesRead == before + 1)
+
+        // FastTier.root(for:) is called by the scan thread while the main thread resolves roots too: hammer it from both.
+        let group = DispatchGroup()
+        for t in 0..<4 {
+            group.enter()
+            DispatchQueue.global().async {
+                for i in 0..<400 { _ = FastTier.root(for: dir.appendingPathComponent("d\(t)-\(i)/f.php")) }
+                group.leave()
+            }
+        }
+        for i in 0..<400 { _ = FastTier.root(for: dir.appendingPathComponent("m\(i)/f.php")) }
+        check("scan: FastTier.root(for:) survives concurrent use (no data race crash)", group.wait(timeout: .now() + 30) == .success)
+
         // 5,000,001-byte file is skipped
         let big = dir.appendingPathComponent("big.php")
         try? Data(count: 5_000_001).write(to: big)
@@ -109,6 +128,16 @@ enum SelfTestProblems {
         for i in 0..<8 { put("many/f\(i).php", "x") }
         ProjectProblemScanner.analyzerOverride = { url, _ in url.path.contains("/many/") ? (0..<1000).map { diag(2, "m\($0)", line: 1) } : [] }
         let capped = finish(ProjectScan(root: dir.appendingPathComponent("many")))?.results
+        final class Sentinel {}
+        weak var weakSentinel: Sentinel?
+        let s5 = ProjectScan(root: dir.appendingPathComponent("many"))
+        do {
+            let sentinel = Sentinel()
+            weakSentinel = sentinel
+            s5.onProgress = { _, _ in _ = sentinel }
+        }
+        _ = finish(s5)
+        check("scan: callbacks are released after the scan finishes (no retain cycle)", weakSentinel == nil)
         check("scan: at most 5,000 problems kept", capped.map { $0.reduce(0) { $0 + $1.diagnostics.count } } == 5000)
 
         var calls = 0
@@ -143,8 +172,13 @@ enum SelfTestProblems {
         check("tabs: Inspections groups category, then inspection, current file only",
               rows.first == "GROUP PHP (3)" && rows.contains("GROUP P1008 (1)") && rows.contains("GROUP unused-import (2)") && !rows.contains { $0.contains("Other thing") })
 
+        p.problemsProvider = { [] }
         p.select(tab: .project)
-        check("tabs: Project Errors is idle until scanned", p.rowDescriptions.isEmpty && p.emptyText.contains("Scan"))
+        check("tabs: Project Errors with nothing open is idle and says Scan", p.rowDescriptions.isEmpty && p.emptyText.contains("Scan"))
+        p.problemsProvider = { [fa, fb] }
+        p.reload()
+        check("tabs: before a scan, Project Errors still lists problems of open files and offers Scan",
+              p.rowDescriptions.contains { $0.hasPrefix("FILE a.php") } && p.rowDescriptions.contains { $0.hasPrefix("FILE b.php") } && p.statusText.contains("Scan"))
         p.setProjectResults([fa, fb])
         rows = p.rowDescriptions
         check("tabs: Project Errors lists scan results of every file", p.projectResultCount == 2 && rows.contains { $0.hasPrefix("FILE a.php") } && rows.contains { $0.hasPrefix("FILE b.php") })
@@ -154,9 +188,9 @@ enum SelfTestProblems {
         check("detail: selecting a problem shows its message", p.selectRow(containing: "Undefined variable") && p.detail.messageText.contains("Undefined variable $x"))
 
         p.select(tab: .inspections)
-        var calls = 0, lastCount = 0
+        var calls = 0, lastCount = 0, lastIds: [Int] = []
         p.evaluateOverride = { refs, done in
-            calls += 1; lastCount = refs.count
+            calls += 1; lastCount = refs.count; lastIds = refs.map { $0.id }
             var m: [Int: ProblemAnswer] = [:]
             for r in refs {
                 let first = r.d.message.hasPrefix("Undefined")
@@ -166,7 +200,7 @@ enum SelfTestProblems {
         }
         check("evaluate: selecting the category row", p.selectRow(containing: "GROUP PHP"))
         p.evaluateSelection()
-        check("evaluate: a group of 3 is ONE call", calls == 1 && lastCount == 3)
+        check("evaluate: a group of 3 is ONE call, ids are 1-based", calls == 1 && lastCount == 3 && lastIds == [1, 2, 3])
         var ok = true
         for m in ["Unused import X", "Unused import Y", "Undefined variable $x"] {
             ok = ok && p.selectRow(containing: m) && p.detail.explanationText == "expl " + m

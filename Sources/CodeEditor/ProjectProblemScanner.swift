@@ -8,6 +8,8 @@ enum ProjectProblemScanner {
     static let skipDirs: Set<String> = ["vendor", "node_modules", ".git", "storage", "dist", "build", ".next", ".nuxt", "coverage",
                                         ".idea", ".vscode", ".build", "__pycache__"]
     /// Test hook: replaces the real analyzers (any file is then read as text and passed to it).
+    /// Number of files `analyzeFile` actually read (test probe: files no engine handles must not be read).
+    static var filesRead = 0
     static var analyzerOverride: ((URL, NSString) -> [FileProblems.Diagnostic])?
 
     /// `relativePath` is relative to the project root.
@@ -73,16 +75,23 @@ final class ProjectScan {
             let wasCancelled = cancelled
             results.sort { $0.url.path < $1.url.path }
             let (s, t) = (scanned, total)
-            callbackQueue.async { self.onProgress?(s, t); self.onFinish?(results, wasCancelled) }
+            callbackQueue.async {
+                self.onProgress?(s, t)
+                let finish = self.onFinish
+                self.onProgress = nil; self.onFinish = nil          // drop the callbacks (they may capture this scan's owner)
+                finish?(results, wasCancelled)
+            }
         }
     }
 
     /// Reads and analyses one file with the native engine that handles it. nil: unreadable, binary, over the size cap, no engine, or
     /// no problems. The text is dropped when this returns. Safe to call from any background queue (also used when a file is saved).
     static func analyzeFile(url: URL, root: URL) -> FileProblems? {
+        guard ProjectProblemScanner.analyzerOverride != nil || NativePHPDiag.handles(url) || NativeJS.handles(url) || NativePy.handles(url) else { return nil }
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
         guard size > 0, size <= ProjectProblemScanner.maxFileBytes, let data = try? Data(contentsOf: url, options: .mappedIfSafe),
               !data.prefix(8000).contains(0), let str = String(data: data, encoding: .utf8) else { return nil }
+        ProjectProblemScanner.filesRead += 1
         let ns = NSString(string: str)
         var list: [FileProblems.Diagnostic] = []
         if let hook = ProjectProblemScanner.analyzerOverride {
