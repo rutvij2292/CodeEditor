@@ -58,6 +58,8 @@ final class FeatureMap {
 
     let root: URL
     var onChange: (() -> Void)?
+    /// Called after the file was written (an editor tab showing it can reload).
+    var onSaved: (() -> Void)?
     private var loaded: Payload?
     private var loadFailed = false
 
@@ -286,6 +288,7 @@ final class FeatureMap {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: fileURL, options: .atomic)
             loaded = p
+            onSaved?()
             return true
         } catch { return false }
     }

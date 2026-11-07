@@ -671,6 +671,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     }
 
     private func fileSaved(_ url: URL) {
+        if let map = featureMap, url.standardizedFileURL.path == map.fileURL.standardizedFileURL.path { map.reload() }     // map edited in a tab: refresh the panel
         if let root {
             let prefix = root.path + "/"
             if url.path.hasPrefix(prefix) { symbols?.update(file: String(url.path.dropFirst(prefix.count))) }

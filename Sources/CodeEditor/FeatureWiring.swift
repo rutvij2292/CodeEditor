@@ -119,6 +119,11 @@ extension ProjectWindow {
             guard let map else { return ([], 0) }
             return (map.features(touching: rels).map { $0.name }, map.features.isEmpty ? 0 : map.unmapped(in: rels).count)
         }
+        panel.openMapFile = { [weak self] url in self?.open(url) }
+        map.onSaved = { [weak self, weak map] in
+            guard let map else { return }
+            self?.editors[map.fileURL.standardizedFileURL.path]?.reloadIfChangedOnDisk()     // an open tab shows the panel's edit at once
+        }
         featureMap = map
         featureMapPanel = panel
         registerToolPanel(id: "features", title: "Features", view: panel.view)

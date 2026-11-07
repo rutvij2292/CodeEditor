@@ -65,6 +65,26 @@ enum SelfTestFeatureMap {
         mig.deleteFile()
         check("delete removes the file and empties the map", !mig.exists && mig.features.isEmpty && FeatureMap(root: dir.appendingPathComponent("migrate")).features.isEmpty)
 
+        var saved = 0
+        m.onSaved = { saved += 1 }
+        m.add(Feature.make(name: "Tmp"))
+        check("onSaved fires after a write", saved == 1)
+        var reloaded = 0
+        m.onChange = { reloaded += 1 }
+        var edited = (try? String(contentsOf: m.fileURL, encoding: .utf8)) ?? ""
+        edited = edited.replacingOccurrences(of: "Mails the PDF.", with: "Edited in the editor.")
+        try? edited.write(to: m.fileURL, atomically: true, encoding: .utf8)
+        m.reload()
+        check("reload picks up a hand edit and notifies the panel", m.features.first { $0.name == "Invoice email" }?.summary == "Edited in the editor." && reloaded == 1)
+        m.remove(id: m.features.first { $0.name == "Tmp" }!.id)
+        m.onChange = nil; m.onSaved = nil
+        try? "{ broken".write(to: m.fileURL, atomically: true, encoding: .utf8)
+        m.reload()
+        check("a hand edit that breaks the JSON is flagged and never overwritten", m.isReadOnly && !m.save() && (try? String(contentsOf: m.fileURL, encoding: .utf8)) == "{ broken")
+        try? edited.write(to: m.fileURL, atomically: true, encoding: .utf8)
+        m.reload()
+        check("fixing the file brings the map back", !m.isReadOnly && m.features.contains { $0.name == "Invoice email" })
+
         let drafts = FeatureMap.parseDrafts("Sure!\n```json\n[{\"name\":\"Payroll\",\"area\":\"HR\",\"summary\":\"s\",\"entryPoints\":[\"Route GET /payroll\"],\"files\":[\"app/Payroll/\"]},{\"name\":\"\",\"files\":[\"a\"]},{\"name\":\"NoFiles\",\"files\":[]}]\n```")
         check("drafts parse out of fenced prose; bad items dropped", drafts.count == 1 && drafts[0].name == "Payroll" && drafts[0].status == .draft && drafts[0].origin == .agent)
         check("garbage reply gives no drafts", FeatureMap.parseDrafts("sorry, I cannot").isEmpty && FeatureMap.parseDrafts("[not json]").isEmpty)

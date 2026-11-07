@@ -19,6 +19,8 @@ final class FeatureMapPanel: NSObject, NSTableViewDataSource, NSTableViewDelegat
     var clock: () -> Date = { Date() }
     /// Shows the Features tool window (set by the window).
     var reveal: (() -> Void)?
+    /// Opens the map's JSON file as an editor tab (set by the window).
+    var openMapFile: ((URL) -> Void)?
 
     private let search = NSSearchField()
     private let scope = NSSegmentedControl(labels: ["All", "Needs you"], trackingMode: .selectOne, target: nil, action: nil)
@@ -166,7 +168,7 @@ final class FeatureMapPanel: NSObject, NSTableViewDataSource, NSTableViewDelegat
         updateDetail()
         onAttention?(map.needsReviewCount(sessions: allSessions))
         let empty = map.features.isEmpty
-        emptyBox.isHidden = !empty
+        emptyBox.isHidden = !empty || map.isReadOnly
         emptyScan.isHidden = !LaravelFeatureSeeder.isLaravel(root)
         banner.stringValue = map.isReadOnly ? "features file could not be read: it is left untouched, nothing will be saved. Fix or remove it." : ""
         view.needsLayout = true
@@ -280,6 +282,12 @@ final class FeatureMapPanel: NSObject, NSTableViewDataSource, NSTableViewDelegat
         if map.confirm(id: f.id, now: clock()) { readIDs.remove(f.id) }
     }
 
+    @objc private func openMapInEditor() {
+        commitEdits()
+        if !map.exists { map.save() }
+        if map.exists { openMapFile?(map.fileURL) }
+    }
+
     @objc private func revealMapFile() {
         if map.exists { NSWorkspace.shared.activateFileViewerSelecting([map.fileURL]) }
         else { NSWorkspace.shared.open(FeatureMap.directory.deletingLastPathComponent().standardizedFileURL) }
@@ -312,6 +320,7 @@ final class FeatureMapPanel: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let d = m.addItem(withTitle: drafting == nil ? "Draft Unmapped Files with Claude…" : "Cancel Drafting", action: #selector(draftWithClaude), keyEquivalent: "")
         d.target = self
         m.addItem(.separator())
+        m.addItem(withTitle: "Open Map File in Editor", action: #selector(openMapInEditor), keyEquivalent: "").target = self
         m.addItem(withTitle: "Reveal Map File in Finder", action: #selector(revealMapFile), keyEquivalent: "").target = self
         m.addItem(withTitle: "Delete This Project's Map…", action: #selector(deleteMapFile), keyEquivalent: "").target = self
         m.addItem(.separator())
