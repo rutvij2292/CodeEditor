@@ -238,7 +238,6 @@ enum MainMenu {
             item("HTTP Client Tool Window", #selector(AppDelegate.showHttpTool(_:)), "8", [.command, .option], target: a),
             item("Claude Changes Tool Window", #selector(AppDelegate.showClaudeChangesTool(_:)), "3", [.command, .option], target: a),
             item("Change Ledger Tool Window", #selector(AppDelegate.showChangeLedgerTool(_:)), "4", [.command, .option], target: a),
-            item("Feature Map Tool Window", #selector(AppDelegate.showFeatureMapTool(_:)), "5", [.command, .option], target: a),
             item("Last Tool Window", #selector(AppDelegate.jumpToLastTool(_:)), f12, [], target: a),
             item("Hide All Tool Windows", #selector(AppDelegate.hideAllTools(_:)), f12, [.command, .shift], target: a),
             sep,

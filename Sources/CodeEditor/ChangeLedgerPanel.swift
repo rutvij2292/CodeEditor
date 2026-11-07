@@ -8,7 +8,6 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
     let view = LedgerRootView()
     var openFile: ((URL, Int) -> Void)?
     /// Feature names that claim any of the paths, and how many of the paths no feature claims (set by the window).
-    var featureLookup: (([String]) -> (names: [String], unmapped: Int))?
     let ledger: ChangeLedger
     private let root: URL
     private let search = NSSearchField()
@@ -66,6 +65,7 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
         touchesLabel.font = .systemFont(ofSize: 10.5)
         touchesLabel.textColor = .secondaryLabelColor
         touchesLabel.lineBreakMode = .byTruncatingTail
+        touchesLabel.isHidden = true      // spare line, kept for layout; nothing writes to it now
         noteHint.font = .systemFont(ofSize: 10.5)
         noteHint.textColor = .secondaryLabelColor
         noteView.isRichText = false
@@ -122,17 +122,6 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
         return d
     }
 
-    /// "Touches: A · B, 2 files not in any feature" (empty when there is nothing to say).
-    static func touches(_ r: (names: [String], unmapped: Int)?) -> String {
-        guard let r else { return "" }
-        var parts: [String] = []
-        if !r.names.isEmpty { parts.append("Touches: " + r.names.prefix(4).joined(separator: " · ") + (r.names.count > 4 ? " · +\(r.names.count - 4)" : "")) }
-        if r.unmapped > 0 { parts.append("\(r.unmapped) file\(r.unmapped == 1 ? "" : "s") not in any feature") }
-        return parts.joined(separator: ", ")
-    }
-
-    var touchesText: String { touchesLabel.isHidden ? "" : touchesLabel.stringValue }
-
     var rowDescriptions: [String] { shown.map(description) }
     var emptyText: String { emptyLabel.stringValue }
     var noteText: String { noteView.string }
@@ -159,10 +148,8 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
             for v in [titleLabel, touchesLabel, noteHint, noteScroll, symbolsScroll] as [NSView] { v.isHidden = true }
             return
         }
-        for v in [titleLabel, touchesLabel, noteHint, noteScroll, symbolsScroll] as [NSView] { v.isHidden = false }
+        for v in [titleLabel, noteHint, noteScroll, symbolsScroll] as [NSView] { v.isHidden = false }
         titleLabel.stringValue = "\(s.title)  ·  \(Self.date.string(from: s.started))"
-        touchesLabel.stringValue = Self.touches(featureLookup?(s.files.map { $0.rel }))
-        touchesLabel.isHidden = touchesLabel.stringValue.isEmpty
         view.needsLayout = true
         if noteView.string != s.note { noteView.string = s.note }      // do not move the caret when nothing changed
         noteDirty = false

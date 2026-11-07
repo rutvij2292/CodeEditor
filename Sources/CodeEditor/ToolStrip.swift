@@ -24,16 +24,15 @@ final class ToolStripView: NSView {
     ]
     static let middle: [Entry] = [
         Entry(id: "structure", symbol: "list.bullet.indent", title: "Structure", shortcut: "⌘7", kind: .bottom("structure")),
-        Entry(id: "bookmarks", symbol: "bookmark", title: "Bookmarks", shortcut: "⌥⌘2", kind: .bottom("bookmarks")),
     ]
     static let overflow: [Entry] = [
         Entry(id: "claude", symbol: "sparkles", title: "Claude Code", shortcut: "⌘3", kind: .claude),
         Entry(id: "find", symbol: "magnifyingglass", title: "Find", shortcut: "⌘4", kind: .bottom("find")),
         Entry(id: "todo", symbol: "checklist", title: "TODO", shortcut: "⌘8", kind: .bottom("todo")),
+        Entry(id: "bookmarks", symbol: "bookmark", title: "Bookmarks", shortcut: "⌥⌘2", kind: .bottom("bookmarks")),
         Entry(id: "http", symbol: "network", title: "HTTP Client", shortcut: "⌥⌘8", kind: .bottom("http")),
         Entry(id: "claude-changes", symbol: "doc.badge.gearshape", title: "Claude Changes", shortcut: nil, kind: .bottom("claude-changes")),
         Entry(id: "ledger", symbol: "book.closed", title: "Change Ledger", shortcut: "⌥⌘4", kind: .bottom("ledger")),
-        Entry(id: "features", symbol: "map", title: "Feature Map", shortcut: "⌥⌘5", kind: .bottom("features")),
         Entry(id: "terminal", symbol: "terminal", title: "Terminal", shortcut: "⌥F12", kind: .terminal),
     ]
     static let bottomGroup: [Entry] = [

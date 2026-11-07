@@ -152,7 +152,7 @@ final class FileTreeController: NSObject, NSOutlineViewDataSource, NSOutlineView
     var onSearchEverywhere: ((String) -> Void)?
     /// "Open in Terminal": the window opens a tab of its own terminal in that folder (Terminal.app only when this is unset).
     var onOpenTerminal: ((URL) -> Void)?
-    /// Extra context-menu items for a file or folder (the Feature Map's "Which Feature Is This?").
+    /// Extra context-menu items for a file or folder.
     var extraMenuItems: ((URL) -> [NSMenuItem])?
     let speed = SpeedSearch()
     /// Reports every file-system change the tree made, after the tree itself refreshed.

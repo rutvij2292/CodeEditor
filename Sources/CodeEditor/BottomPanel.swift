@@ -105,7 +105,11 @@ final class BottomPanel: NSObject {
 
     /// Shortcut shown in tab tooltips.
     static let shortcutHints: [String: String] = ["find": "⌘4", "problems": "⌘5", "tests": "⌘6", "structure": "⌘7", "todo": "⌘8",
-                                                  "git": "⌘9", "bookmarks": "⌥⌘2", "http": "⌥⌘8", "ledger": "⌥⌘4", "features": "⌥⌘5", "terminal": "⌥F12"]
+                                                  "git": "⌘9", "bookmarks": "⌥⌘2", "http": "⌥⌘8", "ledger": "⌥⌘4", "terminal": "⌥F12"]
+
+    /// Tabs kept off the strip until opened (menu, shortcut or the "…" button); the strip stays short.
+    static let hiddenUntilOpened: Set<String> = ["todo", "bookmarks", "http"]
+    private let moreButton = NSButton()
 
     private let defaults: UserDefaults
     private var persistenceKey: String?
@@ -120,6 +124,12 @@ final class BottomPanel: NSObject {
         view.onEscape = { [weak self] in self?.escapePressed() }
         view.onHide = { [weak self] in self?.requestClose() }
         view.onCycle = { [weak self] d in self?.cycle(d) }
+        moreButton.title = "…"
+        moreButton.isBordered = false
+        moreButton.toolTip = "More tool windows"
+        moreButton.target = self
+        moreButton.action = #selector(showMore(_:))
+        view.strip.addArrangedSubview(moreButton)
         NotificationCenter.default.addObserver(self, selector: #selector(themeChanged), name: Theme.didChange, object: nil)
     }
 
@@ -153,7 +163,7 @@ final class BottomPanel: NSObject {
         b.wantsLayer = true
         b.layer?.cornerRadius = 5
         buttons[id] = b
-        view.strip.addArrangedSubview(b)
+        view.strip.insertArrangedSubview(b, at: max(0, view.strip.arrangedSubviews.count - 1))
         if selectedID == nil || preferredSelection == id { select(id, notify: false) } else { restyleButtons() }
         installCloseRequest? { [weak self] in self?.requestClose() }
     }
@@ -233,6 +243,17 @@ final class BottomPanel: NSObject {
     private func escapePressed() { onEscape?() }
     @objc private func closeClicked() { requestClose() }
     @objc private func tabClicked(_ b: NSButton) { if let id = b.identifier?.rawValue { show(id) } }
+    @objc private func showMore(_ b: NSButton) {
+        let menu = NSMenu()
+        for t in tools where Self.hiddenUntilOpened.contains(t.id) {
+            let item = NSMenuItem(title: t.title, action: #selector(moreChosen(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = t.id
+            item.state = t.id == selectedID ? .on : .off
+            menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: b.bounds.height + 2), in: b)
+    }
+    @objc private func moreChosen(_ i: NSMenuItem) { if let id = i.representedObject as? String { show(id) } }
     @objc private func themeChanged() { view.restyle(); restyleButtons() }
 
     private func select(_ id: String, notify: Bool) {
@@ -267,6 +288,9 @@ final class BottomPanel: NSObject {
             }
             b.attributedTitle = text
             b.layer?.backgroundColor = selected ? Theme.palette.tabSelected.cgColor : nil
+            b.isHidden = Self.hiddenUntilOpened.contains(tool.id) && !selected
         }
+        moreButton.isHidden = !tools.contains { Self.hiddenUntilOpened.contains($0.id) }
+        moreButton.attributedTitle = NSAttributedString(string: "…", attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: Theme.gutter])
     }
 }

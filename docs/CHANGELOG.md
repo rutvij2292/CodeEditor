@@ -2,6 +2,10 @@
 
 Version is `0.<commit count>` (see build-app.sh); the installer is `dist/Kode-<version>.dmg`.
 
+## Unreleased
+- **Feature Map removed** (it listed files with descriptions; no evidence it helps, and it crowded the tool strip). Its Laravel scan, file-tree items and the Ledger "Touches" line went with it. Old map files in ~/Documents/Kode/Feature Maps are left alone; delete them if you like.
+- **Shorter tool-window tab strip**: TODO, Bookmarks and HTTP no longer sit on the bottom tab strip until opened; the new `…` button, the View menu and their shortcuts open them. Bookmarks moved from the side strip to its More menu.
+
 ## 0.332
 - **Feature Map** (new **Features** tool window, ⌥⌘5, tool strip, View menu): a per-project map of what the app does, in your words: feature name, area, a summary, how a user reaches it (route, schedule, command, menu) and which files hold it. Search across all of it, group by area, and an **Unmapped files** row lists every project file no feature claims.
 - **Stay the author**: features written by a tool arrive as *drafts*. The first Confirm only moves you into the summary to read it; the next one confirms (editing it counts as reading). A feature you confirmed turns orange (**needs your review**) when an accepted agent change later touches its files; its History tab lists those sessions with your notes. Red = files that no longer exist. The tab badge shows how many features need you.

@@ -23,8 +23,6 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     var changeReview: ChangeReviewStore?
     var changeLedger: ChangeLedger?
     var changeLedgerPanel: ChangeLedgerPanel?
-    var featureMap: FeatureMap?
-    var featureMapPanel: FeatureMapPanel?
     var bookmarks: BookmarkStore?
     var bookmarkPanelRebuild: (() -> Void)?
     var todoRescan: (() -> Void)?
@@ -182,7 +180,6 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             if id == "git" { self?.ensureGitPanel() }
             if id == "problems" { self?.problemsPanel?.reload() }
             if id == "ledger" { self?.changeLedgerPanel?.reload() }
-            if id == "features" { self?.featureMapPanel?.reload() }
             if id == "todo" { self?.todoRescan?() }
             if id == "structure" { DispatchQueue.main.async { self?.refreshStructure() } }
         }
@@ -671,7 +668,6 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     }
 
     private func fileSaved(_ url: URL) {
-        if let map = featureMap, url.standardizedFileURL.path == map.fileURL.standardizedFileURL.path { map.reload() }     // map edited in a tab: refresh the panel
         if let root {
             let prefix = root.path + "/"
             if url.path.hasPrefix(prefix) { symbols?.update(file: String(url.path.dropFirst(prefix.count))) }
@@ -795,7 +791,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     func confirmCloseAll() -> Bool { editors.values.allSatisfy { confirmDiscard($0) } }
 
     /// Saves a Ledger note that is still being typed (closing a window or quitting does not end text editing).
-    func commitPendingNotes() { changeLedgerPanel?.commitNote(); featureMapPanel?.commitEdits() }
+    func commitPendingNotes() { changeLedgerPanel?.commitNote() }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool { confirmCloseAll() }
 

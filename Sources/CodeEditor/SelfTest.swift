@@ -64,7 +64,6 @@ enum SelfTest {
         }
 
         let w = app.openProject(dir)
-        if AppEnv.value("CE_FEATURES_ONLY") != nil { SelfTestFeatureMap.run(w: w); finish() }
         if AppEnv.value("CE_LEDGER_ONLY") != nil { SelfTestChangeLedger.run(w: w); finish() }      // fast path while developing the ledger
         check("project root set", w.root == dir.standardizedFileURL)
         check("opening same project reuses window", app.openProject(dir) === w)
@@ -144,7 +143,6 @@ enum SelfTest {
                     SelfTestToolStrip.run(w: w)
                     SelfTestProblems.run(w: w)
                     SelfTestChangeLedger.run(w: w)
-                    SelfTestFeatureMap.run(w: w)
                     SelfTestCommitPanel.run(w: w)
                     SelfTestGitMenu.run(w: w)
                     SelfTestKeymap.run(app: app)

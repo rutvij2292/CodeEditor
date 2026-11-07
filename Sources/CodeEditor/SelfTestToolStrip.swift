@@ -32,7 +32,7 @@ enum SelfTestToolStrip {
         check("tool strip: active follows tab switch", strip.isActive(git) && !strip.isActive(problems) && strip.buttons["problems"]?.layer?.backgroundColor == nil)
         strip.buttons["git"]?.performClick(nil)
         check("tool strip: clicking the active tool hides it", !w.bottom.isVisible && !strip.isActive(git))
-        for id in ["structure", "bookmarks", "tests"] {
+        for id in ["structure", "tests"] {
             strip.buttons[id]?.performClick(nil)
             check("tool strip: \(id) button opens the \(id) tool", w.bottom.isVisible && w.bottom.selectedID == id)
             w.bottom.hide()

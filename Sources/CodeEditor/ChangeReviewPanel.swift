@@ -264,7 +264,7 @@ extension ProjectWindow {
         let ledger = ChangeLedger(root: root)
         changeLedger = ledger
         store.onAccept = { [weak self] session, files, note in
-            self?.recordLedger(session: session, files: files, note: note) { self?.featureMapPanel?.reload() }
+            self?.recordLedger(session: session, files: files, note: note) { }
         }
         let ledgerPanel = ChangeLedgerPanel(ledger: ledger, root: root)
         ledgerPanel.openFile = { [weak self] url, line in
@@ -273,7 +273,6 @@ extension ProjectWindow {
         }
         changeLedgerPanel = ledgerPanel
         registerToolPanel(id: "ledger", title: "Ledger", view: ledgerPanel.view)
-        installFeatureMap(root: root, ledger: ledger)
         changeReview = store
         changeReviewPanel = panel
         registerToolPanel(id: "claude-changes", title: "Claude Changes", view: panel.view)
