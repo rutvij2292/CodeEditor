@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 
 /// CE_SELFTEST: the feature map (store, staleness, Laravel scan, draft parsing, panel).
 enum SelfTestFeatureMap {
@@ -15,6 +16,10 @@ enum SelfTestFeatureMap {
         runPanel(dir)
     }
 
+    static func sha(_ root: URL) -> String {
+        SHA256.hash(data: Data(VCSKind.canonical(root.standardizedFileURL.path).utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
     private static func session(_ id: String, _ rels: [String], at: Date) -> LedgerSession {
         LedgerSession(id: id, started: at, updated: at, title: "agent " + id, note: "note " + id, files: rels.map { SelfTestChangeLedger.file($0) })
     }
@@ -26,7 +31,8 @@ enum SelfTestFeatureMap {
         let t0 = Date(timeIntervalSince1970: 1_800_000_000)
 
         let m = FeatureMap(root: root)
-        check("lives outside the project", !m.fileURL.path.hasPrefix(root.path) && !m.exists)
+        check("lives outside the project, named after it", !m.fileURL.path.hasPrefix(root.path) && !m.exists && m.fileURL.lastPathComponent.hasPrefix("proj-") && m.fileURL.pathExtension == "json")
+        check("two projects with the same folder name get different files", FeatureMap(root: dir.appendingPathComponent("x/proj")).fileURL != m.fileURL)
         let f = m.add(Feature.make(name: "Invoice email", area: "Email", summary: "Mails the PDF.", entryPoints: ["Scheduler: daily 08:00"], files: ["app/Mail/", "app/Jobs/Send*.php", "routes/console.php"]))
         check("persists across instances", FeatureMap(root: root).features.first?.name == "Invoice email" && FeatureMap(root: root).features[0].entryPoints == ["Scheduler: daily 08:00"])
         check("claims exact, folder and glob", f.claims("routes/console.php") && f.claims("app/Mail/Invoice.php") && f.claims("app/Jobs/SendAll.php") && !f.claims("app/Jobs/Other.php") && !f.claims("app/Mailer.php"))
@@ -47,6 +53,17 @@ enum SelfTestFeatureMap {
         check("history is newest first and only its files", m.history(of: cur, sessions: sessions).map { $0.id } == ["new", "old"])
         check("features(touching:) finds the owner", m.features(touching: ["app/Mail/Invoice.php"]).map { $0.id } == [f.id] && m.features(touching: ["nope.php"]).isEmpty)
         check("search matches summary, files and entry points", FeatureMap.filter(m.features, query: "daily 08").count == 1 && FeatureMap.filter(m.features, query: "mails the pdf").count == 1 && FeatureMap.filter(m.features, query: "zzz").isEmpty)
+
+        let legacy = dir.appendingPathComponent("legacy"), savedLegacy = FeatureMap.legacyDirectory
+        FeatureMap.legacyDirectory = legacy
+        let mig = FeatureMap(root: dir.appendingPathComponent("migrate"))
+        try? FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        let oldName = SelfTestFeatureMap.sha(dir.appendingPathComponent("migrate")) + ".json"
+        try? #"{"version":1,"ignore":[],"features":[{"id":"z","name":"Old","area":"","summary":"kept","entryPoints":[],"files":[],"notes":"","status":"draft","origin":"you"}]}"#.write(to: legacy.appendingPathComponent(oldName), atomically: true, encoding: .utf8)
+        check("a map from the first version moves over once", mig.features.first?.summary == "kept" && !FileManager.default.fileExists(atPath: legacy.appendingPathComponent(oldName).path) && mig.exists)
+        FeatureMap.legacyDirectory = savedLegacy
+        mig.deleteFile()
+        check("delete removes the file and empties the map", !mig.exists && mig.features.isEmpty && FeatureMap(root: dir.appendingPathComponent("migrate")).features.isEmpty)
 
         let drafts = FeatureMap.parseDrafts("Sure!\n```json\n[{\"name\":\"Payroll\",\"area\":\"HR\",\"summary\":\"s\",\"entryPoints\":[\"Route GET /payroll\"],\"files\":[\"app/Payroll/\"]},{\"name\":\"\",\"files\":[\"a\"]},{\"name\":\"NoFiles\",\"files\":[]}]\n```")
         check("drafts parse out of fenced prose; bad items dropped", drafts.count == 1 && drafts[0].name == "Payroll" && drafts[0].status == .draft && drafts[0].origin == .agent)

@@ -280,6 +280,21 @@ final class FeatureMapPanel: NSObject, NSTableViewDataSource, NSTableViewDelegat
         if map.confirm(id: f.id, now: clock()) { readIDs.remove(f.id) }
     }
 
+    @objc private func revealMapFile() {
+        if map.exists { NSWorkspace.shared.activateFileViewerSelecting([map.fileURL]) }
+        else { NSWorkspace.shared.open(FeatureMap.directory.deletingLastPathComponent().standardizedFileURL) }
+    }
+
+    @objc private func deleteMapFile() {
+        let alert = NSAlert()
+        alert.messageText = "Delete this project's feature map?"
+        alert.informativeText = "All \(map.features.count) features and your summaries are removed (\(map.fileURL.lastPathComponent)). Your code is not touched."
+        alert.addButton(withTitle: "Delete"); alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        selectedID = nil; showUnmapped = false
+        map.deleteFile()
+    }
+
     @objc private func deleteFeature() {
         guard let f = selectedFeature else { return }
         let alert = NSAlert()
@@ -296,6 +311,9 @@ final class FeatureMapPanel: NSObject, NSTableViewDataSource, NSTableViewDelegat
         if LaravelFeatureSeeder.isLaravel(root) { m.addItem(withTitle: "Scan Laravel Project (schedule, commands, mail, controllers)", action: #selector(scanLaravel), keyEquivalent: "").target = self }
         let d = m.addItem(withTitle: drafting == nil ? "Draft Unmapped Files with Claude…" : "Cancel Drafting", action: #selector(draftWithClaude), keyEquivalent: "")
         d.target = self
+        m.addItem(.separator())
+        m.addItem(withTitle: "Reveal Map File in Finder", action: #selector(revealMapFile), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Delete This Project's Map…", action: #selector(deleteMapFile), keyEquivalent: "").target = self
         m.addItem(.separator())
         let del = m.addItem(withTitle: "Delete Selected Feature…", action: #selector(deleteFeature), keyEquivalent: "")
         del.target = self; del.isEnabled = selectedFeature != nil

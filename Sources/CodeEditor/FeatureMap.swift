@@ -44,7 +44,7 @@ struct FeatureAttention: Equatable {
     var isClean: Bool { !isDraft && changedSince.isEmpty && missingFiles.isEmpty }
 }
 
-/// The owner's map of what the project does and where it lives: one small JSON file per project under Application Support (never
+/// The owner's map of what the project does and where it lives: one small JSON file per project under ~/Documents/Kode/Feature Maps (never
 /// inside the project: work repos are shared with teammates). Loaded lazily on first access; no timers, no polling, no AI
 /// (drafting with Claude only happens when the user asks).
 final class FeatureMap {
@@ -63,16 +63,42 @@ final class FeatureMap {
 
     init(root: URL) { self.root = root }
 
-    /// Headless runs (self-tests, snapshots) never touch the real Application Support folder.
+    /// Visible, easy to find and delete: ~/Documents/Kode/Feature Maps. Never inside a project (work repos are shared with teammates).
+    /// Headless runs (self-tests, snapshots) never touch the real folders.
     static var directory: URL = AppEnv.headless
         ? FileManager.default.temporaryDirectory.appendingPathComponent("kode-features-headless")
+        : URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents/Kode/Feature Maps")
+    /// Where the first version stored maps; a map found there is moved to `directory` once.
+    static var legacyDirectory: URL? = AppEnv.headless ? nil
         : URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support/Kode/features")
 
-    var fileURL: URL {
+    private var hash: String {
         let key = VCSKind.canonical(root.standardizedFileURL.path)
-        let hash = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
-        return Self.directory.appendingPathComponent(hash + ".json")
+        return SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
     }
+
+    /// `<project folder name>-<8 hex>.json`: recognisable in Finder, unique per project path.
+    var fileURL: URL {
+        let name = root.lastPathComponent.replacingOccurrences(of: "/", with: "-")
+        return Self.directory.appendingPathComponent("\(name)-\(hash.prefix(8)).json")
+    }
+
+    /// Moves a map saved by the first version (Application Support, named by the full hash) next to the new ones.
+    private func migrateLegacy() {
+        guard let old = Self.legacyDirectory?.appendingPathComponent(hash + ".json"), FileManager.default.fileExists(atPath: old.path),
+              !FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        try? FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+        try? FileManager.default.moveItem(at: old, to: fileURL)
+    }
+
+    /// Deletes this project's map file and starts empty.
+    func deleteFile() {
+        try? FileManager.default.removeItem(at: fileURL)
+        loaded = Payload(version: Self.version, ignore: [], features: [])
+        loadFailed = false
+        onChange?()
+    }
+
     var exists: Bool { FileManager.default.fileExists(atPath: fileURL.path) }
 
     private var payload: Payload {
@@ -96,6 +122,7 @@ final class FeatureMap {
     private func reload(notify: Bool) {
         loaded = Payload(version: Self.version, ignore: [], features: [])
         loadFailed = false
+        migrateLegacy()
         let fm = FileManager.default
         if fm.fileExists(atPath: fileURL.path) {
             if let data = try? Data(contentsOf: fileURL) {
