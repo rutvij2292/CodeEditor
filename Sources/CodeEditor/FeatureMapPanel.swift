@@ -177,6 +177,7 @@ final class FeatureMapPanel: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var selectedFeature: Feature? { selectedID.flatMap { id in map.features.first { $0.id == id } } }
 
     private func updateDetail() {
+        defer { view.needsLayout = true }      // which controls are visible decides the layout
         let f = selectedFeature
         let editor: [NSView] = [nameField, statusLabel, confirmButton, summaryHint, entryHint, summaryScroll, entryScroll, tabs, addFilesButton]
         if showUnmapped {

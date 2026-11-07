@@ -195,6 +195,13 @@ enum SelfTestFeatureMap {
         panel.selectUnmapped()
         check("panel: unmapped row lists the files nothing claims", panel.detailDescriptions == ["UNMAPPED c.php"] && panel.statusText.hasPrefix("1 files no feature claims"))
 
+        panel.view.frame = NSRect(x: 0, y: 0, width: 900, height: 270)
+        panel.selectUnmapped(); panel.view.layoutSubtreeIfNeeded()
+        panel.select(featureID: a.id); panel.view.layoutSubtreeIfNeeded()
+        let kids = panel.view.subviews.compactMap { $0 as? NSScrollView }
+        let sums = kids.first { $0.documentView is NSTextView && $0.frame.width > 250 && $0.frame.minY < 120 }, files = kids.last { !($0.documentView is NSTextView) && $0.frame.minX > 300 }
+        check("layout: after leaving the Unmapped row the file list sits below the header and summary, not over them",
+              sums != nil && files != nil && files!.frame.minY >= sums!.frame.maxY + 20 && panel.view.subviews.contains { ($0 as? NSTextField)?.stringValue.hasPrefix("Confirmed") == true && $0.frame.minX > 400 })
         var revealed = 0
         panel.reveal = { revealed += 1 }
         let items = panel.treeMenuItems(for: root.appendingPathComponent("a.php"))
