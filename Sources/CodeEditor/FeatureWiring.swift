@@ -97,3 +97,30 @@ extension ProjectWindow {
         if termDock.side == "bottom" { registerBottomTerminal() }
     }
 }
+
+// MARK: - Feature Map
+
+extension ProjectWindow {
+    /// Creates the per-project feature map and its "Features" bottom panel (called once per window, from `installChangeReview`).
+    func installFeatureMap(root: URL, ledger: ChangeLedger) {
+        guard featureMap == nil else { return }
+        let map = FeatureMap(root: root)
+        let panel = FeatureMapPanel(map: map, root: root)
+        panel.openFile = { [weak self] url, line in
+            self?.open(url, line: line)
+            self?.current?.textView.goToLine(line, column: 1)
+        }
+        panel.projectFiles = { [weak self] in self?.projectFiles ?? [] }
+        panel.sessions = { [weak ledger] in ledger?.sessions ?? [] }
+        panel.onAttention = { [weak self] n in self?.setToolPanelBadge(n > 0 ? "\(n)" : nil, for: "features") }
+        panel.reveal = { [weak self] in self?.showToolPanel("features") }
+        tree.extraMenuItems = { [weak panel] url in panel?.treeMenuItems(for: url) ?? [] }
+        changeLedgerPanel?.featureLookup = { [weak map] rels in
+            guard let map else { return ([], 0) }
+            return (map.features(touching: rels).map { $0.name }, map.features.isEmpty ? 0 : map.unmapped(in: rels).count)
+        }
+        featureMap = map
+        featureMapPanel = panel
+        registerToolPanel(id: "features", title: "Features", view: panel.view)
+    }
+}

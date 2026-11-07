@@ -7,12 +7,15 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
 
     let view = LedgerRootView()
     var openFile: ((URL, Int) -> Void)?
+    /// Feature names that claim any of the paths, and how many of the paths no feature claims (set by the window).
+    var featureLookup: (([String]) -> (names: [String], unmapped: Int))?
     let ledger: ChangeLedger
     private let root: URL
     private let search = NSSearchField()
     private let sessionsTable = SpeedTableView()
     private let sessionsScroll = NSScrollView()
     private let titleLabel = NSTextField(labelWithString: "")
+    private let touchesLabel = NSTextField(labelWithString: "")
     private let noteHint = NSTextField(labelWithString: "Your note: what does this do, in your words?")
     private let noteView = NSTextView()
     private let noteScroll = NSScrollView()
@@ -60,6 +63,9 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
         symbolsScroll.drawsBackground = false
         titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
         titleLabel.lineBreakMode = .byTruncatingTail
+        touchesLabel.font = .systemFont(ofSize: 10.5)
+        touchesLabel.textColor = .secondaryLabelColor
+        touchesLabel.lineBreakMode = .byTruncatingTail
         noteHint.font = .systemFont(ofSize: 10.5)
         noteHint.textColor = .secondaryLabelColor
         noteView.isRichText = false
@@ -80,8 +86,8 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
         emptyLabel.textColor = .secondaryLabelColor
         divider.wantsLayer = true
         divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
-        for v in [search, sessionsScroll, divider, titleLabel, noteHint, noteScroll, symbolsScroll, emptyLabel] as [NSView] { view.addSubview(v) }
-        view.search = search; view.sessionsScroll = sessionsScroll; view.divider = divider; view.titleLabel = titleLabel; view.noteHint = noteHint
+        for v in [search, sessionsScroll, divider, titleLabel, touchesLabel, noteHint, noteScroll, symbolsScroll, emptyLabel] as [NSView] { view.addSubview(v) }
+        view.search = search; view.sessionsScroll = sessionsScroll; view.divider = divider; view.titleLabel = titleLabel; view.touchesLabel = touchesLabel; view.noteHint = noteHint
         view.noteScroll = noteScroll; view.symbolsScroll = symbolsScroll; view.emptyLabel = emptyLabel
         ledger.onChange = { [weak self] in self?.reload() }
         updateRight()
@@ -116,6 +122,17 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
         return d
     }
 
+    /// "Touches: A · B, 2 files not in any feature" (empty when there is nothing to say).
+    static func touches(_ r: (names: [String], unmapped: Int)?) -> String {
+        guard let r else { return "" }
+        var parts: [String] = []
+        if !r.names.isEmpty { parts.append("Touches: " + r.names.prefix(4).joined(separator: " · ") + (r.names.count > 4 ? " · +\(r.names.count - 4)" : "")) }
+        if r.unmapped > 0 { parts.append("\(r.unmapped) file\(r.unmapped == 1 ? "" : "s") not in any feature") }
+        return parts.joined(separator: ", ")
+    }
+
+    var touchesText: String { touchesLabel.isHidden ? "" : touchesLabel.stringValue }
+
     var rowDescriptions: [String] { shown.map(description) }
     var emptyText: String { emptyLabel.stringValue }
     var noteText: String { noteView.string }
@@ -139,11 +156,14 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
             symbolRows = []
             symbolsTable.reloadData()
             noteDirty = false
-            for v in [titleLabel, noteHint, noteScroll, symbolsScroll] as [NSView] { v.isHidden = true }
+            for v in [titleLabel, touchesLabel, noteHint, noteScroll, symbolsScroll] as [NSView] { v.isHidden = true }
             return
         }
-        for v in [titleLabel, noteHint, noteScroll, symbolsScroll] as [NSView] { v.isHidden = false }
+        for v in [titleLabel, touchesLabel, noteHint, noteScroll, symbolsScroll] as [NSView] { v.isHidden = false }
         titleLabel.stringValue = "\(s.title)  ·  \(Self.date.string(from: s.started))"
+        touchesLabel.stringValue = Self.touches(featureLookup?(s.files.map { $0.rel }))
+        touchesLabel.isHidden = touchesLabel.stringValue.isEmpty
+        view.needsLayout = true
         if noteView.string != s.note { noteView.string = s.note }      // do not move the caret when nothing changed
         noteDirty = false
         symbolRows = s.files.flatMap { f in [SymbolRow.file(f)] + f.symbols.map { SymbolRow.symbol(f, $0) } }
@@ -262,7 +282,7 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
 
 /// Frame layout of the Ledger panel: sessions on the left (search box above), note and methods on the right.
 final class LedgerRootView: NSView {
-    var search: NSView!, sessionsScroll: NSView!, divider: NSView!, titleLabel: NSView!, noteHint: NSView!
+    var search: NSView!, sessionsScroll: NSView!, divider: NSView!, titleLabel: NSView!, touchesLabel: NSView!, noteHint: NSView!
     var noteScroll: NSView!, symbolsScroll: NSView!, emptyLabel: NSView!
     override var isFlipped: Bool { true }
 
@@ -275,8 +295,10 @@ final class LedgerRootView: NSView {
         divider.frame = NSRect(x: leftW, y: 0, width: 1, height: h)
         let rx = leftW + 10, rw = max(0, w - leftW - 18)
         titleLabel.frame = NSRect(x: rx, y: 8, width: rw, height: 18)
-        noteHint.frame = NSRect(x: rx, y: 28, width: rw, height: 14)
-        noteScroll.frame = NSRect(x: rx, y: 44, width: rw, height: min(96, max(40, h * 0.3)))
+        let t = touchesLabel.isHidden ? 0 : CGFloat(16)
+        touchesLabel.frame = NSRect(x: rx, y: 26, width: rw, height: 14)
+        noteHint.frame = NSRect(x: rx, y: 28 + t, width: rw, height: 14)
+        noteScroll.frame = NSRect(x: rx, y: 44 + t, width: rw, height: min(96, max(40, h * 0.3)))
         let sy = noteScroll.frame.maxY + 8
         symbolsScroll.frame = NSRect(x: leftW + 1, y: sy, width: w - leftW - 1, height: max(0, h - sy))
         emptyLabel.frame = NSRect(x: 12, y: h / 2 - 20, width: leftW - 24, height: 40)

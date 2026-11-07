@@ -33,6 +33,7 @@ final class ToolStripView: NSView {
         Entry(id: "http", symbol: "network", title: "HTTP Client", shortcut: "⌥⌘8", kind: .bottom("http")),
         Entry(id: "claude-changes", symbol: "doc.badge.gearshape", title: "Claude Changes", shortcut: nil, kind: .bottom("claude-changes")),
         Entry(id: "ledger", symbol: "book.closed", title: "Change Ledger", shortcut: "⌥⌘4", kind: .bottom("ledger")),
+        Entry(id: "features", symbol: "map", title: "Feature Map", shortcut: "⌥⌘5", kind: .bottom("features")),
         Entry(id: "terminal", symbol: "terminal", title: "Terminal", shortcut: "⌥F12", kind: .terminal),
     ]
     static let bottomGroup: [Entry] = [

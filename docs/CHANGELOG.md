@@ -2,6 +2,13 @@
 
 Version is `0.<commit count>` (see build-app.sh); the installer is `dist/Kode-<version>.dmg`.
 
+## 0.332
+- **Feature Map** (new **Features** tool window, ⌥⌘5, tool strip, View menu): a per-project map of what the app does, in your words: feature name, area, a summary, how a user reaches it (route, schedule, command, menu) and which files hold it. Search across all of it, group by area, and an **Unmapped files** row lists every project file no feature claims.
+- **Stay the author**: features written by a tool arrive as *drafts*. The first Confirm only moves you into the summary to read it; the next one confirms (editing it counts as reading). A feature you confirmed turns orange (**needs your review**) when an accepted agent change later touches its files; its History tab lists those sessions with your notes. Red = files that no longer exist. The tab badge shows how many features need you.
+- **Scan Laravel Project** (no AI, only when you press it): finds scheduled tasks with their times (`Schedule::command(...)->dailyAt('08:00')`), Artisan commands, mailables / notifications / jobs / listeners with the files that use them, and controllers with their routes. **Draft Unmapped Files with Claude** does one one-shot call for the rest, also as drafts.
+- **From the file tree**: right-click a file or folder > *Which Feature Is This?* or *Add to Feature*. The Ledger's session view now says *Touches: <features>, N files not in any feature*.
+- Stored per project in Application Support (never inside your project, so work repos stay clean), written atomically, a file Kode cannot read is never overwritten. Loaded lazily, no timers, no polling.
+
 ## 0.330
 - **Change Ledger**: when you accept agent changes in Claude Changes (a file, a session or all), Kode records them in a per-project ledger: the agent session title, date, files, and the changed methods / classes with +/- lines. Open it from the new **Ledger** tool window (⌥⌘4, tool strip, View menu).
 - **Your own notes**: the Claude Changes panel has a note field ("What does this change do, in your words?"). Whatever you type is saved with the next accept (empty is fine, Accept is never blocked). In the Ledger you can edit any note later, search across title, note, files and methods, and double-click a method to jump to it.
