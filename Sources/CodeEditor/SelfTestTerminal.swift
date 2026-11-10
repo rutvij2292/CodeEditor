@@ -42,6 +42,13 @@ extension SelfTest {
         check("file references: several files, trailing space",
               TerminalBridge.fileReferences([root.appendingPathComponent("a.php"), root.appendingPathComponent("x y/b.js")], root: root)
               == "@a.php @\"x y/b.js\" ")
+        let fenceDoc = ["intro", "  ```sql", "  SELECT *", "    FROM users;", "  ```", "after"]
+        check("code block: fenced, indent stripped, fences excluded",
+              TerminalCodeBlocks.block(in: fenceDoc, at: 3) == "SELECT *\n  FROM users;" && TerminalCodeBlocks.block(in: fenceDoc, at: 1) == nil
+              && TerminalCodeBlocks.block(in: fenceDoc, at: 0) == nil)
+        let loose = ["$ ls", "", "  $a = 1;", "  return $a;", "", "done"]
+        check("code block: unfenced run of PHP lines", TerminalCodeBlocks.block(in: loose, at: 2) == "$a = 1;\nreturn $a;")
+        check("code block: plain prose is not code", TerminalCodeBlocks.block(in: ["Hello there friend"], at: 0) == nil)
         let text = "one\ntwo\nthree\nfour\n" as NSString
         check("line range: caret only", TerminalBridge.lineRange(in: text, selection: NSRange(location: 5, length: 0)) == (2, 2))
         check("line range: selection across lines", TerminalBridge.lineRange(in: text, selection: NSRange(location: 4, length: 9)) == (2, 3))

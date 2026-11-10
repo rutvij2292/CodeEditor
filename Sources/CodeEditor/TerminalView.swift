@@ -63,6 +63,13 @@ final class CETerminalView: LocalProcessTerminalView {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = super.menu(for: event) ?? NSMenu()
+        if let code = codeBlock(at: event) {
+            let item = NSMenuItem(title: "Copy Code Block", action: #selector(copyCodeBlock(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = code
+            menu.insertItem(item, at: 0)
+            menu.insertItem(.separator(), at: 1)
+        }
         if let sel = getSelection(), !sel.isEmpty, Self.askClaudeHandler != nil {
             let item = NSMenuItem(title: "Ask Claude About Selection…", action: #selector(askClaudeAboutTerminalSelection(_:)), keyEquivalent: "")
             item.target = self
@@ -70,6 +77,21 @@ final class CETerminalView: LocalProcessTerminalView {
             menu.insertItem(.separator(), at: 1)
         }
         return menu
+    }
+
+    /// The PHP / SQL / JS block under the pointer (fenced or code-looking lines), or nil.
+    private func codeBlock(at event: NSEvent) -> String? {
+        let rows = max(1, terminal.rows)
+        let p = convert(event.locationInWindow, from: nil)
+        let visible = min(max(0, Int((bounds.height - p.y) / (bounds.height / CGFloat(rows)))), rows - 1)
+        let lines = bufferText().split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        return TerminalCodeBlocks.block(in: lines, at: terminal.buffer.yDisp + visible)
+    }
+
+    @objc private func copyCodeBlock(_ sender: NSMenuItem) {
+        guard let code = sender.representedObject as? String else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(code, forType: .string)
     }
 
     @objc private func askClaudeAboutTerminalSelection(_ sender: Any?) { _ = Self.askClaudeHandler?(window) }
