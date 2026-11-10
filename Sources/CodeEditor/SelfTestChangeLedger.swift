@@ -153,7 +153,9 @@ enum SelfTestChangeLedger {
         other.activeAgent = { (agent, "A\(agent)") }
         for i in 1...2 { agent = i; other.recordBridgeEdit(url: dir.appendingPathComponent("o\(i).txt"), original: "o\n", new: "n\n") }
         other.acceptAll()
-        check("accept hook: acceptAll() fires once per session", n2 == 2)
+        let ns = CommitLedger.files(fromNumstat: "3\t1\tapp/A.php\n-\t-\timg/logo.png\n")
+        check("commit ledger: numstat parsed (binary counts as 0)", ns.count == 2 && ns[0].rel == "app/A.php" && ns[0].added == 3 && ns[0].removed == 1 && ns[1].added == 0)
+        check("accept hook: acceptAll() fires once for the current session (earlier agent sessions are retired)", n2 == 1)
 
         // Recorder (pure)
         let row = { (name: String, line: Int) in ChangedSymbols.Row(path: "/p/a.php", rel: "a.php", name: name, kind: .method, line: line, added: 3, removed: 1) }

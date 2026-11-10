@@ -218,7 +218,7 @@ enum SelfTestChangeReview {
             var aid = 0
             many.activeAgent = { (aid, "Agent \(aid)") }
             for i in 1...4 { aid = i; many.recordBridgeEdit(url: root.appendingPathComponent("s\(i).txt"), original: "o\n", new: "n\n") }
-            check("sessions are capped (oldest dropped)", many.sessions.count == 2 && many.sessions.map(\.id) == [3, 4])
+            check("a new agent session retires the earlier ones (current session only)", many.sessions.map(\.id) == [4])
             ChangeReviewStore.maxSessions = 12
             panelChecks(root: root, then: next)
         }

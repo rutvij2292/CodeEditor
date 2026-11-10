@@ -106,6 +106,9 @@ final class ChangeReviewStore {
     private func session(id: Int, title: String) -> Session {
         if let s = sessions.first(where: { $0.id == id }) { s.title = title; return s }
         let s = Session(id: id, title: title, started: now())
+        // Claude Changes lists the current session's files only: starting a new agent session retires the earlier ones
+        // (their edits are on disk and in git; the ledger keeps the story).
+        if id != Self.bridgeSessionID { sessions.removeAll { $0.id != Self.bridgeSessionID } }
         sessions.append(s)
         if sessions.count > Self.maxSessions {
             // Drop the oldest session without pending work first, else the oldest.

@@ -15,7 +15,7 @@ final class ChangeLedgerPanel: NSObject, NSTableViewDataSource, NSTableViewDeleg
     private let sessionsScroll = NSScrollView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let touchesLabel = NSTextField(labelWithString: "")
-    private let noteHint = NSTextField(labelWithString: "Your note: what does this do, in your words?")
+    private let noteHint = NSTextField(labelWithString: "What this does: written by Claude when you committed. Edit it freely.")
     private let noteView = NSTextView()
     private let noteScroll = NSScrollView()
     private let symbolsTable = NSTableView()

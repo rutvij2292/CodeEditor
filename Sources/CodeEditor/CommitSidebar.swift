@@ -123,6 +123,7 @@ final class CommitSidebar {
         p.onRequestClose = { [weak self] in self?.hide() }
         p.onFocusEditor = { [weak self] in self?.hide() }
         p.onShowBranches = { [weak project] in if let w = project?.window { project?.branches.showPopup(over: w) } }
+        p.ledgerProvider = { [weak project] in project?.changeLedger }
         p.onCommitted = { [weak self] andPush in if !andPush { self?.hide() } }
         p.onPushed = { [weak self] in if self?.panel?.committedAndPushing == true { self?.hide() } }
         p.onShowDiff = { [weak self] in self?.showDiffTab() }
