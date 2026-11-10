@@ -27,7 +27,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     var bookmarkPanelRebuild: (() -> Void)?
     var todoRescan: (() -> Void)?
     /// What "Hide All Tool Windows" hid, so the same key brings it back.
-    var hiddenTools: (sidebar: Bool, bottom: Bool)?
+    var hiddenTools: (sidebar: Bool, bottom: Bool, right: Bool)?
     var structurePanel: StructurePanelController?
     var structureObservers: [NSObjectProtocol] = []
     var changeReviewPanel: ChangeReviewPanel?
@@ -1039,7 +1039,11 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     /// Cmd-1 (PhpStorm): focus the tree, showing the sidebar if needed; pressed again while the tree has focus, hide it and return to the editor.
     func toggleProjectTree() {
         guard !isTerminalMaximized else { return }
-        if commitSidebar.isShowing { showFileTreeInSidebar(); focusTree(); return }
+        if commitSidebar.isShowing {
+            // Diff tab in front: the user wants room, not the tree. Hide the sidebar (restores on the next press).
+            if tabs.selectedID == CommitSidebar.diffTabID, isSidebarVisible { termDock.sidebarItem.animator().isCollapsed = true; focusEditor(); return }
+            showFileTreeInSidebar(); focusTree(); return
+        }
         if isSidebarVisible, isTreeFocused { toggleSidebar(); return }
         if !isSidebarVisible { termDock.sidebarItem.animator().isCollapsed = false }
         focusTree()

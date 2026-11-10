@@ -58,17 +58,19 @@ extension ProjectWindow {
         bottom.show(id) { [weak self] in self?.focusTool(id) }
     }
 
-    /// Shift-Cmd-F12: hide the sidebar and bottom panel; again to restore what was hidden.
+    /// Shift-Cmd-F12: hide the sidebar, bottom panel and right-docked Claude panel; again to restore what was hidden.
     func toggleHideAllTools() {
         if let state = hiddenTools {
             hiddenTools = nil
             if state.sidebar, !isSidebarVisible { termDock.sidebarItem.animator().isCollapsed = false }
             if state.bottom, let id = bottom.selectedID { bottom.show(id) }
+            if state.right { showTerminalPanel(focus: false) }
             return
         }
-        let state = (sidebar: isSidebarVisible, bottom: bottom.isVisible)
-        guard state.sidebar || state.bottom else { return }
+        let state = (sidebar: isSidebarVisible, bottom: bottom.isVisible, right: termDock.side == "right" && isTerminalVisible)
+        guard state.sidebar || state.bottom || state.right else { return }
         hiddenTools = state
+        if state.right { hideTerminal() }
         if state.bottom { bottom.hide() }
         if state.sidebar { termDock.sidebarItem.animator().isCollapsed = true }
         focusEditor()

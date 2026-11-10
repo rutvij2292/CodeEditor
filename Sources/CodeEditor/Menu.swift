@@ -239,6 +239,7 @@ enum MainMenu {
             item("Claude Changes Tool Window", #selector(AppDelegate.showClaudeChangesTool(_:)), "3", [.command, .option], target: a),
             item("Change Ledger Tool Window", #selector(AppDelegate.showChangeLedgerTool(_:)), "4", [.command, .option], target: a),
             item("Last Tool Window", #selector(AppDelegate.jumpToLastTool(_:)), f12, [], target: a),
+            item("Maximize Editor / Diff", #selector(AppDelegate.hideAllTools(_:)), "m", [.command, .option], target: a),
             item("Hide All Tool Windows", #selector(AppDelegate.hideAllTools(_:)), f12, [.command, .shift], target: a),
             sep,
             item("Select Opened File", #selector(AppDelegate.selectOpenedFile(_:)), f1, [.option], target: a),
