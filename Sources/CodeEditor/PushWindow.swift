@@ -102,6 +102,7 @@ final class PushWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate, NS
         commitTable.delegate = self
         commitTable.style = .plain
         commitTable.allowsEmptySelection = true
+        commitTable.allowsMultipleSelection = true
         let commitScroll = NSScrollView()
         commitScroll.documentView = commitTable
         commitScroll.hasVerticalScroller = true
@@ -179,6 +180,9 @@ final class PushWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate, NS
         window.defaultButtonCell = pushButton.cell as? NSButtonCell
         if preview.commits.isEmpty { return }
         commitTable.reloadData()
+        // Focus the list so ↑/↓ and ⇧↑/⇧↓ work immediately, without clicking first.
+        window.initialFirstResponder = commitTable
+        window.makeFirstResponder(commitTable)
     }
 
     // MARK: actions
@@ -209,18 +213,21 @@ final class PushWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate, NS
     @objc private func fileDoubleClicked() {
         let row = fileOutline.clickedRow
         guard row >= 0, let node = fileOutline.item(atRow: row) as? Node, let change = node.change else { return }
-        let r = commitTable.selectedRow
-        let commit = preview.commits.indices.contains(r) ? preview.commits[r] : nil
+        let sel = selectedCommits()
+        let newest = sel.newest, oldest = sel.oldest
+        let multi = sel.count > 1
+        let commit = newest
         let repo = repo, preview = preview
-        let key = (commit?.hash ?? "push") + ":" + change.path
+        let key = (multi ? "\(oldest?.hash ?? "")..\(newest?.hash ?? "")" : (commit?.hash ?? "push")) + ":" + change.path
         if let w = diffWindows[key], w.isVisible { w.makeKeyAndOrderFront(nil); return }
         reader.async { [weak self] in
-            let oldRev: String? = commit != nil ? commit?.parents.first : repo.pushBase(preview)
+            let emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+            let oldRev: String? = multi ? (oldest?.parents.first ?? emptyTree) : (commit != nil ? commit?.parents.first : repo.pushBase(preview))
             let newRev = commit?.hash ?? "HEAD"
             let old = change.status == "A" ? "" : (oldRev.flatMap { try? repo.content(of: change.oldPath ?? change.path, at: $0) } ?? "")
             let new = change.status == "D" ? "" : ((try? repo.content(of: change.path, at: newRev)) ?? "")
             let oldTitle = oldRev.map { $0.count > 12 ? String($0.prefix(8)) : $0 } ?? "(none)"
-            let newTitle = commit.map { $0.shortHash } ?? "HEAD"
+            let newTitle = multi ? "\(oldest?.shortHash ?? "")..\(commit?.shortHash ?? "")" : (commit.map { $0.shortHash } ?? "HEAD")
             DispatchQueue.main.async {
                 self?.showDiff(key: key, change: change, old: old, new: new, oldTitle: oldTitle, newTitle: newTitle)
             }
@@ -248,12 +255,24 @@ final class PushWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate, NS
 
     // MARK: files
 
-    private func loadFiles(for commit: GitCommit?) {
+    /// Selected commits: `newest` is the topmost row (the list is newest-first), `oldest` the lowest.
+    private func selectedCommits() -> (newest: GitCommit?, oldest: GitCommit?, count: Int) {
+        let rows = commitTable.selectedRowIndexes.filter { preview.commits.indices.contains($0) }
+        guard let first = rows.first, let last = rows.last else { return (nil, nil, 0) }
+        return (preview.commits[first], preview.commits[last], rows.count)
+    }
+
+    private func loadFiles(for commit: GitCommit?, oldest: GitCommit? = nil) {
         token += 1
         let mine = token
         let repo = repo, preview = preview
         reader.async {
-            let files = commit.map { (try? repo.commitFiles($0.hash)) ?? [] } ?? repo.pushChangedFiles(preview)
+            let files: [GitFileChange]
+            if let commit, let oldest, oldest.hash != commit.hash {
+                files = (try? repo.rangeFiles(base: oldest.parents.first ?? "", head: commit.hash)) ?? []
+            } else {
+                files = commit.map { (try? repo.commitFiles($0.hash)) ?? [] } ?? repo.pushChangedFiles(preview)
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self, mine == self.token else { return }
                 self.root = Self.buildTree(files)
@@ -354,7 +373,7 @@ final class PushWindow: NSObject, NSTableViewDataSource, NSTableViewDelegate, NS
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        let r = commitTable.selectedRow
-        loadFiles(for: preview.commits.indices.contains(r) ? preview.commits[r] : nil)
+        let sel = selectedCommits()
+        loadFiles(for: sel.newest, oldest: sel.oldest)
     }
 }
