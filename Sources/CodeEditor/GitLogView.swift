@@ -458,6 +458,20 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         }
     }
 
+    /// Details pane for several selected commits: their subjects, plus the net-diff note.
+    private func loadRangeDetails(_ picked: [GitCommit]) {
+        detailsToken += 1
+        let out = NSMutableAttributedString()
+        let mono = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        out.append(NSAttributedString(string: "\(picked.count) commits selected \u{2014} files show their combined changes\n",
+                                      attributes: [.font: NSFont.monospacedSystemFont(ofSize: 12, weight: .bold), .foregroundColor: Theme.foreground]))
+        for c in picked.reversed() {
+            out.append(NSAttributedString(string: "\n\(c.shortHash)  \(c.subject)", attributes: [.font: mono, .foregroundColor: Theme.foreground]))
+        }
+        details.textStorage?.setAttributedString(out)
+        details.scrollToBeginningOfDocument(nil)
+    }
+
     // MARK: branch filter
 
     /// Points the log at another ref ("HEAD", a branch, "origin/x" or a tag) and reloads from the top.
@@ -617,12 +631,16 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     func tableViewSelectionDidChange(_ n: Notification) {
         if (n.object as? NSTableView) === fileTable { return }
         guard let c = selectedCommit else { return }
-        loadDetails(for: c)
+        let picked = selectedCommitsOldestFirst
+        let multi = picked.count > 1
+        if multi { loadRangeDetails(picked) } else { loadDetails(for: c) }
         fileToken += 1
         let token = fileToken
         let repo = repo
+        let base = multi ? (picked.first?.parents.first ?? "") : ""
+        let head = multi ? (picked.last?.hash ?? c.hash) : c.hash
         reader.async {
-            let r = Result { try repo.commitFiles(c.hash) }
+            let r = Result { multi ? try repo.rangeFiles(base: base, head: head) : try repo.commitFiles(c.hash) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, token == self.fileToken else { return }
                 switch r {
@@ -652,7 +670,13 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         guard row >= 0, row < fileRows.count, case .file(let r, _) = fileRows[row], let c = selectedCommit else { return }
         let v = diffView ?? CommitDiffView(repo: repo)
         diffView = v
-        v.show(commit: c, files: files, index: r)
+        let picked = selectedCommitsOldestFirst
+        if picked.count > 1, let oldest = picked.first, let newest = picked.last {
+            v.show(commit: newest, files: files, index: r, rangeBase: oldest.parents.first ?? "",
+                   rangeLabel: "\(oldest.shortHash)..\(newest.shortHash)")
+        } else {
+            v.show(commit: c, files: files, index: r)
+        }
         onShowFileDiff?(v)
     }
 

@@ -267,6 +267,12 @@ extension GitRepo {
         parseNameStatus(try git(["show", "--first-parent", "-m", "--name-status", "-M", "--format=", "-z", rev], optionalLocks: true))
     }
 
+    /// Net files changed from `base` (a revision, "" for none) to `head`: what several selected commits add up to.
+    func rangeFiles(base: String, head: String) throws -> [GitFileChange] {
+        let b = base.isEmpty ? "4b825dc642cb6eb9a060e54bf8d69288fbee4904" : base
+        return parseNameStatus(try git(["diff", "--name-status", "-M", "-z", b, head], optionalLocks: true))
+    }
+
     /// Files changed across everything a push would send: against the upstream, or from before the oldest new commit.
     func pushChangedFiles(_ p: GitPushPreview) -> [GitFileChange] {
         guard let base = pushBase(p) else { return [] }
@@ -308,8 +314,8 @@ extension GitRepo {
     }
 
     /// Old and new content of one file of a commit for a side-by-side diff.
-    func commitDiffSides(rev: String, file: GitFileChange) throws -> (old: String, new: String) {
-        let parent = (try? text(["rev-parse", "--verify", "-q", rev + "^"]))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    func commitDiffSides(rev: String, file: GitFileChange, base: String? = nil) throws -> (old: String, new: String) {
+        let parent = base ?? (try? text(["rev-parse", "--verify", "-q", rev + "^"]))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let old = parent.isEmpty ? "" : (try content(of: file.oldPath ?? file.path, at: parent) ?? "")
         let new = try content(of: file.path, at: rev) ?? ""
         return (old, new)

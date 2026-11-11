@@ -14,6 +14,9 @@ final class CommitDiffView: NSView {
     private var commit: GitCommit?
     private var files: [GitFileChange] = []
     private var index = 0
+    /// Set when several commits are shown as one combined diff: the revision before the oldest one ("" = empty tree).
+    private var rangeBase: String?
+    private var rangeLabel = ""
     private var token = 0
     /// Title for the hosting tab, updated on every file change.
     var onTitle: ((String) -> Void)?
@@ -56,7 +59,9 @@ final class CommitDiffView: NSView {
         ])
     }
 
-    func show(commit: GitCommit, files: [GitFileChange], index: Int) {
+    func show(commit: GitCommit, files: [GitFileChange], index: Int, rangeBase: String? = nil, rangeLabel: String = "") {
+        self.rangeBase = rangeBase
+        self.rangeLabel = rangeLabel
         self.commit = commit
         self.files = files
         self.index = index
@@ -66,7 +71,7 @@ final class CommitDiffView: NSView {
     /// Title for the tab the host shows this view in.
     var tabTitle: String {
         guard let c = commit, index < files.count else { return "Diff" }
-        return "\((files[index].path as NSString).lastPathComponent) @ \(c.shortHash)"
+        return "\((files[index].path as NSString).lastPathComponent) @ \(rangeBase == nil ? c.shortHash : rangeLabel)"
     }
 
     @objc private func stepPrev() { step(-1) }
@@ -81,6 +86,7 @@ final class CommitDiffView: NSView {
     private func load() {
         guard let c = commit, index < files.count else { return }
         let file = files[index]
+        let base = rangeBase, label = rangeLabel
         onTitle?(tabTitle)
         counter.stringValue = "\(index + 1)/\(files.count) files"
         pathLabel.stringValue = file.path
@@ -90,14 +96,14 @@ final class CommitDiffView: NSView {
         let t = token
         let repo = repo
         reader.async {
-            let res = Result { try repo.commitDiffSides(rev: c.hash, file: file) }
+            let res = Result { try repo.commitDiffSides(rev: c.hash, file: file, base: base) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, t == self.token else { return }
                 switch res {
                 case .success(let sides):
                     self.message.isHidden = true
                     self.diffView.isHidden = false
-                    self.diffView.show(old: sides.old, new: sides.new, oldTitle: "\(c.shortHash)^", newTitle: c.shortHash,
+                    self.diffView.show(old: sides.old, new: sides.new, oldTitle: base == nil ? "\(c.shortHash)^" : "\(label.components(separatedBy: "..").first ?? "")^", newTitle: c.shortHash,
                                        fileExtension: (file.path as NSString).pathExtension)
                 case .failure(let e):
                     self.diffView.isHidden = true
