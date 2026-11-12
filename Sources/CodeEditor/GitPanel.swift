@@ -1368,7 +1368,7 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     // MARK: diff
 
     private func hideDiffs() {
-        diffHost.subviews.compactMap { $0 as? SideBySideDiffView }.forEach { $0.isHidden = true }
+        detachHiddenDiffs(except: nil)
         diffBar.isHidden = true
         active = nil
     }
@@ -1407,6 +1407,12 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     private func makeStageView() -> SideBySideDiffView {
         let v = SideBySideDiffView()
         v.translatesAutoresizingMaskIntoConstraints = false
+        attachDiff(v)
+        return v
+    }
+
+    private func attachDiff(_ v: SideBySideDiffView) {
+        guard v.superview == nil else { return }
         diffHost.addSubview(v)
         NSLayoutConstraint.activate([
             v.topAnchor.constraint(equalTo: diffBar.bottomAnchor),
@@ -1414,12 +1420,19 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             v.leadingAnchor.constraint(equalTo: diffHost.leadingAnchor),
             v.trailingAnchor.constraint(equalTo: diffHost.trailingAnchor),
         ])
-        return v
+    }
+
+    /// A hidden diff view still takes part in Auto Layout: a cached two-pane view pinned the whole editor column (and the window)
+    /// at its old width, so hiding the sidebar shrank the window instead of widening the diff. Only the shown view stays attached.
+    private func detachHiddenDiffs(except shown: SideBySideDiffView?) {
+        for sv in diffHost.subviews.compactMap({ $0 as? SideBySideDiffView }) where sv !== shown { sv.removeFromSuperview() }
     }
 
     private func present(_ v: SideBySideDiffView, rowKey: String, path: String, kind: GitGroupKind) {
         diffMessage.isHidden = true
-        for sv in diffHost.subviews.compactMap({ $0 as? SideBySideDiffView }) { sv.isHidden = sv !== v }
+        attachDiff(v)
+        v.isHidden = false
+        detachHiddenDiffs(except: v)
         active = ActiveDiff(rowKey: rowKey, path: path, kind: kind, view: v)
         diffBar.isHidden = false
         updateDiffBar()
