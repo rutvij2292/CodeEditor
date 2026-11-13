@@ -147,6 +147,8 @@ final class TerminalPane: SettingsPane {
         section("Terminal")
         popup("Dock", ["Right of editor", "Bottom panel"], help: "Where the terminal appears when opened with ⌥F12.",
               get: { Prefs.terminalDock == "bottom" ? 1 : 0 }, set: { Prefs.terminalDock = $0 == 1 ? "bottom" : "right" })
+        popup("⌘3 opens", ["Terminal (shell)", "Claude Code"], help: "Terminal: your shell, or the Claude tab if one is already running. Claude Code: a Claude tab, started on first use.",
+              get: { Prefs.terminalCmd3 == "claude" ? 1 : 0 }, set: { Prefs.terminalCmd3 = $0 == 1 ? "claude" : "shell" })
         let shell = textField(width: 320, placeholder: "Default: $SHELL", label: "Shell path", get: { Prefs.terminalShell }, set: { Prefs.terminalShell = $0.trimmingCharacters(in: .whitespaces) })
         row("Shell", shell)
         row(nil, infoLabel({

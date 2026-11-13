@@ -137,7 +137,7 @@ enum SettingsDefaults {
                               "highlightCurrentLine", "softWrap", "bracketPairColorization", "showBreadcrumbs", "foldingEnabled",
                               "foldImportsOnOpen", "inlineBlame", "defaultIndentSize", "defaultIndentUsesTabs",
                               "completionMinChars", "completionDelayMs"]
-    static let terminalPrefs = ["terminalDock", "terminalFontName", "terminalFontSize", "terminalCursorStyle", "terminalScrollback",
+    static let terminalPrefs = ["terminalDock", "terminalCmd3", "terminalFontName", "terminalFontSize", "terminalCursorStyle", "terminalScrollback",
                                 "terminalShell", "terminalAgents", "terminalNotifyOnIdle", "terminalAgentAlerts"]
 
     static func restoreGeneral() {

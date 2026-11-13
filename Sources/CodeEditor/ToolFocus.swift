@@ -32,6 +32,7 @@ extension ProjectWindow {
     /// when there is none) without launching an agent. Pressed again inside the terminal, hide it and go back to the editor.
     func focusTerminalTool() {
         guard root != nil, let term = terminalPanel else { return }
+        if Prefs.terminalCmd3 == "claude" { toggleClaude(); return }
         if isTerminalVisible, isTerminalFocused { hideTerminal(); focusEditor(); return }
         term.selectClaudeIfRunning()
         showTerminalPanel(focus: true)

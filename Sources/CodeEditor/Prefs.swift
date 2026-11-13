@@ -71,6 +71,8 @@ enum Prefs {
     static var reopenTerminal: Bool { get { get("reopenTerminal", false) } set { set("reopenTerminal", newValue) } }
     /// Where the terminal lives: "right" (docked beside the editor) or "bottom" (tab in the bottom panel).
     static var terminalDock: String { get { get("terminalDock", "right") } set { set("terminalDock", newValue == "bottom" ? "bottom" : "right") } }
+    /// What ⌘3 opens: "shell" (the terminal, Claude tab if one is already running) or "claude" (a Claude Code tab, started if needed).
+    static var terminalCmd3: String { get { get("terminalCmd3", "shell") } set { set("terminalCmd3", newValue == "claude" ? "claude" : "shell") } }
     static var terminalFontName: String { get { get("terminalFontName", "") } set { set("terminalFontName", newValue) } }
     static var terminalFontSize: Double { get { get("terminalFontSize", 12) } set { set("terminalFontSize", min(30, max(8, newValue))) } }
     static var terminalCursorStyle: String { get { get("terminalCursorStyle", "block") } set { set("terminalCursorStyle", newValue) } }   // block | beam | underline
@@ -103,7 +105,7 @@ enum Prefs {
         "editorFontName", "editorFontSize", "lineHeightMultiple", "colorScheme", "lightScheme", "darkScheme", "editorLigatures", "showLineNumbers", "showIndentGuides", "highlightCurrentLine",
         "softWrap", "bracketPairColorization", "multipleTabs", "showBreadcrumbs", "showToolbar", "showToolStrip","foldingEnabled", "foldImportsOnOpen", "highlightOccurrences", "inlineBlame", "powerSaver", "gpuAssist",
         "defaultIndentSize", "defaultIndentUsesTabs",
-        "terminalDock", "terminalFontName", "terminalFontSize", "terminalCursorStyle", "terminalScrollback", "terminalShell",
+        "terminalDock", "terminalCmd3", "terminalFontName", "terminalFontSize", "terminalCursorStyle", "terminalScrollback", "terminalShell",
         "terminalAgents", "terminalNotifyOnIdle", "terminalAgentAlerts", "claudeBridgeEnabled", "completionMinChars", "completionDelayMs", "intelephenseLicenceConfigured",
         "viewerMode.markdown", "viewerMode.json", "viewerMode.yaml",
     ]
