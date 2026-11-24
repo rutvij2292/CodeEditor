@@ -185,7 +185,7 @@ final class ToolStripView: NSView {
     func isActive(_ e: Entry) -> Bool {
         guard let p = project else { return false }
         switch e.kind {
-        case .sidebar: return p.isSidebarVisible
+        case .sidebar: return p.isSidebarVisible && !p.commitSidebar.isShowing  // Git panel in the slot ≠ Project active
         case .bottom(let id): return p.bottom.isVisible && p.bottom.selectedID == id
         case .terminal: return p.isTerminalVisible
         case .claude: return p.isTerminalVisible && (p.terminalPanel?.isClaudeTabActive ?? false)

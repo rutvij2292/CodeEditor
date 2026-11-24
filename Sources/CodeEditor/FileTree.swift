@@ -117,7 +117,10 @@ final class KeyOutlineView: NSOutlineView {
         switch event.keyCode {
         case 36, 76: onReturn?()          // return, enter
         case 53: onEscape?()              // escape
-        case 51, 117: onDelete?()         // delete / forward delete: trash the selection (asks first)
+        case 117: onDelete?()             // forward delete: trash the selection (asks first)
+        case 51:                          // Backspace: trash the selection (asks first), but never as the tail of a speed-search edit
+            if event.isARepeat || speedSearch?.endedRecently == true { return }
+            onDelete?()
         default:
             if speedSearch?.handleKeyDown(event) == true { return }
             super.keyDown(with: event)

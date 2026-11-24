@@ -1040,8 +1040,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     func toggleProjectTree() {
         guard !isTerminalMaximized else { return }
         if commitSidebar.isShowing {
-            // Diff tab in front: the user wants room, not the tree. Hide the sidebar (restores on the next press).
-            if tabs.selectedID == CommitSidebar.diffTabID, isSidebarVisible { termDock.sidebarItem.animator().isCollapsed = true; focusEditor(); return }
+            // Git panel in the slot: always swap the file tree back in, never collapse the sidebar.
             showFileTreeInSidebar(); focusTree(); return
         }
         if isSidebarVisible, isTreeFocused { toggleSidebar(); return }

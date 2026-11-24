@@ -92,9 +92,14 @@ final class SpeedSearch: NSObject, NSTextFieldDelegate {
     }
 
     /// Closes the field; `refocus` hands first responder back to the list (false when focus already went elsewhere).
+    private var endedAt = Date.distantPast
+    /// True for a moment after the search closed: a Backspace that emptied the field (or its key-repeat) must not reach the list as "delete the file".
+    var endedRecently: Bool { Date().timeIntervalSince(endedAt) < 0.8 }
+
     func end(refocus: Bool = true) {
         guard isActive else { return }
         isActive = false
+        endedAt = Date()
         container?.removeFromSuperview()
         container = nil; field = nil; hint = nil
         queryChars = []; matches = []
