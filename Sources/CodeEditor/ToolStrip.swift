@@ -277,10 +277,13 @@ final class ToolStripView: NSView {
 final class ToolStripContainerController: NSViewController {
     let strip: ToolStripView
     private let content: NSViewController
+    private let statusBar: NSView
 
-    init(strip: ToolStripView, content: NSViewController) {
+    /// The status bar is pinned to the window's bottom edge, full width, so opening/resizing a tool panel never moves it.
+    init(strip: ToolStripView, content: NSViewController, statusBar: NSView) {
         self.strip = strip
         self.content = content
+        self.statusBar = statusBar
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -289,13 +292,17 @@ final class ToolStripContainerController: NSViewController {
         let host = NSView()
         addChild(content)
         content.view.translatesAutoresizingMaskIntoConstraints = false
+        statusBar.translatesAutoresizingMaskIntoConstraints = false
         host.addSubview(strip)
         host.addSubview(content.view)
+        host.addSubview(statusBar)
         NSLayoutConstraint.activate([
+            statusBar.leadingAnchor.constraint(equalTo: host.leadingAnchor), statusBar.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            statusBar.bottomAnchor.constraint(equalTo: host.bottomAnchor),
             strip.leadingAnchor.constraint(equalTo: host.leadingAnchor), strip.topAnchor.constraint(equalTo: host.topAnchor),
-            strip.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            strip.bottomAnchor.constraint(equalTo: statusBar.topAnchor),
             content.view.leadingAnchor.constraint(equalTo: strip.trailingAnchor), content.view.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-            content.view.topAnchor.constraint(equalTo: host.topAnchor), content.view.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            content.view.topAnchor.constraint(equalTo: host.topAnchor), content.view.bottomAnchor.constraint(equalTo: statusBar.topAnchor),
         ])
         view = host
     }

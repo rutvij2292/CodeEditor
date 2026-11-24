@@ -122,13 +122,10 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         let contentVC = NSViewController()
         let host = NSView()
         tabs.translatesAutoresizingMaskIntoConstraints = false
-        statusBar.translatesAutoresizingMaskIntoConstraints = false
-        host.addSubview(tabs); host.addSubview(statusBar)
+        host.addSubview(tabs)
         NSLayoutConstraint.activate([
             tabs.topAnchor.constraint(equalTo: host.topAnchor), tabs.leadingAnchor.constraint(equalTo: host.leadingAnchor),
-            tabs.trailingAnchor.constraint(equalTo: host.trailingAnchor), tabs.bottomAnchor.constraint(equalTo: statusBar.topAnchor),
-            statusBar.leadingAnchor.constraint(equalTo: host.leadingAnchor), statusBar.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-            statusBar.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            tabs.trailingAnchor.constraint(equalTo: host.trailingAnchor), tabs.bottomAnchor.constraint(equalTo: host.bottomAnchor),
         ])
         contentVC.view = host
         statusBar.onGoToLine = { [weak self] in self?.goToLine() }
@@ -186,7 +183,7 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         bottom.register(id: "git", title: "Git", view: gitHost)
 
         toolStrip = ToolStripView(project: self)
-        window.contentViewController = ToolStripContainerController(strip: toolStrip, content: rootSplit)
+        window.contentViewController = ToolStripContainerController(strip: toolStrip, content: rootSplit, statusBar: statusBar)
         window.setContentSize(NSSize(width: 1200, height: 800))
         DispatchQueue.main.async { [weak self] in self?.mainSplit.splitView.setPosition(260, ofDividerAt: 0) }
 
