@@ -578,8 +578,15 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
 
     // MARK: Files and tabs
 
+    /// Office / document formats that are binary containers: Kode has no editor for them, so they open in the macOS default app.
+    static let externalDocumentExtensions: Set<String> = ["docx", "doc", "xlsx", "xls", "pptx", "ppt", "pages", "numbers", "key", "odt", "ods", "odp", "rtf", "pdf"]
+
     func open(_ url: URL, line: Int? = nil, options: OpenOptions = OpenOptions()) {
         let id = url.standardizedFileURL.path
+        if editors[id] == nil, Self.externalDocumentExtensions.contains(url.pathExtension.lowercased()) {
+            if !AppEnv.headless { NSWorkspace.shared.open(url) }   // never launch apps from the headless harness
+            return
+        }
         if editors[id] == nil {
             if placeholders[id] != nil { tabs.select(id); return }
             if ImageViewerView.canView(url) {
