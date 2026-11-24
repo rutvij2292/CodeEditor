@@ -349,6 +349,15 @@ enum SelfTestBranches {
         let onMain = (try? r.log(skip: 0, limit: 50)) ?? []
         check("log of another ref lists its commits", onFeature.map(\.subject) == ["feat c", "feat b", "feat a", "base"])
         check("log defaults to the current branch", onMain.map(\.subject) == ["base"])
+        let pane = GitLogBranchPane(repo: r)
+        pane.setListForTesting((try? r.branchList()) ?? BranchList())
+        check("branch pane: HEAD first, then a Local section listing both branches",
+              pane.rowTitles.first == "HEAD" && pane.rowTitles.contains { $0.contains("Local") }
+              && pane.rowTitles.contains { $0.contains("main") } && pane.rowTitles.contains { $0.contains("feature") })
+        var picked: String?
+        pane.onSelect = { picked = $0 }
+        pane.select("feature")
+        check("branch pane: programmatic select does not echo back to the log", picked == nil)
         check("log search honours the ref", ((try? r.log(skip: 0, limit: 50, query: "feat b", rev: "feature")) ?? []).map(\.subject) == ["feat b"])
         func subjects(_ q: String, rx: Bool = false, mc: Bool = false) -> [String]? { (try? r.log(skip: 0, limit: 50, query: q, rev: "feature", regex: rx, matchCase: mc))?.map(\.subject) }
         check("log search: plain text is literal (regex chars do not match)", subjects("feat (a|b)")?.isEmpty == true)

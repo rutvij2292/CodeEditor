@@ -58,6 +58,10 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private let status = NSTextField(labelWithString: "")
     private let split = NSSplitView()
     private let rightSplit = NSSplitView()
+    private let outerSplit = NSSplitView()
+    private lazy var branchPane = GitLogBranchPane(repo: repo)
+    var branchPaneRows: [String] { branchPane.rowTitles }
+    func selectBranchInPane(_ rev: String) { branchPane.select(rev) }
     private var generation = 0
     private var loading = false
     private var query = ""
@@ -128,13 +132,13 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         // One slim, borderless toolbar row (PhpStorm style): search, then flat text filters.
         filterBar.setViews([search, regexButton, caseButton, branchButton, userButton, dateButton, pathButton], in: .leading)
         filterBar.orientation = .horizontal
-        filterBar.spacing = 18
+        filterBar.spacing = 12
         filterBar.setCustomSpacing(6, after: search)
         filterBar.setCustomSpacing(2, after: regexButton)
         filterBar.alignment = .centerY
         filterBar.edgeInsets = NSEdgeInsets(top: 9, left: 10, bottom: 9, right: 10)
         search.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
-        search.widthAnchor.constraint(greaterThanOrEqualToConstant: 130).isActive = true
+        search.widthAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
 
         details.isEditable = false
         details.drawsBackground = false
@@ -154,7 +158,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         historyBar.isHidden = true
         historyCollapse.isActive = true
 
-        for (id, title, w) in [("graph", "", 60), ("subject", "Commit", 260), ("author", "Author", 110), ("date", "Date", 84)] {
+        for (id, title, w) in [("graph", "", 60), ("subject", "Commit", 200), ("author", "Author", 104), ("date", "Date", 76)] {
             let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             c.title = title
             c.width = CGFloat(w)
@@ -245,11 +249,17 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         split.addArrangedSubview(left)
         split.addArrangedSubview(rightSplit)
         split.setHoldingPriority(.init(260), forSubviewAt: 0)
-        split.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(split)
+        branchPane.onSelect = { [weak self] rev in self?.setRevision(rev, fromPane: true) }
+        outerSplit.isVertical = true
+        outerSplit.dividerStyle = .thin
+        outerSplit.addArrangedSubview(branchPane)
+        outerSplit.addArrangedSubview(split)
+        outerSplit.setHoldingPriority(.init(261), forSubviewAt: 0)
+        outerSplit.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(outerSplit)
         NSLayoutConstraint.activate([
-            split.topAnchor.constraint(equalTo: topAnchor), split.bottomAnchor.constraint(equalTo: bottomAnchor),
-            split.leadingAnchor.constraint(equalTo: leadingAnchor), split.trailingAnchor.constraint(equalTo: trailingAnchor),
+            outerSplit.topAnchor.constraint(equalTo: topAnchor), outerSplit.bottomAnchor.constraint(equalTo: bottomAnchor),
+            outerSplit.leadingAnchor.constraint(equalTo: leadingAnchor), outerSplit.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
     }
 
@@ -257,8 +267,11 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         super.layout()
         if !positioned, bounds.width > 200, bounds.height > 100 {
             positioned = true
+            outerSplit.layoutSubtreeIfNeeded()
+            outerSplit.setPosition(min(250, bounds.width * 0.2), ofDividerAt: 0)
             split.layoutSubtreeIfNeeded()
-            split.setPosition(min(720, bounds.width * 0.58), ofDividerAt: 0)
+            split.setPosition(min(900, split.bounds.width * 0.64), ofDividerAt: 0)
+            commitTable.sizeToFit()   // columns were laid out before the dividers moved; refit so Date is not clipped
             rightSplit.layoutSubtreeIfNeeded()
             rightSplit.setPosition(rightSplit.bounds.height * 0.60, ofDividerAt: 0)
         }
@@ -296,6 +309,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     /// Reloads the first page, keeping the filter. The selected commit stays selected when it is still listed.
     func reload() {
+        branchPane.reloadIfStale()
         generation += 1
         let keep = selectedCommit?.hash
         let gen = generation
@@ -528,9 +542,10 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     // MARK: branch filter
 
     /// Points the log at another ref ("HEAD", a branch, "origin/x" or a tag) and reloads from the top.
-    func setRevision(_ rev: String) {
+    func setRevision(_ rev: String, fromPane: Bool = false) {
         revision = rev.isEmpty ? "HEAD" : rev
         updateBranchTitle()
+        if !fromPane { branchPane.select(revision) }
         preferredFile = historyPath
         reload()
         commitTable.scrollRowToVisible(0)
