@@ -19,7 +19,6 @@ extension ProjectWindow {
         installProblemsPanel(root: root)
         installHttpPanel(root: root)
         installTerminalPanel(root: root)
-        installChangeReview(root: root)
         installTestsPanel(root: root)
         installTodoAndBookmarks(root: root)
         installClaudeBridge()

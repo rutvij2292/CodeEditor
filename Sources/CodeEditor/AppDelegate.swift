@@ -322,8 +322,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     @objc func showGitTool(_ sender: Any?) { active?.toggleTool("git") }
     @objc func showStructureTool(_ sender: Any?) { active?.toggleTool("structure") }
     @objc func showHttpTool(_ sender: Any?) { active?.toggleTool("http") }
-    @objc func showClaudeChangesTool(_ sender: Any?) { active?.toggleTool("claude-changes") }
-    @objc func showChangeLedgerTool(_ sender: Any?) { active?.toggleTool("ledger") }
     @objc func jumpToLastTool(_ sender: Any?) { active?.jumpToLastTool() }
     @objc func hideAllTools(_ sender: Any?) { active?.toggleHideAllTools() }
     @objc func findInFiles(_ sender: Any?) { active?.onFindInFiles?() }

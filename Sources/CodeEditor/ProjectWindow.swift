@@ -20,9 +20,6 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     var terminalPanel: TerminalPanelController?
     /// Claude Code CLI integration (ClaudeBridge.swift).
     var claudeBridge: ClaudeBridge?
-    var changeReview: ChangeReviewStore?
-    var changeLedger: ChangeLedger?
-    var changeLedgerPanel: ChangeLedgerPanel?
     var bookmarks: BookmarkStore?
     var bookmarkPanelRebuild: (() -> Void)?
     var todoRescan: (() -> Void)?
@@ -30,8 +27,6 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     var hiddenTools: (sidebar: Bool, bottom: Bool, right: Bool)?
     var structurePanel: StructurePanelController?
     var structureObservers: [NSObjectProtocol] = []
-    var changeReviewPanel: ChangeReviewPanel?
-    var changeReviewGutter: ChangeReviewGutter?
     /// Right/bottom dock state of the terminal (see TerminalDocking.swift).
     let termDock = TerminalDockState()
     /// Left slot host: the file tree, or the Commit panel swapped in by Cmd-K.
@@ -176,7 +171,6 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         bottom.onWillShow = { [weak self] id in
             if id == "git" { self?.ensureGitPanel() }
             if id == "problems" { self?.problemsPanel?.reload() }
-            if id == "ledger" { self?.changeLedgerPanel?.reload() }
             if id == "todo" { self?.todoRescan?() }
             if id == "structure" { DispatchQueue.main.async { self?.refreshStructure() } }
         }
@@ -274,7 +268,6 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
             if let root { LaravelNavigator.invalidate(root: root); FastTier.invalidate(root: root, paths: changed) }
             tree.refreshIfAffected(paths)
             applyIndexChanges(changed)
-            changeReview?.noteChanges(Array(paths))   // before the reload: clean buffers still hold the pre-agent text
             editors.values.forEach { $0.reloadIfChangedOnDisk() }
         }
         if content || gitMeta { refreshGitStatus() }
@@ -807,8 +800,6 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     /// Asks about every unsaved tab; false means the user cancelled.
     func confirmCloseAll() -> Bool { editors.values.allSatisfy { confirmDiscard($0) } }
 
-    /// Saves a Ledger note that is still being typed (closing a window or quitting does not end text editing).
-    func commitPendingNotes() { changeLedgerPanel?.commitNote() }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool { confirmCloseAll() }
 
@@ -991,7 +982,6 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
     }
 
     func saveSession() {
-        commitPendingNotes()          // window close and app quit both end here
         guard SessionStore.enabled, !restoring, let root else { return }
         SessionStore.save(captureSession(), for: root)
     }
@@ -1105,7 +1095,6 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
 
     func setToolPanelBadge(_ text: String?, for id: String) {
         bottom.setBadge(text, for: id)
-        if id == "claude-changes" { toolbar.setClaudeBadge(text) }
     }
 
     private func applyBottomVisibility(_ visible: Bool) {

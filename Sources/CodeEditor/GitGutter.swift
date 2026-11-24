@@ -306,7 +306,7 @@ final class GitGutterController {
 final class HunkPopoverView: NSView {
     var onRevert: (() -> Void)?
     var onCopy: (() -> Void)?
-    /// Review mode (Claude changes): adds an Accept button and calls the Revert button "Reject".
+    /// Review mode: adds an Accept button and calls the Revert button "Reject".
     var onAccept: (() -> Void)? { didSet { acceptButton.isHidden = onAccept == nil; revertButton.title = onAccept == nil ? "Revert" : "Reject" } }
     private let acceptButton = NSButton(title: "Accept", target: nil, action: nil)
     private let revertButton = NSButton(title: "Revert", target: nil, action: nil)

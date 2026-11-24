@@ -64,7 +64,6 @@ enum SelfTest {
         }
 
         let w = app.openProject(dir)
-        if AppEnv.value("CE_LEDGER_ONLY") != nil { SelfTestChangeLedger.run(w: w); finish() }      // fast path while developing the ledger
         check("project root set", w.root == dir.standardizedFileURL)
         check("opening same project reuses window", app.openProject(dir) === w)
 
@@ -142,7 +141,6 @@ enum SelfTest {
                     SelfTestStructure.run(w: w)
                     SelfTestToolStrip.run(w: w)
                     SelfTestProblems.run(w: w)
-                    SelfTestChangeLedger.run(w: w)
                     SelfTestCommitPanel.run(w: w)
                     SelfTestGitMenu.run(w: w)
                     SelfTestKeymap.run(app: app)
@@ -158,7 +156,6 @@ enum SelfTest {
                     SelfTestArtisan.run {
                     viewerChecks(app: app, w: w) {
                         SelfTestHttp.run(w: w) {
-                            SelfTestChangeReview.run(w: w) {
                                 SelfTestTestRunner.run(w: w) {
                                     SelfTestPrettierReal.run(w: w) {
                                         SelfTestPlans.run(w: w)
@@ -175,7 +172,6 @@ enum SelfTest {
                                         }
                                     }
                                 }
-                            }
                         }
                     }
                     }

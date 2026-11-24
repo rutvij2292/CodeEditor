@@ -212,7 +212,7 @@ final class SpeedSearch: NSObject, NSTextFieldDelegate {
     func testStep(_ d: Int) { step(d) }
 }
 
-/// Plain table whose typing starts a speed search (TODO, Bookmarks, Tests, Claude Changes).
+/// Plain table whose typing starts a speed search (TODO, Bookmarks, Tests).
 final class SpeedTableView: NSTableView {
     var speedSearch: SpeedSearch?
     /// Return / Enter on the selected row (lists that have an "open" action).

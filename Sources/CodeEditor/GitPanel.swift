@@ -311,8 +311,6 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
     var onFocusEditor: (() -> Void)?
     /// Fired after a successful commit (`andPush`: the push is about to start).
     var onCommitted: ((_ andPush: Bool) -> Void)?
-    /// The project's change ledger, when it has one: every successful commit is recorded there automatically.
-    var ledgerProvider: (() -> ChangeLedger?)?
     /// Fired after a push finishes without error.
     var onPushed: (() -> Void)?
     /// Set after a commit so the next refresh leaves nothing selected instead of showing a diff of an unrelated file.
@@ -1894,7 +1892,6 @@ final class GitPanelController: NSObject, NSOutlineViewDataSource, NSOutlineView
             self.amendCheck.state = .off
             self.clearSelectionOnApply = true
             if !notes.isEmpty { self.showNote(notes.joined(separator: "\n")) }
-            if let provider = self.ledgerProvider { CommitLedger.record(repo: self.repo, ledger: provider) }
             self.onCommitted?(push)
             if push { self.committedAndPushing = true; self.startPush() }
         }, resets: true)

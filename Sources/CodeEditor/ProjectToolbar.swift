@@ -1,7 +1,7 @@
 import AppKit
 
-/// Icon buttons at the right of the title bar: Update / Commit / Push, Run tests, Search Everywhere, Claude Changes (with a
-/// pending count), Settings. Each button runs the same action as its menu item.
+/// Icon buttons at the right of the title bar: Update / Commit / Push, Run tests, Search Everywhere, Settings. Each button runs the
+/// same action as its menu item.
 final class ProjectToolbar: NSObject {
     private weak var window: NSWindow?
     /// The button row; the branch controller places it in the title bar next to the branch widget.
@@ -10,7 +10,6 @@ final class ProjectToolbar: NSObject {
     /// Called when the row appears, disappears or changes size.
     var onLayout: (() -> Void)?
     private var buttons: [String: NSButton] = [:]
-    private let badge = NSTextField(labelWithString: "")
     private var prefsObserver: NSObjectProtocol?
 
     struct Item { let id: String; let symbol: String; let tip: String; let action: Selector; let target: AnyObject? }
@@ -37,7 +36,6 @@ final class ProjectToolbar: NSObject {
             Item(id: "run", symbol: "play.fill", tip: "Run All Tests", action: #selector(TestActions.runAll(_:)), target: TestActions.shared),
             nil,
             Item(id: "search", symbol: "magnifyingglass", tip: "Search Everywhere (⇧⇧)", action: #selector(AppDelegate.searchEverywhere(_:)), target: app),
-            Item(id: "claude", symbol: "sparkles", tip: "Claude Changes", action: #selector(AppDelegate.showClaudeChangesTool(_:)), target: app),
             Item(id: "settings", symbol: "gearshape", tip: "Settings (⌘,)", action: #selector(AppDelegate.showSettings(_:)), target: app),
         ]
     }
@@ -70,23 +68,6 @@ final class ProjectToolbar: NSObject {
             stack.addArrangedSubview(b)
             buttons[item.id] = b
         }
-        badge.font = .systemFont(ofSize: 9, weight: .bold)
-        badge.textColor = .white
-        badge.alignment = .center
-        badge.wantsLayer = true
-        badge.layer?.backgroundColor = NSColor.systemOrange.cgColor
-        badge.layer?.cornerRadius = 7
-        badge.isHidden = true
-        badge.translatesAutoresizingMaskIntoConstraints = false
-        if let claude = buttons["claude"] {
-            claude.addSubview(badge)
-            NSLayoutConstraint.activate([
-                badge.topAnchor.constraint(equalTo: claude.topAnchor, constant: -2),
-                badge.trailingAnchor.constraint(equalTo: claude.trailingAnchor, constant: 2),
-                badge.heightAnchor.constraint(equalToConstant: 14),
-                badge.widthAnchor.constraint(greaterThanOrEqualToConstant: 14),
-            ])
-        }
         stack.setFrameSize(stack.fittingSize)
     }
 
@@ -103,12 +84,6 @@ final class ProjectToolbar: NSObject {
     }
 
     var isVisible: Bool { !stack.isHidden && !buttons.isEmpty }
-
-    /// Pending Claude change count on the sparkle button.
-    func setClaudeBadge(_ text: String?) {
-        badge.stringValue = text ?? ""
-        badge.isHidden = text == nil
-    }
 
     /// Greys out buttons that need a repository.
     func setGitAvailable(_ on: Bool) {

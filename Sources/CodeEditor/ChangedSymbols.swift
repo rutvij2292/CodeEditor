@@ -97,7 +97,7 @@ extension ProjectWindow {
             if let key, BreadcrumbOutlineBuilder.supports(key: key), languages[key] == nil { languages[key] = BreadcrumbOutlineBuilder.languages(for: key) }
             let open = editors.values.first { $0.url.standardizedFileURL.path == abs }
             jobs.append(ChangedSymbols.FileJob(path: abs, rel: c.path, key: key, buffer: open?.textView.string,
-                                               baseline: changeReview?.pendingEntry(abs)?.baseline, isNew: c.isUntracked || c.index == "A"))
+                                               baseline: nil, isNew: c.isUntracked || c.index == "A"))
             if jobs.count >= ChangedSymbols.maxFiles { break }
         }
         let langs = languages
@@ -132,7 +132,7 @@ extension ProjectWindow {
         guard !AppEnv.headless else { return }
         let alert = NSAlert()
         alert.messageText = "Revert changes in “\(row.name)”?"
-        alert.informativeText = "\(row.rel): +\(row.added) −\(row.removed) lines go back to " + (changeReview?.pendingEntry(row.path) != nil ? "the version before Claude's edit." : "the last commit.")
+        alert.informativeText = "\(row.rel): +\(row.added) −\(row.removed) lines go back to " + "the last commit."
         alert.addButton(withTitle: "Revert")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
