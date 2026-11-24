@@ -228,10 +228,15 @@ extension GitRepo {
     /// One page of history for `rev` (default: the current branch). `query` matches message, author or hash prefix (case-insensitive).
     /// `path` + `follow` lists the history of one file across renames.
     func log(skip: Int, limit: Int, query: String? = nil, path: String? = nil, follow: Bool = false, rev: String = "HEAD",
-             filter: GitLogFilter = GitLogFilter()) throws -> [GitCommit] {
+             filter: GitLogFilter = GitLogFilter(), regex: Bool = false, matchCase: Bool = false) throws -> [GitCommit] {
         guard hasHead else { return [] }
         let paths = (path ?? filter.path).map { [$0] } ?? []
-        let filterArgs = filter.arguments
+        var filterArgs = filter.arguments
+        if regex {   // the User filter stays a literal name even when the search text is a regex
+            filterArgs = filterArgs.filter { $0 != "--fixed-strings" }.map {
+                $0.hasPrefix("--author=") ? "--author=" + NSRegularExpression.escapedPattern(for: String($0.dropFirst(9))) : $0
+            }
+        }
         let q = query?.trimmingCharacters(in: .whitespaces) ?? ""
         if q.isEmpty {
             return try logCommits([rev], skip: skip, limit: limit, extra: (follow && path != nil ? ["--follow"] : ["--topo-order"]) + filterArgs, paths: paths)
@@ -240,13 +245,14 @@ extension GitRepo {
         var hashes: [String] = []
         var seen = Set<String>()
         func collect(_ extra: [String]) throws {
-            var args = ["log", "--format=%H", "--max-count=5000", "-i", "--fixed-strings"] + extra + filterArgs + [rev]
+            var args = ["log", "--format=%H", "--max-count=5000"] + (matchCase ? [] : ["-i"]) + (regex ? ["-E"] : ["--fixed-strings"])
+            args += extra + filterArgs + [rev]
             if !paths.isEmpty { args += ["--"] + paths }
             for h in try text(args).split(separator: "\n") where seen.insert(String(h)).inserted { hashes.append(String(h)) }
         }
         try collect(["--grep=\(q)"])
         if filter.user == nil { try collect(["--author=\(q)"]) }
-        if q.count >= 4, q.allSatisfy({ $0.isHexDigit }),
+        if !regex, q.count >= 4, q.allSatisfy({ $0.isHexDigit }),
            let full = try? text(["rev-parse", "--verify", "-q", q + "^{commit}"]).trimmingCharacters(in: .whitespacesAndNewlines),
            !full.isEmpty, seen.insert(full).inserted { hashes.append(full) }
         guard !hashes.isEmpty else { return [] }

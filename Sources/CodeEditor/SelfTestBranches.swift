@@ -350,6 +350,13 @@ enum SelfTestBranches {
         check("log of another ref lists its commits", onFeature.map(\.subject) == ["feat c", "feat b", "feat a", "base"])
         check("log defaults to the current branch", onMain.map(\.subject) == ["base"])
         check("log search honours the ref", ((try? r.log(skip: 0, limit: 50, query: "feat b", rev: "feature")) ?? []).map(\.subject) == ["feat b"])
+        func subjects(_ q: String, rx: Bool = false, mc: Bool = false) -> [String]? { (try? r.log(skip: 0, limit: 50, query: q, rev: "feature", regex: rx, matchCase: mc))?.map(\.subject) }
+        check("log search: plain text is literal (regex chars do not match)", subjects("feat (a|b)")?.isEmpty == true)
+        check("log search: regex toggle matches alternation", Set(subjects("^feat (a|b)$", rx: true) ?? []) == ["feat a", "feat b"])
+        check("log search: case-insensitive by default", subjects("FEAT B") == ["feat b"])
+        check("log search: match case excludes a different-case query", subjects("FEAT B", mc: true)?.isEmpty == true)
+        check("log search: match case keeps an exact-case query", subjects("feat b", mc: true) == ["feat b"])
+        check("log search: invalid regex fails instead of matching everything", subjects("feat (", rx: true) == nil)
 
         // pick a and c (oldest first) -> both land, b does not
         let a = onFeature[2].hash, c = onFeature[0].hash

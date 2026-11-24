@@ -61,6 +61,10 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private var generation = 0
     private var loading = false
     private var query = ""
+    private(set) var useRegex = false
+    private(set) var matchCase = false
+    private let regexButton = NSButton()
+    private let caseButton = NSButton()
     private var follow = false
     private var debounce: Timer?
     private var fileToken = 0
@@ -116,13 +120,17 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             b.setContentHuggingPriority(.required, for: .horizontal)
             b.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
         }
+        configureToggle(regexButton, ".*", tip: "Regular expression", action: #selector(toggleRegex(_:)))
+        configureToggle(caseButton, "Cc", tip: "Match case", action: #selector(toggleCase(_:)))
         updateBranchTitle()
         updateFilterTitles()
 
         // One slim, borderless toolbar row (PhpStorm style): search, then flat text filters.
-        filterBar.setViews([search, branchButton, userButton, dateButton, pathButton], in: .leading)
+        filterBar.setViews([search, regexButton, caseButton, branchButton, userButton, dateButton, pathButton], in: .leading)
         filterBar.orientation = .horizontal
         filterBar.spacing = 18
+        filterBar.setCustomSpacing(6, after: search)
+        filterBar.setCustomSpacing(2, after: regexButton)
         filterBar.alignment = .centerY
         filterBar.edgeInsets = NSEdgeInsets(top: 9, left: 10, bottom: 9, right: 10)
         search.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
@@ -266,6 +274,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         historyLabel.textColor = Theme.foreground
         updateBranchTitle()
         updateFilterTitles()
+        styleToggle(regexButton); styleToggle(caseButton)
         commitTable.reloadData()
         fileTable.reloadData()
     }
@@ -292,10 +301,10 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         let gen = generation
         loading = true
         exhausted = false
-        let (q, p, f, n, rev, flt) = (query, historyPath, follow, pageSize, revision, filter)
+        let (q, p, f, n, rev, flt, rx, mc) = (query, historyPath, follow, pageSize, revision, filter, useRegex, matchCase)
         let repo = repo
         reader.async {
-            let r = Result { try repo.log(skip: 0, limit: n, query: q, path: p, follow: f, rev: rev, filter: flt) }
+            let r = Result { try repo.log(skip: 0, limit: n, query: q, path: p, follow: f, rev: rev, filter: flt, regex: rx, matchCase: mc) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.loading = false
@@ -317,7 +326,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
                     self.commits = []
                     self.commitsChanged()
                     self.commitTable.reloadData()
-                    self.clearSelectionUI(e.localizedDescription)
+                    self.clearSelectionUI(rx && !q.isEmpty ? "Invalid regular expression" : e.localizedDescription)
                 }
                 self.onIdle?()
             }
@@ -335,6 +344,41 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         b.contentTintColor = color
         b.attributedTitle = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: color])
         b.sizeToFit()
+    }
+
+    /// Small text toggle (PhpStorm's `.*` and `Cc`): accent-tinted chip while on.
+    private func configureToggle(_ b: NSButton, _ title: String, tip: String, action: Selector) {
+        b.setButtonType(.pushOnPushOff)
+        b.isBordered = false
+        b.title = title
+        b.toolTip = tip
+        b.target = self
+        b.action = action
+        b.wantsLayer = true
+        b.layer?.cornerRadius = 5
+        b.translatesAutoresizingMaskIntoConstraints = false
+        b.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        b.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        b.setContentHuggingPriority(.required, for: .horizontal)
+        styleToggle(b)
+    }
+
+    private func styleToggle(_ b: NSButton) {
+        let on = b.state == .on
+        let color = on ? NSColor.controlAccentColor : Theme.gutter
+        b.attributedTitle = NSAttributedString(string: b.title, attributes: [.font: NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold), .foregroundColor: color])
+        b.layer?.backgroundColor = on ? NSColor.controlAccentColor.withAlphaComponent(0.16).cgColor : nil
+    }
+
+    @objc private func toggleRegex(_ s: NSButton) { setSearchOptions(regex: s.state == .on, matchCase: matchCase) }
+    @objc private func toggleCase(_ s: NSButton) { setSearchOptions(regex: useRegex, matchCase: s.state == .on) }
+
+    func setSearchOptions(regex: Bool, matchCase mc: Bool) {
+        useRegex = regex; matchCase = mc
+        regexButton.state = regex ? .on : .off
+        caseButton.state = mc ? .on : .off
+        styleToggle(regexButton); styleToggle(caseButton)
+        if !query.trimmingCharacters(in: .whitespaces).isEmpty { reload() }
     }
 
     private func updateFilterTitles() {
@@ -590,10 +634,10 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         guard !loading, !exhausted else { return }
         loading = true
         let gen = generation
-        let (q, p, f, n, skip, rev, flt) = (query, historyPath, follow, pageSize, commits.count, revision, filter)
+        let (q, p, f, n, skip, rev, flt, rx, mc) = (query, historyPath, follow, pageSize, commits.count, revision, filter, useRegex, matchCase)
         let repo = repo
         reader.async {
-            let r = try? repo.log(skip: skip, limit: n, query: q, path: p, follow: f, rev: rev, filter: flt)
+            let r = try? repo.log(skip: skip, limit: n, query: q, path: p, follow: f, rev: rev, filter: flt, regex: rx, matchCase: mc)
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.loading = false

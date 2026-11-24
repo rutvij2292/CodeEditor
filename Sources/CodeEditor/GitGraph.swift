@@ -77,9 +77,9 @@ final class GitGraphCell: NSView {
     var isMerge = false
     override var isFlipped: Bool { true }
 
-    static func width(forLanes n: Int) -> CGFloat { CGFloat(min(max(n, 1), 10)) * laneWidth + 10 }
+    static func width(forLanes n: Int) -> CGFloat { CGFloat(min(max(n, 1), 6)) * laneWidth + 8 }
 
-    private func x(_ lane: Int) -> CGFloat { 8 + CGFloat(min(lane, 9)) * Self.laneWidth }
+    private func x(_ lane: Int) -> CGFloat { 8 + CGFloat(min(lane, 5)) * Self.laneWidth }
 
     override func draw(_ dirtyRect: NSRect) {
         let mid = bounds.midY
