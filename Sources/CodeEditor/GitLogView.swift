@@ -101,8 +101,8 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     private func build() {
         search.placeholderString = "Search commits"
-        search.controlSize = .small
-        search.font = .systemFont(ofSize: 12)
+        search.controlSize = .regular
+        search.font = .systemFont(ofSize: 13)
         search.delegate = self
         search.focusRingType = .none
         search.translatesAutoresizingMaskIntoConstraints = false
@@ -122,11 +122,11 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         // One slim, borderless toolbar row (PhpStorm style): search, then flat text filters.
         filterBar.setViews([search, branchButton, userButton, dateButton, pathButton], in: .leading)
         filterBar.orientation = .horizontal
-        filterBar.spacing = 12
+        filterBar.spacing = 18
         filterBar.alignment = .centerY
-        filterBar.edgeInsets = NSEdgeInsets(top: 7, left: 8, bottom: 7, right: 8)
-        search.widthAnchor.constraint(lessThanOrEqualToConstant: 200).isActive = true
-        search.widthAnchor.constraint(greaterThanOrEqualToConstant: 90).isActive = true
+        filterBar.edgeInsets = NSEdgeInsets(top: 9, left: 10, bottom: 9, right: 10)
+        search.widthAnchor.constraint(lessThanOrEqualToConstant: 260).isActive = true
+        search.widthAnchor.constraint(greaterThanOrEqualToConstant: 130).isActive = true
 
         details.isEditable = false
         details.drawsBackground = false
@@ -157,7 +157,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         }
         commitTable.headerView = nil
         commitTable.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
-        commitTable.rowHeight = 24
+        commitTable.rowHeight = 30
         commitTable.intercellSpacing = NSSize(width: 8, height: 0)
         commitTable.allowsMultipleSelection = true
         commitTable.dataSource = self
@@ -189,6 +189,15 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             commitScroll.trailingAnchor.constraint(equalTo: left.trailingAnchor),
             commitScroll.bottomAnchor.constraint(equalTo: left.bottomAnchor),
             left.widthAnchor.constraint(greaterThanOrEqualToConstant: 260),
+        ])
+        let toolbarRule = NSBox()
+        toolbarRule.boxType = .separator
+        toolbarRule.translatesAutoresizingMaskIntoConstraints = false
+        left.addSubview(toolbarRule)   // overlay: draws a hairline under the toolbar without changing layout
+        NSLayoutConstraint.activate([
+            toolbarRule.topAnchor.constraint(equalTo: filterBar.bottomAnchor),
+            toolbarRule.leadingAnchor.constraint(equalTo: left.leadingAnchor),
+            toolbarRule.trailingAnchor.constraint(equalTo: left.trailingAnchor),
         ])
 
         let fileCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("file"))
@@ -324,7 +333,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         b.imagePosition = .imageTrailing
         b.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 8, weight: .semibold))
         b.contentTintColor = color
-        b.attributedTitle = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: color])
+        b.attributedTitle = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: color])
         b.sizeToFit()
     }
 
@@ -730,6 +739,31 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         return false
     }
 
+    /// A rounded ref chip (branch / remote / tag) drawn as an inline image so it reads like PhpStorm's labels.
+    private static func chip(_ name: String, color: NSColor, tag: Bool) -> NSAttributedString {
+        let label = (tag ? name.replacingOccurrences(of: "tag: ", with: "") : name) as NSString
+        let font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        let textW = min(label.size(withAttributes: [.font: font]).width, 150)
+        let icon: CGFloat = tag ? 13 : 0
+        let size = NSSize(width: ceil(textW) + 14 + icon, height: 18)
+        let img = NSImage(size: size, flipped: false) { r in
+            color.withAlphaComponent(0.14).setFill()
+            NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 5, yRadius: 5).fill()
+            var x: CGFloat = 7
+            if tag, let g = NSImage(systemSymbolName: "tag", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 9, weight: .medium).applying(.init(paletteColors: [color]))) {
+                g.draw(in: NSRect(x: 6, y: 4, width: 10, height: 10)); x += icon
+            }
+            let para = NSMutableParagraphStyle(); para.lineBreakMode = .byTruncatingTail
+            label.draw(in: NSRect(x: x, y: 2, width: textW + 1, height: 14), withAttributes: [.font: font, .foregroundColor: color, .paragraphStyle: para])
+            return true
+        }
+        let att = NSTextAttachment()
+        att.image = img
+        att.bounds = NSRect(x: 0, y: -4, width: size.width, height: size.height)
+        return NSAttributedString(attachment: att)
+    }
+
     private static func refColor(_ ref: String) -> NSColor {
         if ref.hasPrefix("tag:") { return NSColor(srgbRed: 0.80, green: 0.55, blue: 0.15, alpha: 1) }
         if ref.contains("/") && !ref.hasPrefix("HEAD") { return NSColor(srgbRed: 0.25, green: 0.55, blue: 0.90, alpha: 1) }
@@ -742,7 +776,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             let f = NSTextField(labelWithString: "")
             f.identifier = id
             f.lineBreakMode = .byTruncatingTail
-            f.font = .systemFont(ofSize: 12)
+            f.font = .systemFont(ofSize: t === fileTable ? 12 : 13)
             return f
         }()
         if t === fileTable {
@@ -792,24 +826,23 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             var shown: [String] = []
             for ref in c.refs where !shown.contains(where: { $0 == ref || ref.hasSuffix("/" + $0.replacingOccurrences(of: "HEAD -> ", with: "")) }) { shown.append(ref) }
             for ref in shown.prefix(2) {
-                let name = ref.replacingOccurrences(of: "HEAD -> ", with: "")
-                s.append(NSAttributedString(string: "\u{2009}\(name)\u{2009}", attributes: [
-                    .font: NSFont.systemFont(ofSize: 10, weight: .medium), .foregroundColor: Self.refColor(ref),
-                    .backgroundColor: Self.refColor(ref).withAlphaComponent(0.12)]))
-                s.append(NSAttributedString(string: "  "))
+                s.append(Self.chip(ref.replacingOccurrences(of: "HEAD -> ", with: ""), color: Self.refColor(ref), tag: ref.hasPrefix("tag:")))
+                s.append(NSAttributedString(string: " "))
             }
             let isMerge = c.parents.count > 1
-            s.append(NSAttributedString(string: c.subject, attributes: [.foregroundColor: isMerge ? Theme.gutter : Theme.foreground, .font: NSFont.systemFont(ofSize: 12)]))
+            s.append(NSAttributedString(string: c.subject, attributes: [.foregroundColor: isMerge ? Theme.gutter : Theme.foreground, .font: NSFont.systemFont(ofSize: 13)]))
             cell.attributedStringValue = s
         case "author":
             let mine = !myName.isEmpty && c.author == myName
             cell.stringValue = c.author
             cell.textColor = Theme.gutter
-            cell.font = .systemFont(ofSize: 12, weight: mine ? .medium : .regular)
+            cell.font = .systemFont(ofSize: 13, weight: mine ? .semibold : .regular)
+            cell.textColor = mine ? Theme.foreground : Theme.gutter
         case "date":
             cell.stringValue = Self.shortDate(c.timestamp)
             cell.toolTip = Self.dateFormat.string(from: Date(timeIntervalSince1970: c.timestamp))
             cell.textColor = Theme.gutter
+            cell.font = .systemFont(ofSize: 13)
             cell.alignment = .right
         default:
             cell.stringValue = c.shortHash

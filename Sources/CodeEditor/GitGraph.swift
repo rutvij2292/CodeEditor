@@ -72,7 +72,7 @@ enum GitGraphLayout {
 
 /// Draws one graph row: lane lines and the commit dot.
 final class GitGraphCell: NSView {
-    static let laneWidth: CGFloat = 12
+    static let laneWidth: CGFloat = 14
     var row = GitGraphRow()
     var isMerge = false
     override var isFlipped: Bool { true }
@@ -89,14 +89,14 @@ final class GitGraphCell: NSView {
             p.move(to: from)
             if from.x == to.x { p.line(to: to) }
             else { p.curve(to: to, controlPoint1: NSPoint(x: from.x, y: (from.y + to.y) / 2), controlPoint2: NSPoint(x: to.x, y: (from.y + to.y) / 2)) }
-            p.lineWidth = 1.6; p.lineCapStyle = .round
+            p.lineWidth = 2; p.lineCapStyle = .round
             c.setStroke(); p.stroke()
         }
         for t in row.through { line(NSPoint(x: x(t.lane), y: 0), NSPoint(x: x(t.lane), y: bounds.maxY), color(t.color)) }
         for i in row.ins { line(NSPoint(x: x(i.lane), y: 0), NSPoint(x: x(row.column), y: mid), color(i.color)) }
         for o in row.outs { line(NSPoint(x: x(row.column), y: mid), NSPoint(x: x(o.lane), y: bounds.maxY), color(o.color)) }
         let c = color(row.color)
-        let dot = NSRect(x: x(row.column) - 4, y: mid - 4, width: 8, height: 8)
+        let dot = NSRect(x: x(row.column) - 5, y: mid - 5, width: 10, height: 10)
         if isMerge {
             Theme.background.setFill(); NSBezierPath(ovalIn: dot).fill()
             c.setStroke(); let p = NSBezierPath(ovalIn: dot.insetBy(dx: 0.5, dy: 0.5)); p.lineWidth = 1.5; p.stroke()
