@@ -578,13 +578,13 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
 
     // MARK: Files and tabs
 
-    /// Office / document formats that are binary containers: Kode has no editor for them, so they open in the macOS default app.
+    /// Office / document formats that are binary containers: Kode has no editor for them, so the tab offers the macOS default app.
     static let externalDocumentExtensions: Set<String> = ["docx", "doc", "xlsx", "xls", "pptx", "ppt", "pages", "numbers", "key", "odt", "ods", "odp", "rtf", "pdf"]
 
     func open(_ url: URL, line: Int? = nil, options: OpenOptions = OpenOptions()) {
         let id = url.standardizedFileURL.path
-        if editors[id] == nil, Self.externalDocumentExtensions.contains(url.pathExtension.lowercased()) {
-            if !AppEnv.headless { NSWorkspace.shared.open(url) }   // never launch apps from the headless harness
+        if editors[id] == nil, placeholders[id] == nil, Self.externalDocumentExtensions.contains(url.pathExtension.lowercased()) {
+            showExternalDocument(url)   // a click only previews; launching another app is the user's choice
             return
         }
         if editors[id] == nil {
@@ -634,6 +634,19 @@ final class ProjectWindow: NSObject, NSWindowDelegate {
         syncBookmarkGutters()
         if let root { RecentFiles.add(url, in: root) }
         window.makeFirstResponder(editors[id]?.textView)
+        scheduleSessionSave()
+    }
+
+    /// Tab for an Office/PDF document: nothing to edit here, so offer the default app (and Finder) instead of launching it on a click.
+    private func showExternalDocument(_ url: URL) {
+        let id = url.standardizedFileURL.path
+        placeholders[id] = .unreadable   // closes like a placeholder: nothing to save
+        let name = url.lastPathComponent
+        let view = LoadProblemView(message: "“\(name)” is a document, not plain text.",
+                                   detail: "Kode can’t edit this format. Open it in its default app instead.",
+                                   actions: [("Open in Default App", { NSWorkspace.shared.open(url) }),
+                                             ("Reveal in Finder", { NSWorkspace.shared.activateFileViewerSelecting([url]) })])
+        tabs.add(id: id, title: name, view: view)
         scheduleSessionSave()
     }
 
