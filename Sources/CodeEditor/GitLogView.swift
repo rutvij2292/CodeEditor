@@ -14,6 +14,19 @@ private final class LogRowView: NSTableRowView {
     }
 }
 
+/// Label whose text is vertically centred in its (tall) table cell instead of hugging the top.
+private final class VCenterTextField: NSTextField {
+    private final class Cell: NSTextFieldCell {
+        override func drawingRect(forBounds rect: NSRect) -> NSRect {
+            var r = super.drawingRect(forBounds: rect)
+            let h = ceil(attributedStringValue.size().height)   // attributed text (chips) reports a taller cellSize
+            if h < r.height { r.origin.y += (r.height - h) / 2; r.size.height = h }
+            return r
+        }
+    }
+    override class var cellClass: AnyClass? { get { Cell.self } set {} }
+}
+
 private final class LogTable: NSTableView {
     var onEscape: (() -> Void)?
 }
@@ -832,7 +845,7 @@ final class GitLogView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     func tableView(_ t: NSTableView, viewFor col: NSTableColumn?, row: Int) -> NSView? {
         let id = NSUserInterfaceItemIdentifier("cell." + (col?.identifier.rawValue ?? ""))
         let cell = t.makeView(withIdentifier: id, owner: nil) as? NSTextField ?? {
-            let f = NSTextField(labelWithString: "")
+            let f = VCenterTextField(labelWithString: "")
             f.identifier = id
             f.lineBreakMode = .byTruncatingTail
             f.font = .systemFont(ofSize: t === fileTable ? 12 : 13)

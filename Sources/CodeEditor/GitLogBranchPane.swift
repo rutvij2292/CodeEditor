@@ -148,12 +148,8 @@ final class GitLogBranchPane: NSView, NSTableViewDataSource, NSTableViewDelegate
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let id = NSUserInterfaceItemIdentifier("branchCell")
-        let cell = tableView.makeView(withIdentifier: id, owner: nil) as? NSTextField ?? {
-            let f = NSTextField(labelWithString: "")
-            f.identifier = id
-            f.lineBreakMode = .byTruncatingTail
-            return f
-        }()
+        let host = tableView.makeView(withIdentifier: id, owner: nil) as? BranchCell ?? BranchCell(identifier: id)
+        let cell = host.label
         func glyph(_ symbol: String, _ color: NSColor, size: CGFloat = 12) -> NSAttributedString {
             let att = NSTextAttachment()
             let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
@@ -170,7 +166,7 @@ final class GitLogBranchPane: NSView, NSTableViewDataSource, NSTableViewDelegate
         let boldFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
         switch items[row] {
         case .head:
-            para.firstLineHeadIndent = 26
+            para.firstLineHeadIndent = 23
             s.append(NSAttributedString(string: "HEAD ", attributes: [.font: boldFont, .foregroundColor: Theme.foreground]))
             s.append(NSAttributedString(string: "(Current Branch)", attributes: [.font: font, .foregroundColor: Theme.gutter]))
         case .row(let r):
@@ -194,7 +190,7 @@ final class GitLogBranchPane: NSView, NSTableViewDataSource, NSTableViewDelegate
         }
         s.addAttribute(.paragraphStyle, value: para, range: NSRange(location: 0, length: s.length))
         cell.attributedStringValue = s
-        return cell
+        return host
     }
 
     // MARK: search
@@ -212,4 +208,21 @@ private final class BranchRowView: NSTableRowView {
         NSColor.controlAccentColor.withAlphaComponent(0.20).setFill()
         NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 1), xRadius: 5, yRadius: 5).fill()
     }
+}
+
+/// Row cell whose label is vertically centred in the row (a bare NSTextField hugs the top of a tall row).
+private final class BranchCell: NSTableCellView {
+    let label = NSTextField(labelWithString: "")
+    init(identifier: NSUserInterfaceItemIdentifier) {
+        super.init(frame: .zero)
+        self.identifier = identifier
+        label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor), label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
 }
